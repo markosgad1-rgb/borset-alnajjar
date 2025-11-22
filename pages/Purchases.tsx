@@ -1,10 +1,10 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Trash2, Check, X } from 'lucide-react';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, purchases, products, suppliers } = useERP();
+  const { addPurchase, purchases, products, suppliers, deletePurchase } = useERP();
   const [formData, setFormData] = useState({
     supplierCode: '',
     supplierName: '',
@@ -13,6 +13,8 @@ export const Purchases: React.FC = () => {
     quantity: 0,
     price: 0,
   });
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const handleSupplierChange = (name: string) => {
     const supplier = suppliers.find(s => s.name === name);
@@ -61,6 +63,11 @@ export const Purchases: React.FC = () => {
     // Reset
     setFormData(prev => ({ ...prev, itemCode: '', itemName: '', quantity: 0, price: 0 }));
     alert("تم حفظ الفاتورة وإضافتها لحساب المورد");
+  };
+
+  const handleDelete = async (id: string) => {
+    await deletePurchase(id);
+    setDeleteConfirmId(null);
   };
 
   const currentSupplier = suppliers.find(s => s.code === formData.supplierCode);
@@ -184,6 +191,7 @@ export const Purchases: React.FC = () => {
                 <th className="p-4">الكمية</th>
                 <th className="p-4">السعر</th>
                 <th className="p-4">الاجمالي</th>
+                <th className="p-4 w-24">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -195,11 +203,39 @@ export const Purchases: React.FC = () => {
                   <td className="p-4 text-blue-600 font-bold">{purchase.quantity}</td>
                   <td className="p-4">{purchase.price.toLocaleString()}</td>
                   <td className="p-4 text-emerald-600 font-bold">{purchase.total.toLocaleString()}</td>
+                  <td className="p-4">
+                    {deleteConfirmId === purchase.id ? (
+                      <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-100 shadow-sm animate-fade-in">
+                         <button 
+                           onClick={() => handleDelete(purchase.id)} 
+                           className="bg-red-500 text-white p-1.5 rounded hover:bg-red-600 transition-colors shadow-sm" 
+                           title="تأكيد الحذف"
+                         >
+                           <Check size={16}/>
+                         </button>
+                         <button 
+                           onClick={() => setDeleteConfirmId(null)} 
+                           className="bg-white text-gray-500 p-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
+                           title="إلغاء"
+                         >
+                           <X size={16}/>
+                         </button>
+                       </div>
+                    ) : (
+                      <button 
+                        onClick={() => setDeleteConfirmId(purchase.id)}
+                        className="text-red-400 hover:bg-red-50 hover:text-red-600 p-2 rounded transition-colors"
+                        title="حذف السجل"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {purchases.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-gray-400">لا توجد مشتريات مسجلة</td>
+                  <td colSpan={7} className="p-8 text-center text-gray-400">لا توجد مشتريات مسجلة</td>
                 </tr>
               )}
             </tbody>

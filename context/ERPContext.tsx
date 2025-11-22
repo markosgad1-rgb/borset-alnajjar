@@ -51,6 +51,7 @@ interface ERPContextType {
   updateProduct: (product: Product) => void;
   deleteProduct: (code: string) => void;
   addPurchase: (purchase: Omit<Purchase, 'id'>) => void;
+  deletePurchase: (id: string) => Promise<void>;
   addInvoice: (invoiceData: {
     id: string;
     date: string;
@@ -60,6 +61,7 @@ interface ERPContextType {
     items: InvoiceItem[];
     total: number;
   }) => void;
+  deleteInvoice: (id: string) => Promise<void>; // NEW
   addCollection: (data: {
     customerCode: string;
     invoiceId?: string;
@@ -446,6 +448,16 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const deletePurchase = async (id: string) => {
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'purchases', id));
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      setPurchases(prev => prev.filter(p => p.id !== id));
+    }
+  };
+
   const addInvoice = async (invoiceData: {
     id: string; date: string; time: string; customerCode: string; customerName: string; items: InvoiceItem[]; total: number;
   }) => {
@@ -509,6 +521,16 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
         return newP;
       });
+    }
+  };
+
+  const deleteInvoice = async (id: string) => {
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'invoices', id));
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      setInvoices(prev => prev.filter(inv => inv.id !== id));
     }
   };
 
@@ -945,8 +967,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError,
-      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct,
-      addPurchase, addInvoice, addCollection, addTransfer, addCustomer, updateCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee,
+      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
+      addPurchase, addInvoice, deleteInvoice, addCollection, addTransfer, addCustomer, updateCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee,
       seedDatabase, printInvoice,
       currentTreasuryBalance
     }}>

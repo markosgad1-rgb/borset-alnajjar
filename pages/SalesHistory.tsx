@@ -1,14 +1,15 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Calendar, Search, FileText, X, Printer } from 'lucide-react';
+import { Calendar, Search, FileText, X, Printer, Trash2, Check } from 'lucide-react';
 import { SalesInvoice } from '../types';
 
 export const SalesHistory: React.FC = () => {
-  const { invoices, printInvoice } = useERP();
+  const { invoices, printInvoice, deleteInvoice } = useERP();
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Filter Invoices
   const filteredInvoices = invoices.filter(inv => {
@@ -21,6 +22,11 @@ export const SalesHistory: React.FC = () => {
 
   // Calculate Day Totals
   const dayTotal = filteredInvoices.reduce((sum, inv) => sum + inv.total, 0);
+
+  const handleDelete = async (id: string) => {
+    await deleteInvoice(id);
+    setDeleteConfirmId(null);
+  };
 
   return (
     <div className="space-y-6">
@@ -73,7 +79,7 @@ export const SalesHistory: React.FC = () => {
                 <th className="p-4">العميل</th>
                 <th className="p-4">عدد الأصناف</th>
                 <th className="p-4">الإجمالي</th>
-                <th className="p-4">التفاصيل</th>
+                <th className="p-4">الإجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -84,13 +90,41 @@ export const SalesHistory: React.FC = () => {
                   <td className="p-4 font-bold text-gray-800">{inv.customerName}</td>
                   <td className="p-4 text-sm text-gray-600">{inv.items.length} صنف</td>
                   <td className="p-4 font-bold text-emerald-600">{inv.total.toLocaleString()}</td>
-                  <td className="p-4">
+                  <td className="p-4 flex gap-2 items-center">
                     <button 
                       onClick={() => setSelectedInvoice(inv)}
                       className="bg-brand-100 text-brand-700 hover:bg-brand-200 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors flex items-center gap-2"
+                      title="عرض التفاصيل"
                     >
                       <FileText size={16} /> عرض
                     </button>
+
+                    {deleteConfirmId === inv.id ? (
+                      <div className="flex items-center gap-2 bg-red-50 p-1 rounded border border-red-100 animate-fade-in">
+                         <button 
+                           onClick={() => handleDelete(inv.id)} 
+                           className="bg-red-500 text-white p-1 rounded hover:bg-red-600 transition-colors" 
+                           title="تأكيد الحذف"
+                         >
+                           <Check size={16}/>
+                         </button>
+                         <button 
+                           onClick={() => setDeleteConfirmId(null)} 
+                           className="bg-white text-gray-500 p-1 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
+                           title="إلغاء"
+                         >
+                           <X size={16}/>
+                         </button>
+                       </div>
+                    ) : (
+                      <button 
+                        onClick={() => setDeleteConfirmId(inv.id)}
+                        className="text-red-400 hover:bg-red-50 hover:text-red-600 p-2 rounded-lg transition-colors"
+                        title="حذف السجل"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
