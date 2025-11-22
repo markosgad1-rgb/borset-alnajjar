@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
   <head>
@@ -39,31 +38,33 @@
   <script type="importmap">
 {
   "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/",
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
     "recharts": "https://aistudiocdn.com/recharts@^3.4.1",
-    "firebase/app": "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js",
-    "firebase/firestore": "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js",
-    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
+    "vite": "https://aistudiocdn.com/vite@^7.2.4",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1"
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-brand-50 text-gray-800 font-sans antialiased">
     <div id="root"></div>
+    
+    <!-- هذا السطر هو أهم سطر، بدونه الشاشة هتكون بيضاء -->
+    <script type="module" src="/index.tsx"></script>
+    
     <script src="sw.js"></script>
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('SW registered:', reg))
-            .catch(err => console.log('SW registration failed:', err));
+            .then(reg => console.log('SW registered'))
+            .catch(err => console.log('SW failed', err));
         });
       }
     </script>
-  <script type="module" src="/index.tsx"></script>
-</body>
+  </body>
 </html>
