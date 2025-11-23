@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Plus, Search, Trash2, Check, X } from 'lucide-react';
@@ -60,7 +59,6 @@ export const Purchases: React.FC = () => {
       date: new Date().toISOString().split('T')[0]
     });
 
-    // Reset
     setFormData(prev => ({ ...prev, itemCode: '', itemName: '', quantity: 0, price: 0 }));
     alert("تم حفظ الفاتورة وإضافتها لحساب المورد");
   };
@@ -74,7 +72,6 @@ export const Purchases: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      {/* Purchase Form */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 p-6">
         <h3 className="text-xl font-bold text-brand-800 mb-6 flex items-center gap-2">
           <Plus className="bg-brand-100 p-1 rounded-full text-brand-600" size={28} />
@@ -176,7 +173,6 @@ export const Purchases: React.FC = () => {
         </form>
       </div>
 
-      {/* List */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
         <div className="p-6 border-b border-brand-50">
           <h3 className="text-lg font-bold text-brand-800">سجل المشتريات</h3>

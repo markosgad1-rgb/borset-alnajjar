@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { ArrowRightLeft, Save, Search, AlertCircle, ArrowDownCircle, ArrowUpCircle, Users, Truck, Briefcase } from 'lucide-react';
+import { ArrowRightLeft, Save, Search, AlertCircle, ArrowDownCircle, ArrowUpCircle, Users, Truck, Briefcase, Wallet, Building2 } from 'lucide-react';
+import { PaymentMethod } from '../types';
 
 export const Transfers: React.FC = () => {
   const { customers, suppliers, employees, addTransfer } = useERP();
@@ -14,7 +15,8 @@ export const Transfers: React.FC = () => {
     amount: '',
     type: 'IN' as 'IN' | 'OUT',
     date: new Date().toISOString().split('T')[0],
-    notes: ''
+    notes: '',
+    paymentMethod: 'CASH' as PaymentMethod
   });
 
   const [currentBalance, setCurrentBalance] = useState<number | null>(null);
@@ -81,7 +83,8 @@ export const Transfers: React.FC = () => {
       amount: amount,
       type: formData.type,
       date: formData.date,
-      notes: formData.notes
+      notes: formData.notes,
+      paymentMethod: formData.paymentMethod
     });
 
     setFormData(prev => ({
@@ -101,15 +104,15 @@ export const Transfers: React.FC = () => {
   };
 
   const getInLabel = () => {
-      if (entityType === 'CUSTOMER') return 'استلام نقدية من عميل';
-      if (entityType === 'SUPPLIER') return 'استلام نقدية من مورد (مرتجع)';
-      return 'استرداد سلفة من موظف';
+      if (entityType === 'CUSTOMER') return 'استلام من عميل';
+      if (entityType === 'SUPPLIER') return 'استلام من مورد';
+      return 'استرداد من موظف';
   };
 
   const getOutLabel = () => {
-      if (entityType === 'CUSTOMER') return 'دفع نقدية لعميل';
-      if (entityType === 'SUPPLIER') return 'دفع مستحقات لمورد';
-      return 'صرف راتب / سلفة لموظف';
+      if (entityType === 'CUSTOMER') return 'دفع لعميل';
+      if (entityType === 'SUPPLIER') return 'دفع لمورد';
+      return 'صرف لموظف';
   };
 
   return (
@@ -117,7 +120,7 @@ export const Transfers: React.FC = () => {
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
         <div className="p-6 bg-purple-600 text-white flex items-center gap-3">
           <ArrowRightLeft size={28} />
-          <h2 className="text-xl font-bold">تسجيل التحويلات المالية (خزنة)</h2>
+          <h2 className="text-xl font-bold">تسجيل التحويلات المالية</h2>
         </div>
         
         <div className="p-8">
@@ -187,6 +190,60 @@ export const Transfers: React.FC = () => {
                 <span className="font-bold text-lg">خارج (صادر)</span>
                 <span className="text-xs text-center">{getOutLabel()}</span>
               </label>
+            </div>
+
+            {/* Method Toggle */}
+            <div className="space-y-2">
+               <label className="block text-sm font-bold text-gray-700 mb-2">طريقة الدفع/التحصيل</label>
+               <div className="grid grid-cols-3 gap-4">
+                 <label className={`
+                   flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                   ${formData.paymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="CASH" 
+                     checked={formData.paymentMethod === 'CASH'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'CASH'})} 
+                     className="hidden"
+                   />
+                   <Wallet size={20} />
+                   <span className="font-bold">خزنة (كاش)</span>
+                 </label>
+
+                 <label className={`
+                   flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                   ${formData.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="BANK_AHLY" 
+                     checked={formData.paymentMethod === 'BANK_AHLY'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'BANK_AHLY'})} 
+                     className="hidden"
+                   />
+                   <Building2 size={20} />
+                   <span className="font-bold">البنك الأهلي</span>
+                 </label>
+
+                 <label className={`
+                   flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                   ${formData.paymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="BANK_MISR" 
+                     checked={formData.paymentMethod === 'BANK_MISR'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'BANK_MISR'})} 
+                     className="hidden"
+                   />
+                   <Building2 size={20} />
+                   <span className="font-bold">بنك مصر</span>
+                 </label>
+               </div>
             </div>
 
             {/* Selection */}

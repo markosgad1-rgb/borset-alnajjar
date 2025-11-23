@@ -1,14 +1,16 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
-import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User } from '../types';
+import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod } from '../types';
 import { firebaseConfig, isFirebaseConfigured } from '../firebaseConfig';
 import { initializeApp } from 'firebase/app';
+import * as XLSX from 'xlsx';
 import { 
   getFirestore, 
   collection, 
   doc, 
   setDoc, 
   getDoc, 
+  getDocs,
   updateDoc, 
   deleteDoc, 
   onSnapshot, 
@@ -61,12 +63,14 @@ interface ERPContextType {
     items: InvoiceItem[];
     total: number;
   }) => void;
-  deleteInvoice: (id: string) => Promise<void>; // NEW
+  deleteInvoice: (id: string) => Promise<void>;
+  clearAllInvoices: () => Promise<boolean>; // New function
   addCollection: (data: {
     customerCode: string;
     invoiceId?: string;
     amount: number;
     date: string;
+    paymentMethod: PaymentMethod;
   }) => void;
   addTransfer: (data: {
     entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE';
@@ -75,9 +79,17 @@ interface ERPContextType {
     type: 'IN' | 'OUT'; // IN = Deposit/Collection, OUT = Withdrawal/Payment
     date: string;
     notes?: string;
+    paymentMethod: PaymentMethod;
   }) => void;
+  addExpense: (data: {
+    name: string;
+    amount: number;
+    date: string;
+    notes?: string;
+  }) => Promise<void>;
   addCustomer: (customer: Customer) => void;
   updateCustomer: (code: string, updatedData: Partial<Customer>) => void;
+  deleteCustomer: (code: string) => Promise<void>;
   addSupplier: (supplier: Supplier) => void;
   updateSupplier: (code: string, updatedData: Partial<Supplier>) => void;
   addEmployee: (employee: Employee) => void;
@@ -90,8 +102,18 @@ interface ERPContextType {
 
   seedDatabase: () => Promise<void>;
   printInvoice: (invoice: SalesInvoice) => void;
+  exportLedgerToExcel: (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER') => void;
+  exportAllCustomersToExcel: () => void;
+  exportAllSuppliersToExcel: () => void;
+  clearLedger: (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => Promise<boolean>;
+  clearTreasury: () => Promise<boolean>;
 
   currentTreasuryBalance: number;
+  balances: {
+    cash: number;
+    bankMisr: number;
+    bankAhly: number;
+  };
 }
 
 const ERPContext = createContext<ERPContextType | undefined>(undefined);
@@ -111,7 +133,7 @@ const STORAGE_KEYS = {
 
 // Initial Mock Data (Used for first-time LocalStorage)
 const INITIAL_USERS: User[] = [
-  { id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: { sales: true, warehouse: true, financial: true, admin: true } }
+  { id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: { dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true } }
 ];
 
 export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -137,7 +159,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [treasury, setTreasury] = useState<TreasuryTransaction[]>([]);
 
-  const currentTreasuryBalance = treasury.length > 0 ? treasury[treasury.length - 1].balance : 0;
+  // Calculate Balances dynamically
+  const currentTreasuryBalance = treasury.reduce((acc, t) => acc + (t.credit - t.debit), 0);
+  
+  const balances = {
+    cash: treasury.filter(t => t.paymentMethod === 'CASH' || !t.paymentMethod).reduce((acc, t) => acc + (t.credit - t.debit), 0),
+    bankMisr: treasury.filter(t => t.paymentMethod === 'BANK_MISR').reduce((acc, t) => acc + (t.credit - t.debit), 0),
+    bankAhly: treasury.filter(t => t.paymentMethod === 'BANK_AHLY').reduce((acc, t) => acc + (t.credit - t.debit), 0),
+  };
 
   // --- Data Sync Logic (Effect) ---
   useEffect(() => {
@@ -160,7 +189,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
            // Auto-seed admin if users list is empty (e.g. fresh DB)
            if (loadedUsers.length === 0) {
               const adminUser: User = { 
-                id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: { sales: true, warehouse: true, financial: true, admin: true } 
+                id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: { dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true } 
               };
               setDoc(doc(db, 'users', '1'), adminUser).catch(console.error);
            }
@@ -248,11 +277,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
          password: '123', 
          fullName: 'المدير العام', 
          role: 'ADMIN', 
-         permissions: { sales: true, warehouse: true, financial: true, admin: true } 
+         permissions: { dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true } 
        };
        setCurrentUser(adminUser);
        if (isOnline) {
-         // Try to sync admin to cloud, but don't block login if it fails
          setDoc(doc(db, 'users', '1'), adminUser).catch((e: any) => console.log("Admin seed check:", e));
        }
        return true;
@@ -334,6 +362,16 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const deleteCustomer = async (code: string) => {
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'customers', code));
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      setCustomers(prev => prev.filter(c => c.code !== code));
+    }
+  };
+
   const addSupplier = async (supplier: Supplier) => {
     if (isOnline) {
       try {
@@ -390,7 +428,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
         await setDoc(doc(db, 'purchases', id), newPurchase);
         
-        // Update Product using getDoc to avoid race conditions
         const productRef = doc(db, 'products', purchaseData.itemCode);
         const productSnap = await getDoc(productRef);
         
@@ -402,7 +439,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const newAvgCost = (totalOldValue + totalNewValue) / newQty;
           await updateDoc(productRef, { quantity: newQty, avgCost: newAvgCost });
         } else {
-          // New Product creation from purchase
           await setDoc(productRef, { 
             code: purchaseData.itemCode, 
             name: purchaseData.itemName, 
@@ -412,7 +448,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           });
         }
 
-        // Update Supplier using getDoc
         const supplierRef = doc(db, 'suppliers', purchaseData.supplierCode);
         const supplierSnap = await getDoc(supplierRef);
         if (supplierSnap.exists()) {
@@ -424,7 +459,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       } catch (e) { handleFirebaseError(e); }
     } else {
-      // Offline Logic
       setPurchases(prev => [newPurchase, ...prev]);
       setProducts(prev => {
         const idx = prev.findIndex(p => p.code === purchaseData.itemCode);
@@ -475,7 +509,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
         await setDoc(doc(db, 'invoices', id), newInvoice);
         
-        // Update Customer with getDoc
         const customerRef = doc(db, 'customers', invoiceData.customerCode);
         const customerSnap = await getDoc(customerRef);
         
@@ -485,14 +518,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const newHistory = [...c.history, { date: invoiceData.date, description: `فاتورة بيع #${id} (آجل)`, amount: -debtAmount }];
           await updateDoc(customerRef, { balance: newBalance, history: newHistory });
         } else {
-          // Create customer if not exists (rare case in this UI)
           await setDoc(customerRef, {
               code: invoiceData.customerCode, name: invoiceData.customerName, balance: -debtAmount,
               history: [{ date: invoiceData.date, description: `فاتورة بيع #${id} (آجل)`, amount: -debtAmount }]
           });
         }
 
-        // Update Products with getDoc
         for (const item of invoiceData.items) {
           const pRef = doc(db, 'products', item.itemCode);
           const pSnap = await getDoc(pRef);
@@ -503,7 +534,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       } catch (e) { handleFirebaseError(e); }
     } else {
-      // Offline Logic
       setInvoices(prev => [newInvoice, ...prev]);
       setCustomers(prev => {
         const exists = prev.find(c => c.code === invoiceData.customerCode);
@@ -534,33 +564,52 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const clearAllInvoices = async (): Promise<boolean> => {
+    try {
+      setInvoices([]); // Optimistic clear
+      if (isOnline) {
+        const q = query(collection(db, 'invoices'));
+        const snapshot = await getDocs(q);
+        const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+        await Promise.all(deletePromises);
+      }
+      return true;
+    } catch (e) {
+      handleFirebaseError(e);
+      return false;
+    }
+  };
+
   const addTransfer = async (data: { 
     entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE';
     entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string;
+    paymentMethod: PaymentMethod;
   }) => {
     const isIncome = data.type === 'IN';
     const newTreasuryBalance = currentTreasuryBalance + (isIncome ? data.amount : -data.amount);
     
-    let entityName = '';
     let entityLabel = '';
+    let entityName = '';
     if (data.entityType === 'CUSTOMER') { entityLabel = 'عميل'; entityName = customers.find(c => c.code === data.entityCode)?.name || data.entityCode; }
     if (data.entityType === 'SUPPLIER') { entityLabel = 'مورد'; entityName = suppliers.find(s => s.code === data.entityCode)?.name || data.entityCode; }
     if (data.entityType === 'EMPLOYEE') { entityLabel = 'موظف'; entityName = employees.find(e => e.code === data.entityCode)?.name || data.entityCode; }
 
-    const description = `${isIncome ? 'وارد من' : 'صادر إلى'} ${entityLabel} - ${entityName} ${data.notes ? `(${data.notes})` : ''}`;
+    let methodLabel = 'نقدي';
+    if (data.paymentMethod === 'BANK_AHLY') methodLabel = 'بنك أهلي';
+    if (data.paymentMethod === 'BANK_MISR') methodLabel = 'بنك مصر';
+
+    const description = `${isIncome ? 'وارد من' : 'صادر إلى'} ${entityLabel} - ${entityName} (${methodLabel}) ${data.notes ? `- ${data.notes}` : ''}`;
     const transId = `TRF-${Date.now()}`;
     
     const newTransaction: TreasuryTransaction = {
       id: transId, date: data.date, credit: isIncome ? data.amount : 0, debit: isIncome ? 0 : data.amount,
-      balance: newTreasuryBalance, description
+      balance: newTreasuryBalance, paymentMethod: data.paymentMethod, description
     };
 
     if (isOnline) {
       try {
-        // Save Treasury
         await setDoc(doc(db, 'treasury', transId), newTransaction);
         
-        // Update Entity with getDoc for safe balance update
         if (data.entityType === 'CUSTOMER') {
           const ref = doc(db, 'customers', data.entityCode);
           const snap = await getDoc(ref);
@@ -569,7 +618,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             const change = isIncome ? data.amount : -data.amount;
             await updateDoc(ref, {
               balance: c.balance + change,
-              history: [...c.history, { date: data.date, description: `${isIncome ? 'تحصيل نقدية' : 'صرف نقدية'} - ${data.notes || ''}`, amount: change }]
+              history: [...c.history, { date: data.date, description: `${isIncome ? 'تحصيل' : 'صرف'} (${methodLabel}) - ${data.notes || ''}`, amount: change }]
             });
           }
         } else if (data.entityType === 'SUPPLIER') {
@@ -580,7 +629,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             const change = isIncome ? -data.amount : data.amount;
             await updateDoc(ref, {
               balance: s.balance + change,
-              history: [...s.history, { date: data.date, description: `${isIncome ? 'استلام نقدية (مورد)' : 'دفع نقدية (مورد)'} - ${data.notes || ''}`, amount: change }]
+              history: [...s.history, { date: data.date, description: `${isIncome ? 'استلام' : 'دفع'} (${methodLabel}) - ${data.notes || ''}`, amount: change }]
             });
           }
         } else if (data.entityType === 'EMPLOYEE') {
@@ -591,30 +640,52 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             const change = isIncome ? -data.amount : data.amount;
             await updateDoc(ref, {
               balance: e.balance + change,
-              history: [...e.history, { date: data.date, description: `${isIncome ? 'تحصيل سلفة/نقدية' : 'صرف راتب/سلفة'} - ${data.notes || ''}`, amount: change }]
+              history: [...e.history, { date: data.date, description: `${isIncome ? 'تحصيل' : 'صرف'} (${methodLabel}) - ${data.notes || ''}`, amount: change }]
             });
           }
         }
       } catch (e) { handleFirebaseError(e); }
 
     } else {
-      // Offline Logic
       setTreasury(prev => [...prev, newTransaction]);
+      const historyDesc = `${isIncome ? 'تحصيل' : 'صرف'} (${methodLabel})`;
       if (data.entityType === 'CUSTOMER') {
-        setCustomers(prev => prev.map(c => c.code === data.entityCode ? { ...c, balance: c.balance + (isIncome ? data.amount : -data.amount), history: [...c.history, { date: data.date, description: `${isIncome ? 'تحصيل نقدية' : 'صرف نقدية'}`, amount: (isIncome ? data.amount : -data.amount) }] } : c));
+        setCustomers(prev => prev.map(c => c.code === data.entityCode ? { ...c, balance: c.balance + (isIncome ? data.amount : -data.amount), history: [...c.history, { date: data.date, description: historyDesc, amount: (isIncome ? data.amount : -data.amount) }] } : c));
       } else if (data.entityType === 'SUPPLIER') {
-        setSuppliers(prev => prev.map(s => s.code === data.entityCode ? { ...s, balance: s.balance + (isIncome ? -data.amount : data.amount), history: [...s.history, { date: data.date, description: `${isIncome ? 'استلام نقدية' : 'دفع نقدية'}`, amount: (isIncome ? -data.amount : data.amount) }] } : s));
+        setSuppliers(prev => prev.map(s => s.code === data.entityCode ? { ...s, balance: s.balance + (isIncome ? -data.amount : data.amount), history: [...s.history, { date: data.date, description: historyDesc, amount: (isIncome ? -data.amount : data.amount) }] } : s));
       } else if (data.entityType === 'EMPLOYEE') {
-        setEmployees(prev => prev.map(e => e.code === data.entityCode ? { ...e, balance: e.balance + (isIncome ? -data.amount : data.amount), history: [...e.history, { date: data.date, description: `${isIncome ? 'تحصيل' : 'صرف'}`, amount: (isIncome ? -data.amount : data.amount) }] } : e));
+        setEmployees(prev => prev.map(e => e.code === data.entityCode ? { ...e, balance: e.balance + (isIncome ? -data.amount : data.amount), history: [...e.history, { date: data.date, description: historyDesc, amount: (isIncome ? -data.amount : data.amount) }] } : e));
       }
     }
   };
 
-  const addCollection = (data: { customerCode: string; invoiceId?: string; amount: number; date: string }) => {
+  const addCollection = (data: { customerCode: string; invoiceId?: string; amount: number; date: string; paymentMethod: PaymentMethod }) => {
     addTransfer({
       entityType: 'CUSTOMER', entityCode: data.customerCode, amount: data.amount, type: 'IN', date: data.date,
-      notes: data.invoiceId ? `تحصيل فاتورة ${data.invoiceId}` : 'تحصيل نقدية'
+      paymentMethod: data.paymentMethod,
+      notes: data.invoiceId ? `تحصيل فاتورة ${data.invoiceId}` : 'تحصيل دفعة'
     });
+  };
+
+  const addExpense = async (data: { name: string; amount: number; date: string; notes?: string }) => {
+    const transId = `EXP-${Date.now()}`;
+    const description = `مصروفات - ${data.name} ${data.notes ? `(${data.notes})` : ''}`;
+    
+    // Deduct directly from Treasury (Cash), No specific entity balance updated
+    const newTreasuryBalance = currentTreasuryBalance - data.amount;
+
+    const newTransaction: TreasuryTransaction = {
+      id: transId, date: data.date, credit: 0, debit: data.amount,
+      balance: newTreasuryBalance, paymentMethod: 'CASH', description
+    };
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'treasury', transId), newTransaction);
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      setTreasury(prev => [...prev, newTransaction]);
+    }
   };
 
   const addUser = async (user: User) => {
@@ -646,13 +717,62 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const clearLedger = async (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string): Promise<boolean> => {
+    try {
+      // 1. Optimistic Update (Immediate UI Refresh)
+      if (entityType === 'CUSTOMER') {
+        setCustomers(prev => prev.map(c => c.code === code ? { ...c, history: [], balance: 0 } : c));
+      } else if (entityType === 'SUPPLIER') {
+        setSuppliers(prev => prev.map(s => s.code === code ? { ...s, history: [], balance: 0 } : s));
+      } else if (entityType === 'EMPLOYEE') {
+        setEmployees(prev => prev.map(e => e.code === code ? { ...e, history: [], balance: 0 } : e));
+      }
+
+      // 2. Firebase Update (Hard Reset)
+      if (isOnline) {
+        let collectionName = '';
+        if (entityType === 'CUSTOMER') collectionName = 'customers';
+        else if (entityType === 'SUPPLIER') collectionName = 'suppliers';
+        else if (entityType === 'EMPLOYEE') collectionName = 'employees';
+
+        const ref = doc(db, collectionName, code);
+        // FORCE overwrite history and balance using setDoc with MERGE to be robust even if doc structure has minor issues
+        await setDoc(ref, { history: [], balance: 0 }, { merge: true });
+        console.log(`Hard reset ledger for ${entityType} ${code} successful`);
+      }
+      return true;
+    } catch (e) { 
+      handleFirebaseError(e);
+      return false;
+    }
+  };
+
+  const clearTreasury = async (): Promise<boolean> => {
+    try {
+      // Optimistic Update
+      setTreasury([]);
+
+      if (isOnline) {
+        // Fetch all documents in treasury collection and delete them
+        const q = query(collection(db, 'treasury'));
+        const snapshot = await getDocs(q);
+        const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+        await Promise.all(deletePromises);
+        console.log("Treasury cleared successfully");
+      }
+      return true;
+    } catch (e) {
+      handleFirebaseError(e);
+      return false;
+    }
+  };
+
   const seedDatabase = async () => {
     if (!isOnline) return alert("يجب أن تكون متصلاً بالإنترنت لزرع البيانات.");
     
     if(!confirm("هل أنت متأكد؟ سيتم إضافة بيانات تجريبية (منتجات، عملاء، موردين) لقاعدة البيانات.")) return;
 
     try {
-      // Add Products
       const dummyProducts: Product[] = [
          { code: 'P001', name: 'بيض أبيض (كرتونة)', quantity: 100, price: 150, avgCost: 130 },
          { code: 'P002', name: 'بيض أحمر (كرتونة)', quantity: 50, price: 160, avgCost: 140 },
@@ -660,17 +780,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ];
       for(const p of dummyProducts) await setDoc(doc(db, 'products', p.code), p);
 
-      // Add Customers
       const dummyCustomers: Customer[] = [
-         { code: 'C001', name: 'سوبر ماركت الأصدقاء', balance: -1500, history: [{date: new Date().toISOString().split('T')[0], description: 'رصيد افتتاحي', amount: -1500}] },
-         { code: 'C002', name: 'مطعم البرنس', balance: 0, history: [] }
+         { code: 'C001', name: 'سوبر ماركت الأصدقاء', phone: '01012345678', balance: -1500, history: [{date: new Date().toISOString().split('T')[0], description: 'رصيد افتتاحي', amount: -1500}] },
+         { code: 'C002', name: 'مطعم البرنس', phone: '01298765432', balance: 0, history: [] }
       ];
       for(const c of dummyCustomers) await setDoc(doc(db, 'customers', c.code), c);
 
-      // Add Suppliers
       const dummySuppliers: Supplier[] = [
-         { code: 'S001', name: 'مزارع دينا', balance: -50000, history: [{date: new Date().toISOString().split('T')[0], description: 'رصيد افتتاحي', amount: -50000}] },
-         { code: 'S002', name: 'الوطنية للدواجن', balance: 0, history: [] }
+         { code: 'S001', name: 'مزارع دينا', phone: '01155555555', balance: -50000, history: [{date: new Date().toISOString().split('T')[0], description: 'رصيد افتتاحي', amount: -50000}] },
+         { code: 'S002', name: 'الوطنية للدواجن', phone: '01066666666', balance: 0, history: [] }
       ];
       for(const s of dummySuppliers) await setDoc(doc(db, 'suppliers', s.code), s);
       
@@ -680,8 +798,143 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const exportLedgerToExcel = (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER') => {
+    const data = history.map(h => {
+      let debit = 0;
+      let credit = 0;
+
+      if (type === 'CUSTOMER') {
+        if (h.amount < 0) debit = Math.abs(h.amount);
+        else credit = h.amount;
+      } else {
+        if (h.amount < 0) debit = Math.abs(h.amount);
+        else credit = h.amount;
+      }
+
+      return {
+        'التاريخ': h.date,
+        'البيان': h.description,
+        [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: debit || '',
+        [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: credit || ''
+      };
+    });
+
+    data.push({
+      'التاريخ': '',
+      'البيان': 'الرصيد النهائي الحالي',
+      [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: currentBalance < 0 ? Math.abs(currentBalance) : '',
+      [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: currentBalance > 0 ? currentBalance : ''
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    
+    // RTL Direction
+    if(!worksheet['!views']) worksheet['!views'] = [];
+    worksheet['!views'].push({ rightToLeft: true });
+
+    // AutoFilter
+    const ref = worksheet['!ref'];
+    if (ref) {
+      worksheet['!autofilter'] = { ref: ref };
+    }
+
+    // Column Widths
+    const wscols = [
+      { wch: 15 }, 
+      { wch: 60 }, 
+      { wch: 20 }, 
+      { wch: 20 }
+    ];
+    worksheet['!cols'] = wscols;
+
+    const workbook = XLSX.utils.book_new();
+    // Force Workbook View to RTL
+    workbook.Workbook = { Views: [{ RTL: true }] };
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "كشف حساب");
+    const fileName = `كشف_حساب_${type === 'CUSTOMER' ? 'عميل' : 'مورد'}_${entityName}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  const exportAllCustomersToExcel = () => {
+    const data = customers.map(c => ({
+      'كود العميل': c.code,
+      'الاسم': c.name,
+      'رقم الهاتف': c.phone || 'غير مسجل',
+      'الرصيد الحالي': c.balance,
+      'الحالة': c.balance < 0 ? 'مدين (عليه)' : c.balance > 0 ? 'دائن (له)' : 'خالص'
+    }));
+
+    // Create sheet
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    
+    // RTL Direction
+    if(!worksheet['!views']) worksheet['!views'] = [];
+    worksheet['!views'].push({ rightToLeft: true });
+
+    // AutoFilter
+    const ref = worksheet['!ref'];
+    if (ref) {
+      worksheet['!autofilter'] = { ref: ref };
+    }
+
+    // Column Widths - Adjusted to match request (Code, Name, Phone, Balance, Status)
+    const wscols = [
+        { wch: 15 }, // A: Code
+        { wch: 40 }, // B: Name
+        { wch: 20 }, // C: Phone
+        { wch: 15 }, // D: Balance
+        { wch: 15 }  // E: Status
+    ];
+    worksheet['!cols'] = wscols;
+
+    const workbook = XLSX.utils.book_new();
+    workbook.Workbook = { Views: [{ RTL: true }] };
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "العملاء");
+    XLSX.writeFile(workbook, `قائمة_العملاء_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const exportAllSuppliersToExcel = () => {
+    const data = suppliers.map(s => ({
+      'كود المورد': s.code,
+      'الاسم': s.name,
+      'رقم الهاتف': s.phone || 'غير مسجل',
+      'الرصيد الحالي': s.balance,
+      'الحالة': s.balance < 0 ? 'مدين (علينا)' : s.balance > 0 ? 'دائن (لنا)' : 'خالص'
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    
+    // RTL Direction
+    if(!worksheet['!views']) worksheet['!views'] = [];
+    worksheet['!views'].push({ rightToLeft: true });
+
+    // AutoFilter
+    const ref = worksheet['!ref'];
+    if (ref) {
+      worksheet['!autofilter'] = { ref: ref };
+    }
+
+    // Column Widths
+    const wscols = [
+        { wch: 15 }, // Code
+        { wch: 40 }, // Name
+        { wch: 20 }, // Phone
+        { wch: 15 }, // Balance
+        { wch: 15 }  // Status
+    ];
+    worksheet['!cols'] = wscols;
+
+    const workbook = XLSX.utils.book_new();
+    workbook.Workbook = { Views: [{ RTL: true }] };
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "الموردين");
+    XLSX.writeFile(workbook, `قائمة_الموردين_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
   const printInvoice = (invoice: SalesInvoice) => {
-    const printWindow = window.open('', '_blank', 'width=1000,height=800');
+     const printWindow = window.open('', '_blank', 'width=1000,height=800');
     if (!printWindow) {
       alert("يرجى السماح بالنوافذ المنبثقة (Popups) لطباعة الفاتورة");
       return;
@@ -717,8 +970,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             border: 2px solid var(--border-color);
             position: relative;
           }
-          
-          /* Header */
           .header {
             display: flex;
             justify-content: space-between;
@@ -727,129 +978,36 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             padding-bottom: 20px;
             margin-bottom: 30px;
           }
-          .company-info h1 {
-            margin: 0;
-            font-size: 32px;
-            font-weight: 800;
-          }
-          .company-info p {
-            margin: 5px 0 0;
-            color: #555;
-            font-size: 14px;
-          }
-          .invoice-title {
-            text-align: left;
-          }
-          .invoice-title h2 {
-            margin: 0;
-            font-size: 28px;
-            color: #333;
-            text-transform: uppercase;
-            border: 2px solid #000;
-            padding: 5px 15px;
-            display: inline-block;
-          }
-
-          /* Info Grid */
-          .info-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 30px;
-          }
-          .info-box {
-            border: 1px solid #ddd;
-            padding: 15px;
-            border-radius: 4px;
-          }
-          .info-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 14px;
-          }
+          .company-info h1 { margin: 0; font-size: 32px; font-weight: 800; }
+          .company-info p { margin: 5px 0 0; color: #555; font-size: 14px; }
+          .invoice-title { text-align: left; }
+          .invoice-title h2 { margin: 0; font-size: 28px; color: #333; text-transform: uppercase; border: 2px solid #000; padding: 5px 15px; display: inline-block; }
+          .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+          .info-box { border: 1px solid #ddd; padding: 15px; border-radius: 4px; }
+          .info-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
           .info-row:last-child { margin-bottom: 0; }
           .info-label { font-weight: bold; color: #666; }
           .info-value { font-weight: 700; font-size: 16px; }
-
-          /* Table */
-          table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-bottom: 30px; 
-          }
-          th { 
-            background-color: #eee; 
-            color: #000; 
-            font-weight: 800; 
-            padding: 12px; 
-            border: 1px solid #000;
-            font-size: 14px;
-          }
-          td { 
-            padding: 10px; 
-            border: 1px solid #000; 
-            text-align: center; 
-            font-weight: 600;
-          }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+          th { background-color: #eee; color: #000; font-weight: 800; padding: 12px; border: 1px solid #000; font-size: 14px; }
+          td { padding: 10px; border: 1px solid #000; text-align: center; font-weight: 600; }
           tr:nth-child(even) { background-color: #f9f9f9; }
-
-          /* Totals Section */
-          .footer-section {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-          }
-          .notes {
-            flex: 1;
-            font-size: 12px;
-            color: #666;
-            padding-left: 40px;
-          }
-          .totals-box {
-            width: 300px;
-            border: 2px solid #000;
-          }
-          .total-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px;
-            border-bottom: 1px solid #ddd;
-          }
-          .total-row.final {
-            background-color: #000;
-            color: white;
-            border-bottom: none;
-            font-size: 18px;
-          }
-
-          /* Signatures */
-          .signatures {
-            margin-top: 60px;
-            display: flex;
-            justify-content: space-between;
-            padding: 0 50px;
-          }
-          .sig-box {
-            text-align: center;
-            width: 200px;
-          }
-          .sig-line {
-            border-top: 1px solid #000;
-            margin-top: 40px;
-          }
-
+          .footer-section { display: flex; justify-content: space-between; align-items: flex-start; }
+          .notes { flex: 1; font-size: 12px; color: #666; padding-left: 40px; }
+          .totals-box { width: 300px; border: 2px solid #000; }
+          .total-row { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #ddd; }
+          .total-row.final { background-color: #000; color: white; border-bottom: none; font-size: 18px; }
+          .signatures { margin-top: 60px; display: flex; justify-content: space-between; padding: 0 50px; }
+          .sig-box { text-align: center; width: 200px; }
+          .sig-line { border-top: 1px solid #000; margin-top: 40px; }
           @media print {
             body { background: none; padding: 0; }
             .invoice-container { border: none; padding: 0; margin: 0; width: 100%; max-width: 100%; }
-            .no-print { display: none; }
           }
         </style>
       </head>
       <body>
         <div class="invoice-container">
-          
-          <!-- Header -->
           <div class="header">
             <div class="company-info">
               <h1>بورصة النجار</h1>
@@ -859,54 +1017,26 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               <h2>فاتورة مبيعات</h2>
             </div>
           </div>
-
-          <!-- Info -->
           <div class="info-grid">
             <div class="info-box">
-              <div class="info-row">
-                <span class="info-label">العميل:</span>
-                <span class="info-value">${invoice.customerName}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">كود العميل:</span>
-                <span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span>
-              </div>
+              <div class="info-row"><span class="info-label">العميل:</span><span class="info-value">${invoice.customerName}</span></div>
+              <div class="info-row"><span class="info-label">كود العميل:</span><span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span></div>
             </div>
             <div class="info-box">
-              <div class="info-row">
-                <span class="info-label">رقم الفاتورة:</span>
-                <span class="info-value" style="font-family: monospace;">${invoice.id}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">التاريخ:</span>
-                <span class="info-value">${invoice.date}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">الوقت:</span>
-                <span class="info-value">${invoice.time}</span>
-              </div>
+              <div class="info-row"><span class="info-label">رقم الفاتورة:</span><span class="info-value" style="font-family: monospace;">${invoice.id}</span></div>
+              <div class="info-row"><span class="info-label">التاريخ:</span><span class="info-value">${invoice.date}</span></div>
+              <div class="info-row"><span class="info-label">الوقت:</span><span class="info-value">${invoice.time}</span></div>
             </div>
           </div>
-
-          <!-- Items -->
           <table>
             <thead>
-              <tr>
-                <th style="width: 50px;">م</th>
-                <th>الصنف</th>
-                <th style="width: 100px;">الكمية</th>
-                <th style="width: 120px;">السعر</th>
-                <th style="width: 140px;">الإجمالي</th>
-              </tr>
+              <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 100px;">الكمية</th><th style="width: 120px;">السعر</th><th style="width: 140px;">الإجمالي</th></tr>
             </thead>
             <tbody>
               ${invoice.items.map((item, index) => `
                 <tr>
                   <td>${index + 1}</td>
-                  <td style="text-align: right; padding-right: 15px;">
-                    ${item.itemName} 
-                    ${item.itemCode ? `<span style="font-size: 10px; color: #777;">(${item.itemCode})</span>` : ''}
-                  </td>
+                  <td style="text-align: right; padding-right: 15px;">${item.itemName} ${item.itemCode ? `<span style="font-size: 10px; color: #777;">(${item.itemCode})</span>` : ''}</td>
                   <td style="font-size: 15px;">${item.quantity}</td>
                   <td>${item.price.toLocaleString()}</td>
                   <td>${item.total.toLocaleString()}</td>
@@ -914,42 +1044,19 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               `).join('')}
             </tbody>
           </table>
-
-          <!-- Footer Section -->
           <div class="footer-section">
-            <div class="notes">
-            </div>
-
+            <div class="notes"></div>
             <div class="totals-box">
-              <div class="total-row">
-                <span>الإجمالي:</span>
-                <strong>${invoice.total.toLocaleString()}</strong>
-              </div>
-              <div class="total-row" style="color: #666; font-size: 13px;">
-                <span>رصيد سابق:</span>
-                <span>${invoice.previousBalance.toLocaleString()}</span>
-              </div>
-              <div class="total-row final">
-                <span>الرصيد الحالي:</span>
-                <span style="direction: ltr;">${invoice.currentBalance.toLocaleString()}</span>
-              </div>
+              <div class="total-row"><span>الإجمالي:</span><strong>${invoice.total.toLocaleString()}</strong></div>
+              <div class="total-row" style="color: #666; font-size: 13px;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()}</span></div>
+              <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${invoice.currentBalance.toLocaleString()}</span></div>
             </div>
           </div>
-
-          <!-- Signatures -->
           <div class="signatures">
-            <div class="sig-box">
-              <strong>المستلم</strong>
-              <div class="sig-line"></div>
-            </div>
-            <div class="sig-box">
-              <strong>توقيع الإدارة</strong>
-              <div class="sig-line"></div>
-            </div>
+            <div class="sig-box"><strong>المستلم</strong><div class="sig-line"></div></div>
+            <div class="sig-box"><strong>توقيع الإدارة</strong><div class="sig-line"></div></div>
           </div>
-
         </div>
-
         <script>
           window.onload = function() {
             window.print();
@@ -959,7 +1066,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       </body>
       </html>
     `;
-
     printWindow.document.write(htmlContent);
     printWindow.document.close();
   };
@@ -968,9 +1074,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
-      addPurchase, addInvoice, deleteInvoice, addCollection, addTransfer, addCustomer, updateCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee,
-      seedDatabase, printInvoice,
-      currentTreasuryBalance
+      addPurchase, addInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee,
+      seedDatabase, printInvoice, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury,
+      currentTreasuryBalance, balances
     }}>
       {children}
     </ERPContext.Provider>

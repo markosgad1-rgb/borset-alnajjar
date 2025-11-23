@@ -1,17 +1,17 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Calendar, Search, FileText, X, Printer, Trash2, Check } from 'lucide-react';
+import { Calendar, Search, FileText, X, Printer, Trash2, Check, AlertTriangle } from 'lucide-react';
 import { SalesInvoice } from '../types';
 
 export const SalesHistory: React.FC = () => {
-  const { invoices, printInvoice, deleteInvoice } = useERP();
+  const { invoices, printInvoice, deleteInvoice, clearAllInvoices, currentUser } = useERP();
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  // Filter Invoices
   const filteredInvoices = invoices.filter(inv => {
     const matchesDate = inv.date === selectedDate;
     const matchesSearch = 
@@ -20,7 +20,6 @@ export const SalesHistory: React.FC = () => {
     return matchesDate && matchesSearch;
   });
 
-  // Calculate Day Totals
   const dayTotal = filteredInvoices.reduce((sum, inv) => sum + inv.total, 0);
 
   const handleDelete = async (id: string) => {
@@ -28,43 +27,83 @@ export const SalesHistory: React.FC = () => {
     setDeleteConfirmId(null);
   };
 
+  const handleClearAll = async () => {
+    const success = await clearAllInvoices();
+    if (success) {
+      setShowClearConfirm(false);
+      alert("تم حذف جميع الفواتير بنجاح. سيبدأ الترقيم من N001.");
+    }
+  };
+
   return (
     <div className="space-y-6">
-      
-      {/* Header & Search */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-brand-100 flex flex-col md:flex-row gap-4 justify-between items-end">
-        <div className="flex-1 w-full">
-          <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-            <Calendar size={16}/> اختر تاريخ الفواتير
-          </label>
-          <input 
-            type="date"
-            className="w-full p-3 border border-brand-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none"
-            value={selectedDate}
-            onChange={e => setSelectedDate(e.target.value)}
-          />
+      {/* Header with Actions */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-brand-100 flex flex-col gap-6">
+        <div className="flex justify-between items-center border-b pb-4 mb-2">
+           <h2 className="text-xl font-bold text-brand-800">سجل فواتير المبيعات</h2>
+           
+           {currentUser?.permissions.canDeleteLedgers && (
+              showClearConfirm ? (
+                 <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
+                   <AlertTriangle size={16} className="text-red-500" />
+                   <span className="text-xs font-bold text-red-600">هل أنت متأكد من حذف جميع الفواتير؟</span>
+                   <button 
+                     onClick={handleClearAll}
+                     className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-red-700"
+                   >
+                     نعم
+                   </button>
+                   <button 
+                     onClick={() => setShowClearConfirm(false)}
+                     className="bg-white text-gray-600 px-3 py-1 rounded border text-xs font-bold hover:bg-gray-100"
+                   >
+                     إلغاء
+                   </button>
+                 </div>
+              ) : (
+                <button 
+                  onClick={() => setShowClearConfirm(true)}
+                  className="flex items-center gap-2 bg-red-100 text-red-600 px-3 py-2 rounded-lg text-sm font-bold hover:bg-red-200 transition-colors shadow-sm"
+                >
+                  <Trash2 size={16} /> تصفير سجل الفواتير (حذف الكل)
+                </button>
+              )
+            )}
         </div>
 
-        <div className="flex-1 w-full">
-          <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-            <Search size={16}/> بحث برقم الفاتورة أو العميل
-          </label>
-          <input 
-            type="text"
-            className="w-full p-3 border border-brand-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none"
-            placeholder="بحث..."
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-          />
-        </div>
+        <div className="flex flex-col md:flex-row gap-4 justify-between items-end">
+          <div className="flex-1 w-full">
+            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+              <Calendar size={16}/> اختر تاريخ الفواتير
+            </label>
+            <input 
+              type="date"
+              className="w-full p-3 border border-brand-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none"
+              value={selectedDate}
+              onChange={e => setSelectedDate(e.target.value)}
+            />
+          </div>
 
-        <div className="bg-brand-50 p-3 rounded-lg border border-brand-200 text-center min-w-[200px]">
-           <span className="block text-xs text-brand-600 mb-1">إجمالي مبيعات اليوم</span>
-           <span className="block text-xl font-bold text-brand-900">{dayTotal.toLocaleString()} ج.م</span>
+          <div className="flex-1 w-full">
+            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+              <Search size={16}/> بحث برقم الفاتورة أو العميل
+            </label>
+            <input 
+              type="text"
+              className="w-full p-3 border border-brand-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none"
+              placeholder="بحث..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <div className="bg-brand-50 p-3 rounded-lg border border-brand-200 text-center min-w-[200px]">
+             <span className="block text-xs text-brand-600 mb-1">إجمالي مبيعات اليوم</span>
+             <span className="block text-xl font-bold text-brand-900">{dayTotal.toLocaleString()} ج.م</span>
+          </div>
         </div>
       </div>
 
-      {/* Invoices List */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
         <div className="p-4 border-b border-brand-50 bg-brand-50 flex justify-between items-center">
            <h3 className="font-bold text-brand-800">سجل فواتير يوم {selectedDate}</h3>
@@ -141,11 +180,9 @@ export const SalesHistory: React.FC = () => {
         </div>
       </div>
 
-      {/* Invoice Details Modal */}
       {selectedInvoice && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-fade-in">
-            {/* Modal Header */}
             <div className="bg-brand-600 p-4 flex justify-between items-center text-white">
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <FileText size={20}/> تفاصيل الفاتورة {selectedInvoice.id}
@@ -155,10 +192,7 @@ export const SalesHistory: React.FC = () => {
               </button>
             </div>
 
-            {/* Modal Content */}
             <div className="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
-              
-              {/* Info Grid */}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div className="bg-gray-50 p-3 rounded-lg">
                    <span className="block text-gray-500 text-xs">العميل</span>
@@ -170,7 +204,6 @@ export const SalesHistory: React.FC = () => {
                 </div>
               </div>
 
-              {/* Items Table */}
               <div className="border rounded-lg overflow-hidden">
                 <table className="w-full text-right text-sm">
                   <thead className="bg-gray-100 text-gray-700">
@@ -194,7 +227,6 @@ export const SalesHistory: React.FC = () => {
                 </table>
               </div>
 
-              {/* Summary */}
               <div className="flex justify-end">
                 <div className="bg-gray-900 text-white p-4 rounded-xl w-full md:w-1/2">
                   <div className="flex justify-between items-center text-lg font-bold">
@@ -209,7 +241,6 @@ export const SalesHistory: React.FC = () => {
               </div>
             </div>
 
-            {/* Modal Footer */}
             <div className="bg-gray-50 p-4 border-t flex justify-end gap-3">
               <button 
                 onClick={() => printInvoice(selectedInvoice)} 
@@ -227,7 +258,6 @@ export const SalesHistory: React.FC = () => {
           </div>
         </div>
       )}
-
     </div>
   );
 };

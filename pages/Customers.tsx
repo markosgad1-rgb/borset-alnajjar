@@ -1,18 +1,24 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, X, Check } from 'lucide-react';
+import { UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, RefreshCcw, AlertTriangle } from 'lucide-react';
 
 export const Customers: React.FC = () => {
-  const { customers, addCustomer, updateCustomer } = useERP();
+  const { customers, addCustomer, updateCustomer, deleteCustomer, exportLedgerToExcel, exportAllCustomersToExcel, clearLedger, currentUser } = useERP();
   
   // State for form data
-  const [formData, setFormData] = useState({ code: '', name: '', balance: 0 });
+  const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: 0 });
   
   // State to track selection and editing mode
   const [selectedCustomerCode, setSelectedCustomerCode] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null); // To track the original code before edit
+
+  // Delete confirmation state
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  
+  // Clear Ledger confirmation state
+  const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
 
   // Helper to generate next code
   const generateNextCode = () => {
@@ -43,6 +49,7 @@ export const Customers: React.FC = () => {
         updateCustomer(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
+          phone: formData.phone,
           balance: Number(formData.balance) 
         });
         handleCancelEdit();
@@ -54,7 +61,7 @@ export const Customers: React.FC = () => {
         }
         addCustomer({ ...formData, history: [] });
         // Reset form (code will auto-regenerate via useEffect)
-        setFormData({ code: '', name: '', balance: 0 });
+        setFormData({ code: '', name: '', phone: '', balance: 0 });
       }
     }
   };
@@ -66,6 +73,7 @@ export const Customers: React.FC = () => {
     setFormData({
       code: customer.code,
       name: customer.name,
+      phone: customer.phone || '',
       balance: customer.balance
     });
     // Scroll to top to see the form
@@ -75,7 +83,25 @@ export const Customers: React.FC = () => {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', balance: 0 });
+    setFormData({ code: generateNextCode(), name: '', phone: '', balance: 0 });
+  };
+
+  const handleDelete = async (e: React.MouseEvent, code: string) => {
+    e.stopPropagation();
+    await deleteCustomer(code);
+    setDeleteConfirmId(null);
+    if (selectedCustomerCode === code) {
+      setSelectedCustomerCode(null);
+    }
+  };
+
+  const handleClearLedger = async () => {
+    if (!selectedCustomer) return;
+    const success = await clearLedger('CUSTOMER', selectedCustomer.code);
+    if (success) {
+       setShowClearLedgerConfirm(false);
+       alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
   };
 
   const selectedCustomer = customers.find(c => c.code === selectedCustomerCode);
@@ -83,6 +109,17 @@ export const Customers: React.FC = () => {
   return (
     <div className="space-y-8">
       
+      {/* Header with Bulk Export */}
+      <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-brand-100">
+        <h2 className="text-xl font-bold text-brand-800">إدارة العملاء</h2>
+        <button 
+          onClick={exportAllCustomersToExcel}
+          className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-700 transition-colors shadow-sm"
+        >
+          <Download size={18} /> تصدير قائمة العملاء (Excel)
+        </button>
+      </div>
+
       {/* Add/Edit Customer Section */}
       <div className={`p-6 rounded-xl shadow-sm border transition-colors duration-300 ${isEditing ? 'bg-blue-50 border-blue-200' : 'bg-white border-brand-100'}`}>
         <h3 className={`text-lg font-bold mb-4 flex items-center gap-2 ${isEditing ? 'text-blue-800' : 'text-brand-800'}`}>
@@ -111,6 +148,16 @@ export const Customers: React.FC = () => {
               value={formData.name}
               onChange={e => setFormData({...formData, name: e.target.value})}
               placeholder="اسم العميل"
+            />
+          </div>
+          <div className="flex-[2] w-full">
+            <label className="block text-sm text-gray-600 mb-1">رقم الهاتف</label>
+            <input 
+              type="text" 
+              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+              value={formData.phone}
+              onChange={e => setFormData({...formData, phone: e.target.value})}
+              placeholder="01xxxxxxxxx"
             />
           </div>
           <div className="flex-1 w-full">
@@ -151,16 +198,19 @@ export const Customers: React.FC = () => {
               {customers.map(c => (
                 <li 
                   key={c.code} 
-                  onClick={() => setSelectedCustomerCode(c.code)}
+                  onClick={() => {
+                    setSelectedCustomerCode(c.code);
+                    setShowClearLedgerConfirm(false);
+                  }}
                   className={`p-4 cursor-pointer hover:bg-brand-50 transition-colors flex justify-between items-center group
                     ${selectedCustomerCode === c.code ? 'bg-brand-50 border-r-4 border-brand-500' : ''}
                   `}
                 >
                   <div className="flex-1">
                     <p className="font-bold text-gray-800">{c.name}</p>
-                    <p className="text-xs text-gray-500">#{c.code}</p>
+                    <p className="text-xs text-gray-500">#{c.code} {c.phone ? `- ${c.phone}` : ''}</p>
                   </div>
-                  <div className="text-left flex items-center gap-3">
+                  <div className="text-left flex items-center gap-2">
                     <div>
                       {/* Red for Negative (Debt), Green for Positive (Credit) */}
                       <p className={`font-bold text-sm ${c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-green-600' : 'text-gray-600'}`} dir="ltr">
@@ -168,13 +218,44 @@ export const Customers: React.FC = () => {
                       </p>
                       <p className="text-[10px] text-gray-400">الرصيد الحالي</p>
                     </div>
-                    <button 
-                      onClick={(e) => handleEditClick(e, c)}
-                      className="opacity-0 group-hover:opacity-100 p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-all"
-                      title="تعديل بيانات العميل"
-                    >
-                      <Edit size={16} />
-                    </button>
+                    
+                    <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={(e) => handleEditClick(e, c)}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        title="تعديل بيانات العميل"
+                      >
+                        <Edit size={16} />
+                      </button>
+
+                      {deleteConfirmId === c.code ? (
+                         <div className="flex items-center gap-1 bg-red-50 p-1 rounded border border-red-100" onClick={e => e.stopPropagation()}>
+                           <button 
+                             onClick={(e) => handleDelete(e, c.code)} 
+                             className="bg-red-500 text-white p-1 rounded hover:bg-red-600 transition-colors" 
+                             title="تأكيد الحذف"
+                           >
+                             <Check size={14}/>
+                           </button>
+                           <button 
+                             onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null); }} 
+                             className="bg-white text-gray-500 p-1 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
+                             title="إلغاء"
+                           >
+                             <X size={14}/>
+                           </button>
+                         </div>
+                      ) : (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(c.code); }}
+                          className="p-1.5 text-red-400 hover:bg-red-50 hover:text-red-600 rounded transition-colors"
+                          title="حذف العميل"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+
                   </div>
                 </li>
               ))}
@@ -200,7 +281,14 @@ export const Customers: React.FC = () => {
                         <Edit size={14}/> تعديل
                       </button>
                     </h2>
-                    <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-mono">Code: {selectedCustomer.code}</span>
+                    <div className="flex flex-col gap-1 mt-1">
+                      <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-mono w-fit">Code: {selectedCustomer.code}</span>
+                      {selectedCustomer.phone && (
+                        <span className="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs w-fit flex items-center gap-1">
+                          <Phone size={10} /> {selectedCustomer.phone}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="text-left bg-brand-50 p-3 rounded-lg">
                     <p className="text-sm text-gray-500">الرصيد الحالي</p>
@@ -212,9 +300,47 @@ export const Customers: React.FC = () => {
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
-                    <FileText size={18} /> كشف حساب تفصيلي
-                  </h4>
+                  <div className="flex flex-col sm:flex-row justify-between items-center mb-3 gap-3">
+                    <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                      <FileText size={18} /> كشف حساب تفصيلي
+                    </h4>
+                    <div className="flex gap-2 items-center">
+                        {currentUser?.permissions.canDeleteLedgers && (
+                          showClearLedgerConfirm ? (
+                             <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
+                               <AlertTriangle size={16} className="text-red-500" />
+                               <span className="text-xs font-bold text-red-600">تأكيد التصفير؟</span>
+                               <button 
+                                 onClick={handleClearLedger}
+                                 className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-red-700"
+                               >
+                                 نعم
+                               </button>
+                               <button 
+                                 onClick={() => setShowClearLedgerConfirm(false)}
+                                 className="bg-white text-gray-600 px-3 py-1 rounded border text-xs font-bold hover:bg-gray-100"
+                               >
+                                 إلغاء
+                               </button>
+                             </div>
+                          ) : (
+                            <button 
+                              onClick={() => setShowClearLedgerConfirm(true)}
+                              className="flex items-center gap-2 bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-sm font-bold hover:bg-red-200 transition-colors shadow-sm"
+                            >
+                              <Trash2 size={16} /> حذف كشف الحساب (تصفير)
+                            </button>
+                          )
+                        )}
+                        
+                        <button 
+                          onClick={() => exportLedgerToExcel(selectedCustomer.name, selectedCustomer.code, selectedCustomer.history, selectedCustomer.balance, 'CUSTOMER')}
+                          className="flex items-center gap-2 bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-green-700 transition-colors shadow-sm"
+                        >
+                          <Download size={16} /> تصدير (Excel)
+                        </button>
+                    </div>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm text-right">
                       <thead className="bg-gray-50 text-gray-600 border-y">
@@ -230,9 +356,6 @@ export const Customers: React.FC = () => {
                           <tr><td colSpan={4} className="p-4 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
                         ) : (
                           selectedCustomer.history.map((h, idx) => {
-                            // Logic: 
-                            // If amount is negative, it means debt increased (Invoice) -> Debit (عليه)
-                            // If amount is positive, it means debt decreased (Payment) -> Credit (له)
                             const isDebit = h.amount < 0;
                             const isCredit = h.amount > 0;
 
@@ -240,13 +363,9 @@ export const Customers: React.FC = () => {
                               <tr key={idx}>
                                 <td className="p-3 text-gray-600 whitespace-nowrap">{h.date}</td>
                                 <td className="p-3 font-medium text-gray-800">{h.description}</td>
-                                
-                                {/* Debit Column (عليه) - Show positive number if amount was negative */}
                                 <td className="p-3 font-bold text-red-600 bg-red-50/30">
                                   {isDebit ? Math.abs(h.amount).toLocaleString() : '-'}
                                 </td>
-
-                                {/* Credit Column (له) - Show positive number if amount was positive */}
                                 <td className="p-3 font-bold text-green-600 bg-green-50/30">
                                   {isCredit ? h.amount.toLocaleString() : '-'}
                                 </td>

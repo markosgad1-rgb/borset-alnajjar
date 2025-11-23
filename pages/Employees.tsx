@@ -1,15 +1,18 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, Briefcase } from 'lucide-react';
+import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle } from 'lucide-react';
 
 export const Employees: React.FC = () => {
-  const { employees, addEmployee, updateEmployee } = useERP();
+  const { employees, addEmployee, updateEmployee, clearLedger, currentUser } = useERP();
   
   const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: 0, balance: 0 });
   const [selectedEmployeeCode, setSelectedEmployeeCode] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
+
+  // Clear Ledger confirmation state
+  const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
 
   const generateNextCode = () => {
     if (employees.length === 0) return 'E001';
@@ -67,6 +70,15 @@ export const Employees: React.FC = () => {
     setIsEditing(false);
     setEditingOldCode(null);
     setFormData({ code: generateNextCode(), name: '', role: '', salary: 0, balance: 0 });
+  };
+
+  const handleClearLedger = async () => {
+    if (!selectedEmployee) return;
+    const success = await clearLedger('EMPLOYEE', selectedEmployee.code);
+    if (success) {
+      setShowClearLedgerConfirm(false);
+      alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
   };
 
   const selectedEmployee = employees.find(e => e.code === selectedEmployeeCode);
@@ -160,7 +172,10 @@ export const Employees: React.FC = () => {
               {employees.map(e => (
                 <li 
                   key={e.code} 
-                  onClick={() => setSelectedEmployeeCode(e.code)}
+                  onClick={() => {
+                    setSelectedEmployeeCode(e.code);
+                    setShowClearLedgerConfirm(false);
+                  }}
                   className={`p-4 cursor-pointer hover:bg-brand-50 transition-colors flex justify-between items-center group
                     ${selectedEmployeeCode === e.code ? 'bg-brand-50 border-r-4 border-brand-500' : ''}
                   `}
@@ -228,9 +243,40 @@ export const Employees: React.FC = () => {
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
-                    <FileText size={18} /> سجل الرواتب والسلف
-                  </h4>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                      <FileText size={18} /> سجل الرواتب والسلف
+                    </h4>
+                    
+                    {currentUser?.permissions.canDeleteLedgers && (
+                      showClearLedgerConfirm ? (
+                         <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
+                           <AlertTriangle size={16} className="text-red-500" />
+                           <span className="text-xs font-bold text-red-600">تأكيد التصفير؟</span>
+                           <button 
+                             onClick={handleClearLedger}
+                             className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-red-700"
+                           >
+                             نعم
+                           </button>
+                           <button 
+                             onClick={() => setShowClearLedgerConfirm(false)}
+                             className="bg-white text-gray-600 px-3 py-1 rounded border text-xs font-bold hover:bg-gray-100"
+                           >
+                             إلغاء
+                           </button>
+                         </div>
+                      ) : (
+                        <button 
+                          onClick={() => setShowClearLedgerConfirm(true)}
+                          className="flex items-center gap-2 bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-sm font-bold hover:bg-red-200 transition-colors shadow-sm"
+                        >
+                          <Trash2 size={16} /> حذف كشف الحساب (تصفير)
+                        </button>
+                      )
+                    )}
+
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm text-right">
                       <thead className="bg-gray-50 text-gray-600 border-y">
@@ -246,17 +292,6 @@ export const Employees: React.FC = () => {
                           <tr><td colSpan={4} className="p-4 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
                         ) : (
                           selectedEmployee.history.map((h, idx) => {
-                            // Employee Logic:
-                            // Negative Amount = Liability Increases (Salary Due) or Payment Received?
-                            // Let's trace Context:
-                            // OUT (We pay him) -> Balance +Amount. (Reduces Negative or Adds Positive).
-                            // So Positive Amount in history = We Paid Him (Cash Out).
-                            // Negative Amount in history = He Paid Us (Rare) OR We set salary due (Not implemented yet as auto, but logically).
-                            
-                            // Based on current Transfers Context:
-                            // OUT (Payment) -> +Amount.
-                            // IN (Collection) -> -Amount.
-                            
                             const isPaymentToEmployee = h.amount > 0;
                             const isReturnFromEmployee = h.amount < 0;
 

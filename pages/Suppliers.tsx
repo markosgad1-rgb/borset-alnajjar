@@ -1,15 +1,18 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, Truck } from 'lucide-react';
+import { UserPlus, FileText, Edit, Truck, Download, Phone, RefreshCcw, Trash2, AlertTriangle } from 'lucide-react';
 
 export const Suppliers: React.FC = () => {
-  const { suppliers, addSupplier, updateSupplier } = useERP();
+  const { suppliers, addSupplier, updateSupplier, exportLedgerToExcel, exportAllSuppliersToExcel, clearLedger, currentUser } = useERP();
   
-  const [formData, setFormData] = useState({ code: '', name: '', balance: 0 });
+  const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: 0 });
   const [selectedSupplierCode, setSelectedSupplierCode] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
+
+  // Clear Ledger confirmation state
+  const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
 
   const generateNextCode = () => {
     if (suppliers.length === 0) return 'S001';
@@ -33,6 +36,7 @@ export const Suppliers: React.FC = () => {
         updateSupplier(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
+          phone: formData.phone,
           balance: Number(formData.balance) 
         });
         handleCancelEdit();
@@ -42,7 +46,7 @@ export const Suppliers: React.FC = () => {
           return;
         }
         addSupplier({ ...formData, history: [] });
-        setFormData({ code: '', name: '', balance: 0 });
+        setFormData({ code: '', name: '', phone: '', balance: 0 });
       }
     }
   };
@@ -54,6 +58,7 @@ export const Suppliers: React.FC = () => {
     setFormData({
       code: supplier.code,
       name: supplier.name,
+      phone: supplier.phone || '',
       balance: supplier.balance
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -62,13 +67,33 @@ export const Suppliers: React.FC = () => {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', balance: 0 });
+    setFormData({ code: generateNextCode(), name: '', phone: '', balance: 0 });
+  };
+
+  const handleClearLedger = async () => {
+    if (!selectedSupplier) return;
+    const success = await clearLedger('SUPPLIER', selectedSupplier.code);
+    if (success) {
+      setShowClearLedgerConfirm(false);
+      alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
   };
 
   const selectedSupplier = suppliers.find(s => s.code === selectedSupplierCode);
 
   return (
     <div className="space-y-8">
+
+      {/* Header with Bulk Export */}
+      <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-brand-100">
+        <h2 className="text-xl font-bold text-brand-800">إدارة الموردين</h2>
+        <button 
+          onClick={exportAllSuppliersToExcel}
+          className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-700 transition-colors shadow-sm"
+        >
+          <Download size={18} /> تصدير قائمة الموردين (Excel)
+        </button>
+      </div>
       
       {/* Add/Edit Supplier Section */}
       <div className={`p-6 rounded-xl shadow-sm border transition-colors duration-300 ${isEditing ? 'bg-orange-50 border-orange-200' : 'bg-white border-brand-100'}`}>
@@ -97,6 +122,16 @@ export const Suppliers: React.FC = () => {
               value={formData.name}
               onChange={e => setFormData({...formData, name: e.target.value})}
               placeholder="اسم المورد"
+            />
+          </div>
+          <div className="flex-[2] w-full">
+            <label className="block text-sm text-gray-600 mb-1">رقم الهاتف</label>
+            <input 
+              type="text" 
+              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+              value={formData.phone}
+              onChange={e => setFormData({...formData, phone: e.target.value})}
+              placeholder="01xxxxxxxxx"
             />
           </div>
           <div className="flex-1 w-full">
@@ -137,14 +172,17 @@ export const Suppliers: React.FC = () => {
               {suppliers.map(s => (
                 <li 
                   key={s.code} 
-                  onClick={() => setSelectedSupplierCode(s.code)}
+                  onClick={() => {
+                    setSelectedSupplierCode(s.code);
+                    setShowClearLedgerConfirm(false);
+                  }}
                   className={`p-4 cursor-pointer hover:bg-brand-50 transition-colors flex justify-between items-center group
                     ${selectedSupplierCode === s.code ? 'bg-brand-50 border-r-4 border-brand-500' : ''}
                   `}
                 >
                   <div className="flex-1">
                     <p className="font-bold text-gray-800">{s.name}</p>
-                    <p className="text-xs text-gray-500">#{s.code}</p>
+                    <p className="text-xs text-gray-500">#{s.code} {s.phone ? `- ${s.phone}` : ''}</p>
                   </div>
                   <div className="text-left flex items-center gap-3">
                     <div>
@@ -184,7 +222,14 @@ export const Suppliers: React.FC = () => {
                         <Edit size={14}/> تعديل
                       </button>
                     </h2>
-                    <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-mono">Code: {selectedSupplier.code}</span>
+                    <div className="flex flex-col gap-1 mt-1">
+                      <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-mono w-fit">Code: {selectedSupplier.code}</span>
+                      {selectedSupplier.phone && (
+                        <span className="bg-orange-50 text-orange-600 px-2 py-1 rounded text-xs w-fit flex items-center gap-1">
+                          <Phone size={10} /> {selectedSupplier.phone}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="text-left bg-brand-50 p-3 rounded-lg">
                     <p className="text-sm text-gray-500">الرصيد الحالي</p>
@@ -198,9 +243,47 @@ export const Suppliers: React.FC = () => {
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
-                    <FileText size={18} /> كشف حساب
-                  </h4>
+                  <div className="flex flex-col sm:flex-row justify-between items-center mb-3 gap-3">
+                    <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                      <FileText size={18} /> كشف حساب
+                    </h4>
+                    <div className="flex gap-2 items-center">
+                        {currentUser?.permissions.canDeleteLedgers && (
+                          showClearLedgerConfirm ? (
+                             <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
+                               <AlertTriangle size={16} className="text-red-500" />
+                               <span className="text-xs font-bold text-red-600">تأكيد التصفير؟</span>
+                               <button 
+                                 onClick={handleClearLedger}
+                                 className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-red-700"
+                               >
+                                 نعم
+                               </button>
+                               <button 
+                                 onClick={() => setShowClearLedgerConfirm(false)}
+                                 className="bg-white text-gray-600 px-3 py-1 rounded border text-xs font-bold hover:bg-gray-100"
+                               >
+                                 إلغاء
+                               </button>
+                             </div>
+                          ) : (
+                            <button 
+                              onClick={() => setShowClearLedgerConfirm(true)}
+                              className="flex items-center gap-2 bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-sm font-bold hover:bg-red-200 transition-colors shadow-sm"
+                            >
+                              <Trash2 size={16} /> حذف كشف الحساب (تصفير)
+                            </button>
+                          )
+                        )}
+
+                        <button 
+                          onClick={() => exportLedgerToExcel(selectedSupplier.name, selectedSupplier.code, selectedSupplier.history, selectedSupplier.balance, 'SUPPLIER')}
+                          className="flex items-center gap-2 bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-green-700 transition-colors shadow-sm"
+                        >
+                          <Download size={16} /> تصدير (Excel)
+                        </button>
+                    </div>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm text-right">
                       <thead className="bg-gray-50 text-gray-600 border-y">

@@ -13,13 +13,27 @@ import { Employees } from './pages/Employees';
 import { Treasury } from './pages/Treasury';
 import { Collections } from './pages/Collections';
 import { Transfers } from './pages/Transfers';
+import { Expenses } from './pages/Expenses';
 import { UserManagement } from './pages/UserManagement';
 import { SalesHistory } from './pages/SalesHistory';
-import { PageView } from './types';
+import { PageView, User } from './types';
 
 const AppContent: React.FC = () => {
   const { currentUser } = useERP();
-  const [activePage, setActivePage] = useState<PageView>('dashboard');
+  
+  // Determine initial page based on permissions
+  const getInitialPage = (user: User): PageView => {
+    if (user.permissions.dashboard) return 'dashboard';
+    if (user.permissions.sales) return 'sales';
+    if (user.permissions.warehouse) return 'warehouse';
+    if (user.permissions.financial) return 'treasury';
+    if (user.permissions.admin) return 'users';
+    return 'dashboard'; // Fallback
+  };
+
+  const [activePage, setActivePage] = useState<PageView>(() => {
+    return currentUser ? getInitialPage(currentUser) : 'dashboard';
+  });
 
   if (!currentUser) {
     return <Login />;
@@ -38,6 +52,7 @@ const AppContent: React.FC = () => {
       case 'treasury': return <Treasury />;
       case 'collections': return <Collections />;
       case 'transfers': return <Transfers />;
+      case 'expenses': return <Expenses />;
       case 'users': return <UserManagement />;
       default: return <Dashboard />;
     }

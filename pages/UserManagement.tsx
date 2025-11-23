@@ -21,10 +21,12 @@ export const UserManagement: React.FC = () => {
     fullName: '',
     role: 'USER' as 'ADMIN' | 'USER',
     permissions: {
+      dashboard: false,
       sales: false,
       warehouse: false,
       financial: false,
-      admin: false
+      admin: false,
+      canDeleteLedgers: false // Default false
     }
   });
 
@@ -34,7 +36,7 @@ export const UserManagement: React.FC = () => {
       password: '',
       fullName: '',
       role: 'USER',
-      permissions: { sales: false, warehouse: false, financial: false, admin: false }
+      permissions: { dashboard: false, sales: false, warehouse: false, financial: false, admin: false, canDeleteLedgers: false }
     });
     setIsEditing(false);
     setEditingId(null);
@@ -69,7 +71,14 @@ export const UserManagement: React.FC = () => {
       password: user.password,
       fullName: user.fullName,
       role: user.role,
-      permissions: { ...user.permissions }
+      permissions: { 
+        dashboard: user.permissions.dashboard || false, // Default to false if old user
+        sales: user.permissions.sales,
+        warehouse: user.permissions.warehouse,
+        financial: user.permissions.financial,
+        admin: user.permissions.admin,
+        canDeleteLedgers: user.permissions.canDeleteLedgers || false
+      }
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -91,8 +100,6 @@ export const UserManagement: React.FC = () => {
       alert("تم الحذف بنجاح");
       setDeleteConfirmId(null);
     }
-    // If success is false, the Context alert will have already shown the error (Permissions),
-    // so we just stop loading and keep the row visible so user can retry after fixing permissions.
   };
 
   const cancelDelete = () => {
@@ -188,7 +195,17 @@ export const UserManagement: React.FC = () => {
 
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
             <label className="block text-sm font-bold text-gray-800 mb-3">الصلاحيات الممنوحة</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
+              <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-brand-400 transition-colors">
+                <input 
+                  type="checkbox" 
+                  checked={formData.permissions.dashboard}
+                  onChange={() => handlePermissionChange('dashboard')}
+                  className="w-5 h-5 text-brand-600 rounded focus:ring-brand-500"
+                />
+                <span className="font-medium">الرئيسية (Dashboard)</span>
+              </label>
+
               <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-brand-400 transition-colors">
                 <input 
                   type="checkbox" 
@@ -219,7 +236,17 @@ export const UserManagement: React.FC = () => {
                 <span className="font-medium">حسابات وخزنة</span>
               </label>
 
-              <label className="flex items-center gap-2 cursor-pointer bg-red-50 p-3 rounded-lg border border-red-200 hover:border-red-400 transition-colors">
+              <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-brand-400 transition-colors">
+                <input 
+                  type="checkbox" 
+                  checked={formData.permissions.canDeleteLedgers}
+                  onChange={() => handlePermissionChange('canDeleteLedgers')}
+                  className="w-5 h-5 text-red-600 rounded focus:ring-red-500"
+                />
+                <span className="font-bold text-red-700">حذف كشوف الحسابات (تصفير)</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer bg-red-50 p-3 rounded-lg border border-red-200 hover:border-red-400 transition-colors md:col-span-5 lg:col-span-1">
                 <input 
                   type="checkbox" 
                   checked={formData.permissions.admin}
@@ -282,9 +309,11 @@ export const UserManagement: React.FC = () => {
                   </td>
                   <td className="p-4 text-sm text-gray-500">
                     <div className="flex gap-1 flex-wrap">
+                       {user.permissions.dashboard && <span className="bg-gray-100 px-2 rounded border">الرئيسية</span>}
                        {user.permissions.sales && <span className="bg-gray-100 px-2 rounded border">مبيعات</span>}
                        {user.permissions.warehouse && <span className="bg-gray-100 px-2 rounded border">مخازن</span>}
                        {user.permissions.financial && <span className="bg-gray-100 px-2 rounded border">مالية</span>}
+                       {user.permissions.canDeleteLedgers && <span className="bg-red-50 text-red-700 px-2 rounded border border-red-100">تصفير حسابات</span>}
                        {user.permissions.admin && <span className="bg-red-50 text-red-600 px-2 rounded border border-red-100">إدارة</span>}
                     </div>
                   </td>

@@ -15,6 +15,7 @@ export interface Product {
 export interface Customer {
   code: string;
   name: string;
+  phone?: string; // New Field
   balance: number; // Negative = Debt (Owes us), Positive = Credit (We owe him)
   history: CustomerHistory[];
 }
@@ -22,6 +23,7 @@ export interface Customer {
 export interface Supplier {
   code: string;
   name: string;
+  phone?: string; // New Field
   balance: number; // Negative = We Owe Him (Liability), Positive = He Owes Us (Asset)
   history: CustomerHistory[];
 }
@@ -73,13 +75,16 @@ export interface SalesInvoice {
   currentBalance: number;
 }
 
+export type PaymentMethod = 'CASH' | 'BANK_MISR' | 'BANK_AHLY';
+
 export interface TreasuryTransaction {
   id: string;
   invoiceNumber?: string;
   date: string;
   credit: number; // Incoming
   debit: number; // Outgoing
-  balance: number; // Running balance
+  balance: number; // Running balance (Global)
+  paymentMethod: PaymentMethod; // New field
   description: string;
 }
 
@@ -90,11 +95,13 @@ export interface User {
   fullName: string;
   role: 'ADMIN' | 'USER';
   permissions: {
-    sales: boolean;      // Access Sales & Customers
-    warehouse: boolean;  // Access Warehouse, Purchases & Suppliers
-    financial: boolean;  // Access Treasury, Collections, Transfers & Employees
-    admin: boolean;      // Access User Management
+    dashboard: boolean;
+    sales: boolean;
+    warehouse: boolean;
+    financial: boolean;
+    admin: boolean;
+    canDeleteLedgers: boolean; // New Permission: Clear History/Treasury
   };
 }
 
-export type PageView = 'dashboard' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'users';
+export type PageView = 'dashboard' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users';

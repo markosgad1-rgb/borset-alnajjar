@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Banknote, Save, Search, CheckCircle, AlertCircle } from 'lucide-react';
+import { Banknote, Save, Search, CheckCircle, AlertCircle, Building2, Wallet } from 'lucide-react';
+import { PaymentMethod } from '../types';
 
 export const Collections: React.FC = () => {
   const { customers, addCollection } = useERP();
@@ -11,7 +12,8 @@ export const Collections: React.FC = () => {
     customerCode: '',
     customerName: '',
     amount: '',
-    date: new Date().toISOString().split('T')[0]
+    date: new Date().toISOString().split('T')[0],
+    paymentMethod: 'CASH' as PaymentMethod
   });
 
   const [customerBalance, setCustomerBalance] = useState<number | null>(null);
@@ -65,7 +67,8 @@ export const Collections: React.FC = () => {
       customerCode: formData.customerCode,
       invoiceId: formData.invoiceId || undefined,
       amount: amount,
-      date: formData.date
+      date: formData.date,
+      paymentMethod: formData.paymentMethod
     });
 
     // Reset Form
@@ -74,7 +77,8 @@ export const Collections: React.FC = () => {
       customerCode: '',
       customerName: '',
       amount: '',
-      date: new Date().toISOString().split('T')[0]
+      date: new Date().toISOString().split('T')[0],
+      paymentMethod: 'CASH'
     });
     setCustomerBalance(null);
     alert('تم حفظ عملية التحصيل بنجاح، وتحديث رصيد العميل والخزنة.');
@@ -148,7 +152,61 @@ export const Collections: React.FC = () => {
             )}
 
             {/* Payment Details Section */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t">
+               {/* Payment Method */}
+               <div className="md:col-span-2 space-y-2">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">طريقة التحصيل (إلى أين ستذهب الأموال؟)</label>
+                  <div className="grid grid-cols-3 gap-4">
+                    <label className={`
+                      flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                      ${formData.paymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                    `}>
+                      <input 
+                        type="radio" 
+                        name="method" 
+                        value="CASH" 
+                        checked={formData.paymentMethod === 'CASH'}
+                        onChange={() => setFormData({...formData, paymentMethod: 'CASH'})} 
+                        className="hidden"
+                      />
+                      <Wallet size={20} />
+                      <span className="font-bold">خزنة (كاش)</span>
+                    </label>
+
+                    <label className={`
+                      flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                      ${formData.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                    `}>
+                      <input 
+                        type="radio" 
+                        name="method" 
+                        value="BANK_AHLY" 
+                        checked={formData.paymentMethod === 'BANK_AHLY'}
+                        onChange={() => setFormData({...formData, paymentMethod: 'BANK_AHLY'})} 
+                        className="hidden"
+                      />
+                      <Building2 size={20} />
+                      <span className="font-bold">البنك الأهلي</span>
+                    </label>
+
+                    <label className={`
+                      flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                      ${formData.paymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                    `}>
+                      <input 
+                        type="radio" 
+                        name="method" 
+                        value="BANK_MISR" 
+                        checked={formData.paymentMethod === 'BANK_MISR'}
+                        onChange={() => setFormData({...formData, paymentMethod: 'BANK_MISR'})} 
+                        className="hidden"
+                      />
+                      <Building2 size={20} />
+                      <span className="font-bold">بنك مصر</span>
+                    </label>
+                  </div>
+               </div>
+
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-gray-700">رقم الفاتورة (مرجع)</label>
                 <input 
@@ -172,7 +230,7 @@ export const Collections: React.FC = () => {
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="md:col-span-2 space-y-2">
                 <label className="block text-sm font-bold text-gray-700 text-emerald-700">المبلغ المحصل (تم دفع)</label>
                 <div className="relative">
                   <input 
@@ -197,7 +255,7 @@ export const Collections: React.FC = () => {
                 className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all flex justify-center items-center gap-3"
               >
                 <Save size={24} />
-                حفظ التحصيل (تحديث الخزنة والعميل)
+                حفظ التحصيل
               </button>
             </div>
 
@@ -209,7 +267,7 @@ export const Collections: React.FC = () => {
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-500 text-sm">
         <div className="flex items-start gap-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
           <CheckCircle size={16} className="mt-1 text-blue-500"/>
-          <p>عند الحفظ، سيتم إضافة المبلغ المدخل إلى <strong>الخزنة</strong> كإيراد (وارد).</p>
+          <p>عند الحفظ، سيتم إضافة المبلغ المدخل إلى <strong>الحساب المختار (خزنة/بنك)</strong> كإيراد.</p>
         </div>
         <div className="flex items-start gap-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
           <CheckCircle size={16} className="mt-1 text-blue-500"/>

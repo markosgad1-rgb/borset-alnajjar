@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, Truck, Briefcase, LogOut, Shield, Download, Wifi, WifiOff, History } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, Truck, Briefcase, LogOut, Shield, Download, Wifi, WifiOff, History, Receipt } from 'lucide-react';
 import { PageView } from '../types';
 import { useERP } from '../context/ERPContext';
 
@@ -46,7 +46,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   };
 
   const navItems: { id: PageView; label: string; icon: React.ReactNode; permission?: keyof typeof currentUser.permissions }[] = [
-    { id: 'dashboard', label: 'الرئيسية', icon: <LayoutDashboard size={20} /> }, // Public
+    { id: 'dashboard', label: 'الرئيسية', icon: <LayoutDashboard size={20} />, permission: 'dashboard' }, // Now controlled by permission
     { id: 'sales', label: 'فواتير البيع', icon: <FileText size={20} />, permission: 'sales' },
     { id: 'sales-history', label: 'سجل الفواتير', icon: <History size={20} />, permission: 'sales' },
     { id: 'purchases', label: 'المشتريات', icon: <ShoppingCart size={20} />, permission: 'warehouse' },
@@ -56,13 +56,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
     { id: 'employees', label: 'الموظفين', icon: <Briefcase size={20} />, permission: 'financial' },
     { id: 'collections', label: 'التحصيل', icon: <Banknote size={20} />, permission: 'financial' },
     { id: 'transfers', label: 'التحويلات', icon: <ArrowRightLeft size={20} />, permission: 'financial' },
+    { id: 'expenses', label: 'المصروفات', icon: <Receipt size={20} />, permission: 'financial' },
     { id: 'treasury', label: 'الخزنة', icon: <Wallet size={20} />, permission: 'financial' },
     { id: 'users', label: 'المستخدمين', icon: <Shield size={20} />, permission: 'admin' },
   ];
 
   // Filter items based on permission
   const filteredNav = navItems.filter(item => {
-    if (!item.permission) return true; // Dashboard is free
+    if (!item.permission) return true; 
     return currentUser?.permissions[item.permission];
   });
 
