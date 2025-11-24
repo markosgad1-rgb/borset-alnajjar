@@ -100,7 +100,9 @@ export interface User {
     warehouse: boolean;
     financial: boolean;
     admin: boolean;
-    canDeleteLedgers: boolean; // New Permission: Clear History/Treasury
+    canDeleteLedgers: boolean;
+    canEditWarehouse: boolean; // New: Add/Edit/Delete Products
+    canManageTreasury: boolean; // New: Add Opening Balance
   };
 }
 

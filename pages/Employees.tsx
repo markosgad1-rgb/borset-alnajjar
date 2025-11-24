@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle } from 'lucide-react';
+import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle, Check, X } from 'lucide-react';
 
 export const Employees: React.FC = () => {
-  const { employees, addEmployee, updateEmployee, clearLedger, currentUser } = useERP();
+  const { employees, addEmployee, updateEmployee, deleteEmployee, clearLedger, currentUser } = useERP();
   
   const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: 0, balance: 0 });
   const [selectedEmployeeCode, setSelectedEmployeeCode] = useState<string | null>(null);
@@ -13,6 +13,9 @@ export const Employees: React.FC = () => {
 
   // Clear Ledger confirmation state
   const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
+  
+  // Delete Confirmation state
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const generateNextCode = () => {
     if (employees.length === 0) return 'E001';
@@ -70,6 +73,15 @@ export const Employees: React.FC = () => {
     setIsEditing(false);
     setEditingOldCode(null);
     setFormData({ code: generateNextCode(), name: '', role: '', salary: 0, balance: 0 });
+  };
+
+  const handleDelete = async (e: React.MouseEvent, code: string) => {
+    e.stopPropagation();
+    await deleteEmployee(code);
+    setDeleteConfirmId(null);
+    if (selectedEmployeeCode === code) {
+      setSelectedEmployeeCode(null);
+    }
   };
 
   const handleClearLedger = async () => {
@@ -184,18 +196,52 @@ export const Employees: React.FC = () => {
                     <p className="font-bold text-gray-800">{e.name}</p>
                     <p className="text-xs text-gray-500">{e.role} - #{e.code}</p>
                   </div>
-                  <div className="text-left flex items-center gap-3">
+                  <div className="text-left flex items-center gap-2">
                     <div>
                       <p className={`font-bold text-sm ${e.balance < 0 ? 'text-red-600' : e.balance > 0 ? 'text-green-600' : 'text-gray-600'}`} dir="ltr">
                         {e.balance.toLocaleString()}
                       </p>
                     </div>
-                    <button 
-                      onClick={(e) => handleEditClick(e, e)}
-                      className="opacity-0 group-hover:opacity-100 p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-all"
-                    >
-                      <Edit size={16} />
-                    </button>
+                    
+                    <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={(event) => handleEditClick(event, e)}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        title="تعديل"
+                      >
+                        <Edit size={16} />
+                      </button>
+
+                      {currentUser?.permissions.canDeleteLedgers && (
+                        deleteConfirmId === e.code ? (
+                           <div className="flex items-center gap-1 bg-red-50 p-1 rounded border border-red-100" onClick={e => e.stopPropagation()}>
+                             <button 
+                               onClick={(event) => handleDelete(event, e.code)} 
+                               className="bg-red-500 text-white p-1 rounded hover:bg-red-600 transition-colors" 
+                               title="تأكيد الحذف"
+                             >
+                               <Check size={14}/>
+                             </button>
+                             <button 
+                               onClick={(event) => { event.stopPropagation(); setDeleteConfirmId(null); }} 
+                               className="bg-white text-gray-500 p-1 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
+                               title="إلغاء"
+                             >
+                               <X size={14}/>
+                             </button>
+                           </div>
+                        ) : (
+                          <button 
+                            onClick={(event) => { event.stopPropagation(); setDeleteConfirmId(e.code); }}
+                            className="p-1.5 text-red-400 hover:bg-red-50 hover:text-red-600 rounded transition-colors"
+                            title="حذف الموظف"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )
+                      )}
+                    </div>
+
                   </div>
                 </li>
               ))}

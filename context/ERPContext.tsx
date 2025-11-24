@@ -64,7 +64,7 @@ interface ERPContextType {
     total: number;
   }) => void;
   deleteInvoice: (id: string) => Promise<void>;
-  clearAllInvoices: () => Promise<boolean>; // New function
+  clearAllInvoices: () => Promise<boolean>; 
   addCollection: (data: {
     customerCode: string;
     invoiceId?: string;
@@ -87,6 +87,13 @@ interface ERPContextType {
     date: string;
     notes?: string;
   }) => Promise<void>;
+  addOpeningBalance: (data: {
+    amount: number;
+    date: string;
+    paymentMethod: PaymentMethod;
+    notes?: string;
+  }) => Promise<void>; 
+
   addCustomer: (customer: Customer) => void;
   updateCustomer: (code: string, updatedData: Partial<Customer>) => void;
   deleteCustomer: (code: string) => Promise<void>;
@@ -94,6 +101,7 @@ interface ERPContextType {
   updateSupplier: (code: string, updatedData: Partial<Supplier>) => void;
   addEmployee: (employee: Employee) => void;
   updateEmployee: (code: string, updatedData: Partial<Employee>) => void;
+  deleteEmployee: (code: string) => Promise<void>;
   
   // User Management
   addUser: (user: User) => void;
@@ -131,9 +139,52 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'erp_current_user' 
 };
 
-// Initial Mock Data (Used for first-time LocalStorage)
+// Helper to patch old user objects with new permissions
+const sanitizeUser = (user: any): User => {
+  if (!user) return user;
+  
+  const defaults = {
+    dashboard: false,
+    sales: false,
+    warehouse: false,
+    financial: false,
+    admin: false,
+    canDeleteLedgers: false,
+    canEditWarehouse: false,
+    canManageTreasury: false
+  };
+
+  // If admin, ensure they have full access by default if keys are missing
+  if (user.role === 'ADMIN') {
+    return {
+      ...user,
+      permissions: {
+        dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true,
+        canEditWarehouse: true, canManageTreasury: true,
+        ...(user.permissions || {}) // Override with specific settings if they exist
+      }
+    };
+  }
+
+  return {
+    ...user,
+    permissions: {
+      ...defaults,
+      ...(user.permissions || {})
+    }
+  };
+};
+
+// Initial Mock Data
 const INITIAL_USERS: User[] = [
-  { id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: { dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true } }
+  sanitizeUser({ 
+    id: '1', 
+    username: 'admin', 
+    password: '123', 
+    fullName: 'المدير العام', 
+    role: 'ADMIN', 
+    permissions: {} // Will be filled by sanitizeUser
+  })
 ];
 
 export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -145,7 +196,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
-      return saved ? JSON.parse(saved) : null;
+      // CRITICAL FIX: Sanitize the loaded user to ensure new permissions exist
+      return saved ? sanitizeUser(JSON.parse(saved)) : null;
     }
     return null;
   });
@@ -183,14 +235,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       try {
         unsubs.push(onSnapshot(collection(db, 'users'), (snap: any) => {
-           setPermissionError(false); // Reset if successful
-           const loadedUsers = snap.docs.map((d: any) => d.data() as User);
+           setPermissionError(false);
+           const loadedUsers = snap.docs.map((d: any) => sanitizeUser(d.data()));
            setUsers(loadedUsers);
-           // Auto-seed admin if users list is empty (e.g. fresh DB)
+           
            if (loadedUsers.length === 0) {
-              const adminUser: User = { 
-                id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: { dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true } 
-              };
+              const adminUser = sanitizeUser({ 
+                id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: {} 
+              });
               setDoc(doc(db, 'users', '1'), adminUser).catch(console.error);
            }
         }, handleSnapshotError));
@@ -222,7 +274,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // --- LOCAL STORAGE MODE ---
       const load = (key: string, setter: Function, def: any) => {
         const saved = localStorage.getItem(key);
-        if (saved) setter(JSON.parse(saved));
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          // Sanitize users specifically if loading users
+          if (key === STORAGE_KEYS.USERS) {
+            setter(parsed.map((u: any) => sanitizeUser(u)));
+          } else {
+            setter(parsed);
+          }
+        }
         else setter(def);
       };
 
@@ -237,7 +297,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [isOnline]);
 
-  // --- Persist to LocalStorage when data changes (Offline Backup) ---
+  // --- Persist to LocalStorage ---
   useEffect(() => {
     if (!isOnline) {
       localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
@@ -253,7 +313,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [users, products, customers, suppliers, employees, purchases, invoices, treasury, currentUser, isOnline]);
 
 
-  // --- Helper: Generic Save with Error Handling ---
   const handleFirebaseError = (error: any) => {
     console.error("Firebase Error:", error);
     const msg = error?.message || JSON.stringify(error);
@@ -270,25 +329,29 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const username = usernameInput.trim();
     const password = passwordInput.trim();
 
+    // 1. Emergency Backdoor (Always works, generates fresh Admin permissions)
     if (username === 'admin' && password === '123') {
-       const adminUser: User = { 
+       const adminUser = sanitizeUser({ 
          id: '1', 
          username: 'admin', 
          password: '123', 
          fullName: 'المدير العام', 
          role: 'ADMIN', 
-         permissions: { dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true } 
-       };
+         permissions: {} 
+       });
        setCurrentUser(adminUser);
        if (isOnline) {
+         // Ensure admin exists in cloud with correct structure
          setDoc(doc(db, 'users', '1'), adminUser).catch((e: any) => console.log("Admin seed check:", e));
        }
        return true;
     }
 
+    // 2. Standard Login
     const user = users.find(u => u.username === username && u.password === password);
     if (user) {
-      setCurrentUser(user);
+      // CRITICAL FIX: Sanitize user data before setting session to prevent crashes on missing permissions
+      setCurrentUser(sanitizeUser(user));
       return true;
     }
     
@@ -415,6 +478,16 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       } catch (e) { handleFirebaseError(e); }
     } else {
       setEmployees(prev => prev.map(e => e.code === code ? newEmployee : e));
+    }
+  };
+
+  const deleteEmployee = async (code: string) => {
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'employees', code));
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      setEmployees(prev => prev.filter(e => e.code !== code));
     }
   };
 
@@ -671,12 +744,31 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const transId = `EXP-${Date.now()}`;
     const description = `مصروفات - ${data.name} ${data.notes ? `(${data.notes})` : ''}`;
     
-    // Deduct directly from Treasury (Cash), No specific entity balance updated
     const newTreasuryBalance = currentTreasuryBalance - data.amount;
 
     const newTransaction: TreasuryTransaction = {
       id: transId, date: data.date, credit: 0, debit: data.amount,
       balance: newTreasuryBalance, paymentMethod: 'CASH', description
+    };
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'treasury', transId), newTransaction);
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      setTreasury(prev => [...prev, newTransaction]);
+    }
+  };
+
+  const addOpeningBalance = async (data: { amount: number; date: string; paymentMethod: PaymentMethod; notes?: string }) => {
+    const transId = `OPEN-${Date.now()}`;
+    const description = `رصيد افتتاحي ${data.notes ? `(${data.notes})` : ''}`;
+    
+    const newTreasuryBalance = currentTreasuryBalance + data.amount;
+
+    const newTransaction: TreasuryTransaction = {
+      id: transId, date: data.date, credit: data.amount, debit: 0,
+      balance: newTreasuryBalance, paymentMethod: data.paymentMethod, description
     };
 
     if (isOnline) {
@@ -719,7 +811,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const clearLedger = async (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string): Promise<boolean> => {
     try {
-      // 1. Optimistic Update (Immediate UI Refresh)
       if (entityType === 'CUSTOMER') {
         setCustomers(prev => prev.map(c => c.code === code ? { ...c, history: [], balance: 0 } : c));
       } else if (entityType === 'SUPPLIER') {
@@ -728,7 +819,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setEmployees(prev => prev.map(e => e.code === code ? { ...e, history: [], balance: 0 } : e));
       }
 
-      // 2. Firebase Update (Hard Reset)
       if (isOnline) {
         let collectionName = '';
         if (entityType === 'CUSTOMER') collectionName = 'customers';
@@ -736,9 +826,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         else if (entityType === 'EMPLOYEE') collectionName = 'employees';
 
         const ref = doc(db, collectionName, code);
-        // FORCE overwrite history and balance using setDoc with MERGE to be robust even if doc structure has minor issues
         await setDoc(ref, { history: [], balance: 0 }, { merge: true });
-        console.log(`Hard reset ledger for ${entityType} ${code} successful`);
       }
       return true;
     } catch (e) { 
@@ -749,16 +837,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const clearTreasury = async (): Promise<boolean> => {
     try {
-      // Optimistic Update
       setTreasury([]);
-
       if (isOnline) {
-        // Fetch all documents in treasury collection and delete them
         const q = query(collection(db, 'treasury'));
         const snapshot = await getDocs(q);
         const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
         await Promise.all(deletePromises);
-        console.log("Treasury cleared successfully");
       }
       return true;
     } catch (e) {
@@ -828,17 +912,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const worksheet = XLSX.utils.json_to_sheet(data);
     
-    // RTL Direction
     if(!worksheet['!views']) worksheet['!views'] = [];
     worksheet['!views'].push({ rightToLeft: true });
 
-    // AutoFilter
     const ref = worksheet['!ref'];
     if (ref) {
       worksheet['!autofilter'] = { ref: ref };
     }
 
-    // Column Widths
     const wscols = [
       { wch: 15 }, 
       { wch: 60 }, 
@@ -848,7 +929,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     worksheet['!cols'] = wscols;
 
     const workbook = XLSX.utils.book_new();
-    // Force Workbook View to RTL
     workbook.Workbook = { Views: [{ RTL: true }] };
 
     XLSX.utils.book_append_sheet(workbook, worksheet, "كشف حساب");
@@ -865,26 +945,22 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       'الحالة': c.balance < 0 ? 'مدين (عليه)' : c.balance > 0 ? 'دائن (له)' : 'خالص'
     }));
 
-    // Create sheet
     const worksheet = XLSX.utils.json_to_sheet(data);
     
-    // RTL Direction
     if(!worksheet['!views']) worksheet['!views'] = [];
     worksheet['!views'].push({ rightToLeft: true });
 
-    // AutoFilter
     const ref = worksheet['!ref'];
     if (ref) {
       worksheet['!autofilter'] = { ref: ref };
     }
 
-    // Column Widths - Adjusted to match request (Code, Name, Phone, Balance, Status)
     const wscols = [
-        { wch: 15 }, // A: Code
-        { wch: 40 }, // B: Name
-        { wch: 20 }, // C: Phone
-        { wch: 15 }, // D: Balance
-        { wch: 15 }  // E: Status
+        { wch: 15 },
+        { wch: 40 },
+        { wch: 20 },
+        { wch: 15 },
+        { wch: 15 }
     ];
     worksheet['!cols'] = wscols;
 
@@ -906,23 +982,20 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const worksheet = XLSX.utils.json_to_sheet(data);
     
-    // RTL Direction
     if(!worksheet['!views']) worksheet['!views'] = [];
     worksheet['!views'].push({ rightToLeft: true });
 
-    // AutoFilter
     const ref = worksheet['!ref'];
     if (ref) {
       worksheet['!autofilter'] = { ref: ref };
     }
 
-    // Column Widths
     const wscols = [
-        { wch: 15 }, // Code
-        { wch: 40 }, // Name
-        { wch: 20 }, // Phone
-        { wch: 15 }, // Balance
-        { wch: 15 }  // Status
+        { wch: 15 },
+        { wch: 40 },
+        { wch: 20 },
+        { wch: 15 },
+        { wch: 15 }
     ];
     worksheet['!cols'] = wscols;
 
@@ -1074,7 +1147,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
-      addPurchase, addInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee,
+      addPurchase, addInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
       seedDatabase, printInvoice, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury,
       currentTreasuryBalance, balances
     }}>

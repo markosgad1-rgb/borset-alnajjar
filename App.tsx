@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ERPProvider, useERP } from './context/ERPContext';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
@@ -28,12 +28,40 @@ const AppContent: React.FC = () => {
     if (user.permissions.warehouse) return 'warehouse';
     if (user.permissions.financial) return 'treasury';
     if (user.permissions.admin) return 'users';
-    return 'dashboard'; // Fallback
+    return 'sales'; // Fallback safe page
   };
 
-  const [activePage, setActivePage] = useState<PageView>(() => {
-    return currentUser ? getInitialPage(currentUser) : 'dashboard';
-  });
+  const [activePage, setActivePage] = useState<PageView>('dashboard');
+
+  // Security Check: Validate Page Permissions on User Change
+  useEffect(() => {
+    if (currentUser) {
+      // Map pages to required permissions
+      const permissionsMap: Partial<Record<PageView, keyof typeof currentUser.permissions>> = {
+        'dashboard': 'dashboard',
+        'users': 'admin',
+        'sales': 'sales',
+        'sales-history': 'sales',
+        'customers': 'sales',
+        'purchases': 'warehouse',
+        'warehouse': 'warehouse',
+        'suppliers': 'warehouse',
+        'treasury': 'financial',
+        'collections': 'financial',
+        'transfers': 'financial',
+        'expenses': 'financial',
+        'employees': 'financial'
+      };
+
+      const requiredPerm = permissionsMap[activePage];
+
+      // If the current page requires a permission AND the user doesn't have it
+      if (requiredPerm && !currentUser.permissions[requiredPerm]) {
+        // Redirect to their allowed homepage
+        setActivePage(getInitialPage(currentUser));
+      }
+    }
+  }, [currentUser, activePage]);
 
   if (!currentUser) {
     return <Login />;
