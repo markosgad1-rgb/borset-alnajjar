@@ -43,6 +43,7 @@ interface ERPContextType {
   currentUser: User | null;
   isOnline: boolean;
   permissionError: boolean;
+  companyLogo: string | null;
   
   // Auth
   login: (username: string, password: string) => boolean;
@@ -108,6 +109,7 @@ interface ERPContextType {
   addUser: (user: User) => void;
   updateUser: (id: string, updatedData: Partial<User>) => void;
   deleteUser: (id: string) => Promise<boolean>;
+  updateSystemLogo: (base64Image: string) => Promise<void>;
 
   seedDatabase: () => Promise<void>;
   printInvoice: (invoice: SalesInvoice) => void;
@@ -137,7 +139,8 @@ const STORAGE_KEYS = {
   PURCHASES: 'erp_purchases',
   INVOICES: 'erp_invoices',
   TREASURY: 'erp_treasury',
-  CURRENT_USER: 'erp_current_user' 
+  CURRENT_USER: 'erp_current_user',
+  COMPANY_LOGO: 'erp_logo'
 };
 
 // Helper to patch old user objects with new permissions
@@ -210,6 +213,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [treasury, setTreasury] = useState<TreasuryTransaction[]>([]);
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
 
   // Calculate Balances dynamically
   const currentTreasuryBalance = treasury.reduce((acc, t) => acc + (t.credit - t.debit), 0);
@@ -234,6 +238,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
 
       try {
+        // Settings Listener (Logo)
+        unsubs.push(onSnapshot(doc(db, 'settings', 'general'), (doc: any) => {
+           if(doc.exists()) {
+             const data = doc.data();
+             if(data.logo) setCompanyLogo(data.logo);
+           }
+        }));
+
         unsubs.push(onSnapshot(collection(db, 'users'), (snap: any) => {
            setPermissionError(false);
            const loadedUsers = snap.docs.map((d: any) => sanitizeUser(d.data()));
@@ -293,6 +305,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       load(STORAGE_KEYS.PURCHASES, setPurchases, []);
       load(STORAGE_KEYS.INVOICES, setInvoices, []);
       load(STORAGE_KEYS.TREASURY, setTreasury, []);
+      
+      const savedLogo = localStorage.getItem(STORAGE_KEYS.COMPANY_LOGO);
+      if(savedLogo) setCompanyLogo(savedLogo);
     }
   }, [isOnline]);
 
@@ -307,9 +322,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify(purchases));
       localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(invoices));
       localStorage.setItem(STORAGE_KEYS.TREASURY, JSON.stringify(treasury));
+      if(companyLogo) localStorage.setItem(STORAGE_KEYS.COMPANY_LOGO, companyLogo);
     }
     localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser));
-  }, [users, products, customers, suppliers, employees, purchases, invoices, treasury, currentUser, isOnline]);
+  }, [users, products, customers, suppliers, employees, purchases, invoices, treasury, currentUser, companyLogo, isOnline]);
 
 
   const handleFirebaseError = (error: any) => {
@@ -1084,6 +1100,16 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     XLSX.writeFile(workbook, `قائمة_الموردين_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  // NEW: Update System Logo
+  const updateSystemLogo = async (base64Image: string) => {
+    if(isOnline) {
+       await setDoc(doc(db, 'settings', 'general'), { logo: base64Image }, { merge: true });
+    } else {
+       localStorage.setItem(STORAGE_KEYS.COMPANY_LOGO, base64Image);
+       setCompanyLogo(base64Image);
+    }
+  };
+
   const printInvoice = (invoice: SalesInvoice) => {
      const printWindow = window.open('', '_blank', 'width=1000,height=800');
     if (!printWindow) {
@@ -1105,82 +1131,80 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             --primary-color: #000;
             --border-color: #000;
           }
-          body { 
-            font-family: 'Cairo', sans-serif; 
-            padding: 0;
-            margin: 0;
-            direction: rtl; 
-            background-color: #f3f4f6;
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-            font-size: 18px; /* Increased base size */
-          }
           @page {
             size: A4;
-            margin: 10mm;
+            margin: 0;
+          }
+          body { 
+            font-family: 'Cairo', sans-serif; 
+            padding: 20mm;
+            margin: 0;
+            direction: rtl; 
+            background-color: #fff;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            font-size: 18px; 
           }
           .invoice-container {
             background: white;
-            max-width: 900px;
+            width: 100%;
             margin: 0 auto;
-            padding: 20px 40px;
             position: relative;
-            min-height: 95vh;
+            min-height: auto;
           }
           .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 2px solid var(--border-color);
-            padding-bottom: 10px;
-            margin-bottom: 15px;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
           }
           .company-info h1 { margin: 0; font-size: 32px; font-weight: 800; }
           .company-info p { margin: 0; color: #555; font-size: 18px; }
           .invoice-title h2 { margin: 0; font-size: 28px; color: #333; text-transform: uppercase; border: 2px solid #000; padding: 2px 10px; display: inline-block; }
           
-          /* Compact Info Grid */
+          /* LOGO STYLE */
+          .logo-box img {
+            max-height: 100px; 
+            max-width: 450px; 
+            border: 3px double #0ea5e9; 
+            border-radius: 10px; 
+            box-shadow: 0 3px 6px rgba(0,0,0,0.1); 
+            padding: 4px;
+            background: white;
+            object-fit: contain;
+          }
+
           .info-bar {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             border: 1px solid #ddd;
-            padding: 10px;
+            padding: 8px;
             border-radius: 4px;
             font-size: 16px;
           }
-          .info-item {
-            display: flex;
-            flex-direction: column;
-          }
-          .info-label { font-weight: bold; color: #666; margin-bottom: 2px; font-size: 16px; }
+          .info-item { display: flex; flex-direction: column; }
+          .info-label { font-weight: bold; color: #666; margin-bottom: 0; font-size: 14px; }
           .info-value { font-weight: 700; font-size: 18px; }
 
-          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          th { background-color: #eee; color: #000; font-weight: 800; padding: 10px; border: 1px solid #000; font-size: 18px; }
-          td { padding: 8px; border: 1px solid #000; font-weight: 600; font-size: 18px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+          th { background-color: #eee; color: #000; font-weight: 800; padding: 6px; border: 1px solid #000; font-size: 18px; }
+          td { padding: 6px; border: 1px solid #000; font-weight: 600; font-size: 18px; }
           tr { page-break-inside: avoid; }
           
-          /* Summary & Signatures Container */
-          .summary-container {
-            page-break-inside: avoid;
-            margin-top: 20px;
-          }
-
+          .summary-container { page-break-inside: avoid; margin-top: 20px; }
           .footer-section { display: flex; justify-content: space-between; align-items: flex-start; }
           .totals-box { width: 300px; border: 2px solid #000; }
           .total-row { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid #ddd; font-size: 18px; }
-          
-          /* Make Totals Extra Bold & Large */
           .total-row.main { font-weight: 800; font-size: 22px; border-bottom: 2px solid #000; background-color: #f9f9f9; }
-          
           .total-row.final { background-color: #000; color: white; border-bottom: none; font-size: 24px; font-weight: 900; padding: 12px 10px; }
           
           .signatures { margin-top: 40px; display: flex; justify-content: space-between; padding: 0 50px; font-size: 16px; }
           .sig-box { text-align: center; width: 150px; }
           .sig-line { border-top: 2px solid #000; margin-top: 40px; }
           
-          /* Fixed Footer for Contact Info */
           .footer-fixed {
             position: fixed;
             bottom: 0;
@@ -1196,15 +1220,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             font-weight: bold;
             z-index: 1000;
           }
-          .contact-info {
-            display: flex;
-            gap: 20px;
-            flex-direction: row;
-          }
-          .footer-fixed a, .footer-fixed span {
-            text-decoration: none !important;
-            color: #000 !important;
-          }
+          .contact-info { display: flex; gap: 20px; flex-direction: row; }
+          .footer-fixed a, .footer-fixed span { text-decoration: none !important; color: #000 !important; }
 
           @media print {
             body { background: none; }
@@ -1219,32 +1236,26 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               <h1>بورصة النجار</h1>
               <p>لتجارة البيض</p>
             </div>
+            
+            <!-- Dynamic Logo -->
+            <div class="logo-box">
+              ${companyLogo ? `<img src="${companyLogo}" alt="Logo" />` : 
+                // Fallback if no uploaded logo, check for local file
+                `<img src="/logo.png" alt="Logo" onerror="this.style.display='none'"/>`
+              }
+            </div>
+
             <div class="invoice-title">
               <h2>فاتورة مبيعات</h2>
             </div>
           </div>
           
           <div class="info-bar">
-             <div class="info-item">
-                <span class="info-label">العميل</span>
-                <span class="info-value">${invoice.customerName}</span>
-             </div>
-             <div class="info-item">
-                <span class="info-label">كود العميل</span>
-                <span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span>
-             </div>
-             <div class="info-item">
-                <span class="info-label">رقم الفاتورة</span>
-                <span class="info-value" style="font-family: monospace;">${invoice.id}</span>
-             </div>
-             <div class="info-item">
-                <span class="info-label">التاريخ</span>
-                <span class="info-value">${invoice.date}</span>
-             </div>
-             <div class="info-item">
-                <span class="info-label">الوقت</span>
-                <span class="info-value">${invoice.time}</span>
-             </div>
+             <div class="info-item"><span class="info-label">العميل</span><span class="info-value">${invoice.customerName}</span></div>
+             <div class="info-item"><span class="info-label">كود العميل</span><span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span></div>
+             <div class="info-item"><span class="info-label">رقم الفاتورة</span><span class="info-value" style="font-family: monospace;">${invoice.id}</span></div>
+             <div class="info-item"><span class="info-label">التاريخ</span><span class="info-value">${invoice.date}</span></div>
+             <div class="info-item"><span class="info-label">الوقت</span><span class="info-value">${invoice.time}</span></div>
           </div>
 
           <table>
@@ -1280,7 +1291,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           </div>
         </div>
 
-        <!-- Fixed Footer -->
         <div class="footer-fixed">
            <div class="contact-info">
               <span>للمبيعات والاستفسارات:</span>
@@ -1307,10 +1317,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   return (
     <ERPContext.Provider value={{
-      products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError,
+      products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
       addPurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
-      seedDatabase, printInvoice, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury,
+      seedDatabase, printInvoice, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
       currentTreasuryBalance, balances
     }}>
       {children}

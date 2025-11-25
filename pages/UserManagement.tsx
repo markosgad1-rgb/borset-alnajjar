@@ -1,11 +1,11 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Shield, UserPlus, Trash2, Edit, Check, X, Database, Loader2 } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Edit, Check, X, Database, Loader2, Upload, Image as ImageIcon } from 'lucide-react';
 import { User } from '../types';
 
 export const UserManagement: React.FC = () => {
-  const { users, addUser, updateUser, deleteUser, currentUser, seedDatabase } = useERP();
+  const { users, addUser, updateUser, deleteUser, currentUser, seedDatabase, updateSystemLogo, companyLogo } = useERP();
   
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -134,13 +134,26 @@ export const UserManagement: React.FC = () => {
     }
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+        await updateSystemLogo(base64String);
+        alert("تم تحديث لوجو الشركة بنجاح! سيظهر الآن في جميع الفواتير.");
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   return (
     <div className="space-y-8">
       
       {/* Header with Seed Button */}
       <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-brand-100 gap-4">
         <h2 className="text-xl font-bold text-brand-800 flex items-center gap-2">
-           <Shield className="text-brand-600" /> إدارة المستخدمين
+           <Shield className="text-brand-600" /> إدارة المستخدمين والإعدادات
         </h2>
         {currentUser?.role === 'ADMIN' && (
            <button 
@@ -156,6 +169,31 @@ export const UserManagement: React.FC = () => {
            </button>
         )}
       </div>
+
+      {/* System Settings (Logo) - Only for Admins */}
+      {currentUser?.role === 'ADMIN' && (
+        <div className="bg-white rounded-xl shadow-sm border border-brand-100 p-6">
+          <h3 className="text-lg font-bold text-brand-800 mb-4 flex items-center gap-2">
+            <ImageIcon size={20} /> إعدادات النظام (اللوجو)
+          </h3>
+          <div className="flex items-center gap-6">
+             <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 flex flex-col items-center justify-center w-40 h-40 bg-gray-50 relative overflow-hidden">
+                {companyLogo ? (
+                  <img src={companyLogo} alt="Company Logo" className="w-full h-full object-contain" />
+                ) : (
+                  <span className="text-gray-400 text-xs text-center">لا يوجد لوجو</span>
+                )}
+             </div>
+             <div>
+               <p className="text-sm text-gray-600 mb-2">قم برفع لوجو الشركة ليظهر في الفواتير المطبوعة.</p>
+               <label className="cursor-pointer bg-brand-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-brand-700 transition-colors flex items-center gap-2 w-fit">
+                 <Upload size={18} /> رفع صورة اللوجو
+                 <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+               </label>
+             </div>
+          </div>
+        </div>
+      )}
 
       {/* Add/Edit Form */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 p-6">
