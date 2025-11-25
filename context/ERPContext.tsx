@@ -63,6 +63,7 @@ interface ERPContextType {
     items: InvoiceItem[];
     total: number;
   }) => void;
+  updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; // New Function
   deleteInvoice: (id: string) => Promise<void>;
   clearAllInvoices: () => Promise<boolean>; 
   addCollection: (data: {
@@ -196,7 +197,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
-      // CRITICAL FIX: Sanitize the loaded user to ensure new permissions exist
       return saved ? sanitizeUser(JSON.parse(saved)) : null;
     }
     return null;
@@ -276,7 +276,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const saved = localStorage.getItem(key);
         if (saved) {
           const parsed = JSON.parse(saved);
-          // Sanitize users specifically if loading users
           if (key === STORAGE_KEYS.USERS) {
             setter(parsed.map((u: any) => sanitizeUser(u)));
           } else {
@@ -329,7 +328,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const username = usernameInput.trim();
     const password = passwordInput.trim();
 
-    // 1. Emergency Backdoor (Always works, generates fresh Admin permissions)
     if (username === 'admin' && password === '123') {
        const adminUser = sanitizeUser({ 
          id: '1', 
@@ -341,16 +339,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
        });
        setCurrentUser(adminUser);
        if (isOnline) {
-         // Ensure admin exists in cloud with correct structure
          setDoc(doc(db, 'users', '1'), adminUser).catch((e: any) => console.log("Admin seed check:", e));
        }
        return true;
     }
 
-    // 2. Standard Login
     const user = users.find(u => u.username === username && u.password === password);
     if (user) {
-      // CRITICAL FIX: Sanitize user data before setting session to prevent crashes on missing permissions
       setCurrentUser(sanitizeUser(user));
       return true;
     }
@@ -627,6 +622,89 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // NEW FUNCTION: Update Invoice
+  const updateInvoice = async (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => {
+    // 1. Reverse old invoice effect (Add back stock, Add back customer balance)
+    const debtDifference = oldInvoice.total - newInvoiceData.total; // If positive, customer owes less. If negative, customer owes more.
+    
+    if (isOnline) {
+      try {
+        // Update Invoice Doc
+        await setDoc(doc(db, 'invoices', oldInvoice.id), newInvoiceData);
+
+        // Update Customer Balance & History
+        const customerRef = doc(db, 'customers', oldInvoice.customerCode);
+        const customerSnap = await getDoc(customerRef);
+        if (customerSnap.exists()) {
+          const c = customerSnap.data() as Customer;
+          // Logic: Old Debt was (-OldTotal). We remove it (+OldTotal). New Debt is (-NewTotal).
+          // Net change to balance = +OldTotal - NewTotal = +debtDifference
+          const newBalance = c.balance + debtDifference;
+          
+          const newHistory = [
+            ...c.history, 
+            { 
+              date: newInvoiceData.date, 
+              description: `تعديل فاتورة #${oldInvoice.id}`, 
+              amount: debtDifference 
+            }
+          ];
+          await updateDoc(customerRef, { balance: newBalance, history: newHistory });
+        }
+
+        // Update Inventory (Product Quantities)
+        // 1. Revert old items (Add qty back)
+        for (const item of oldInvoice.items) {
+          const pRef = doc(db, 'products', item.itemCode);
+          const pSnap = await getDoc(pRef);
+          if (pSnap.exists()) {
+            const p = pSnap.data() as Product;
+            await updateDoc(pRef, { quantity: p.quantity + item.quantity });
+          }
+        }
+        // 2. Deduct new items
+        for (const item of newInvoiceData.items) {
+          const pRef = doc(db, 'products', item.itemCode);
+          const pSnap = await getDoc(pRef);
+          if (pSnap.exists()) {
+            const p = pSnap.data() as Product;
+            await updateDoc(pRef, { quantity: p.quantity - item.quantity });
+          }
+        }
+
+      } catch (e) { handleFirebaseError(e); }
+    } else {
+      // Offline Mode
+      setInvoices(prev => prev.map(inv => inv.id === oldInvoice.id ? newInvoiceData : inv));
+      
+      setCustomers(prev => prev.map(c => {
+        if (c.code === oldInvoice.customerCode) {
+          return {
+            ...c,
+            balance: c.balance + debtDifference,
+            history: [...c.history, { date: newInvoiceData.date, description: `تعديل فاتورة #${oldInvoice.id}`, amount: debtDifference }]
+          };
+        }
+        return c;
+      }));
+
+      setProducts(prev => {
+        let tempProducts = [...prev];
+        // Revert old
+        oldInvoice.items.forEach(item => {
+          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+          if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity + item.quantity};
+        });
+        // Deduct new
+        newInvoiceData.items.forEach(item => {
+          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+          if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity - item.quantity};
+        });
+        return tempProducts;
+      });
+    }
+  };
+
   const deleteInvoice = async (id: string) => {
     if (isOnline) {
       try {
@@ -639,7 +717,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const clearAllInvoices = async (): Promise<boolean> => {
     try {
-      setInvoices([]); // Optimistic clear
+      setInvoices([]); 
       if (isOnline) {
         const q = query(collection(db, 'invoices'));
         const snapshot = await getDocs(q);
@@ -1029,53 +1107,108 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
           body { 
             font-family: 'Cairo', sans-serif; 
-            padding: 40px; 
+            padding: 0;
+            margin: 0;
             direction: rtl; 
             background-color: #f3f4f6;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
+            font-size: 18px; /* Increased base size */
+          }
+          @page {
+            size: A4;
+            margin: 10mm;
           }
           .invoice-container {
             background: white;
             max-width: 900px;
             margin: 0 auto;
-            padding: 40px;
-            border: 2px solid var(--border-color);
+            padding: 20px 40px;
             position: relative;
+            min-height: 95vh;
           }
           .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 3px solid var(--border-color);
-            padding-bottom: 20px;
-            margin-bottom: 30px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+            margin-bottom: 15px;
           }
           .company-info h1 { margin: 0; font-size: 32px; font-weight: 800; }
-          .company-info p { margin: 5px 0 0; color: #555; font-size: 14px; }
-          .invoice-title { text-align: left; }
-          .invoice-title h2 { margin: 0; font-size: 28px; color: #333; text-transform: uppercase; border: 2px solid #000; padding: 5px 15px; display: inline-block; }
-          .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
-          .info-box { border: 1px solid #ddd; padding: 15px; border-radius: 4px; }
-          .info-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-          .info-row:last-child { margin-bottom: 0; }
-          .info-label { font-weight: bold; color: #666; }
-          .info-value { font-weight: 700; font-size: 16px; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-          th { background-color: #eee; color: #000; font-weight: 800; padding: 12px; border: 1px solid #000; font-size: 14px; }
-          td { padding: 10px; border: 1px solid #000; text-align: center; font-weight: 600; }
-          tr:nth-child(even) { background-color: #f9f9f9; }
+          .company-info p { margin: 0; color: #555; font-size: 18px; }
+          .invoice-title h2 { margin: 0; font-size: 28px; color: #333; text-transform: uppercase; border: 2px solid #000; padding: 2px 10px; display: inline-block; }
+          
+          /* Compact Info Grid */
+          .info-bar {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 16px;
+          }
+          .info-item {
+            display: flex;
+            flex-direction: column;
+          }
+          .info-label { font-weight: bold; color: #666; margin-bottom: 2px; font-size: 16px; }
+          .info-value { font-weight: 700; font-size: 18px; }
+
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th { background-color: #eee; color: #000; font-weight: 800; padding: 10px; border: 1px solid #000; font-size: 18px; }
+          td { padding: 8px; border: 1px solid #000; font-weight: 600; font-size: 18px; }
+          tr { page-break-inside: avoid; }
+          
+          /* Summary & Signatures Container */
+          .summary-container {
+            page-break-inside: avoid;
+            margin-top: 20px;
+          }
+
           .footer-section { display: flex; justify-content: space-between; align-items: flex-start; }
-          .notes { flex: 1; font-size: 12px; color: #666; padding-left: 40px; }
           .totals-box { width: 300px; border: 2px solid #000; }
-          .total-row { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #ddd; }
-          .total-row.final { background-color: #000; color: white; border-bottom: none; font-size: 18px; }
-          .signatures { margin-top: 60px; display: flex; justify-content: space-between; padding: 0 50px; }
-          .sig-box { text-align: center; width: 200px; }
-          .sig-line { border-top: 1px solid #000; margin-top: 40px; }
+          .total-row { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid #ddd; font-size: 18px; }
+          
+          /* Make Totals Extra Bold & Large */
+          .total-row.main { font-weight: 800; font-size: 22px; border-bottom: 2px solid #000; background-color: #f9f9f9; }
+          
+          .total-row.final { background-color: #000; color: white; border-bottom: none; font-size: 24px; font-weight: 900; padding: 12px 10px; }
+          
+          .signatures { margin-top: 40px; display: flex; justify-content: space-between; padding: 0 50px; font-size: 16px; }
+          .sig-box { text-align: center; width: 150px; }
+          .sig-line { border-top: 2px solid #000; margin-top: 40px; }
+          
+          /* Fixed Footer for Contact Info */
+          .footer-fixed {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            height: 40px;
+            background-color: white; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 16px;
+            font-weight: bold;
+            z-index: 1000;
+          }
+          .contact-info {
+            display: flex;
+            gap: 20px;
+            flex-direction: row;
+          }
+          .footer-fixed a, .footer-fixed span {
+            text-decoration: none !important;
+            color: #000 !important;
+          }
+
           @media print {
-            body { background: none; padding: 0; }
-            .invoice-container { border: none; padding: 0; margin: 0; width: 100%; max-width: 100%; }
+            body { background: none; }
+            .invoice-container { border: none; padding: 0; width: 100%; max-width: 100%; }
           }
         </style>
       </head>
@@ -1090,46 +1223,75 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               <h2>فاتورة مبيعات</h2>
             </div>
           </div>
-          <div class="info-grid">
-            <div class="info-box">
-              <div class="info-row"><span class="info-label">العميل:</span><span class="info-value">${invoice.customerName}</span></div>
-              <div class="info-row"><span class="info-label">كود العميل:</span><span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span></div>
-            </div>
-            <div class="info-box">
-              <div class="info-row"><span class="info-label">رقم الفاتورة:</span><span class="info-value" style="font-family: monospace;">${invoice.id}</span></div>
-              <div class="info-row"><span class="info-label">التاريخ:</span><span class="info-value">${invoice.date}</span></div>
-              <div class="info-row"><span class="info-label">الوقت:</span><span class="info-value">${invoice.time}</span></div>
-            </div>
+          
+          <div class="info-bar">
+             <div class="info-item">
+                <span class="info-label">العميل</span>
+                <span class="info-value">${invoice.customerName}</span>
+             </div>
+             <div class="info-item">
+                <span class="info-label">كود العميل</span>
+                <span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span>
+             </div>
+             <div class="info-item">
+                <span class="info-label">رقم الفاتورة</span>
+                <span class="info-value" style="font-family: monospace;">${invoice.id}</span>
+             </div>
+             <div class="info-item">
+                <span class="info-label">التاريخ</span>
+                <span class="info-value">${invoice.date}</span>
+             </div>
+             <div class="info-item">
+                <span class="info-label">الوقت</span>
+                <span class="info-value">${invoice.time}</span>
+             </div>
           </div>
+
           <table>
             <thead>
-              <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 100px;">الكمية</th><th style="width: 120px;">السعر</th><th style="width: 140px;">الإجمالي</th></tr>
+              <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 100px;">الكمية</th><th style="width: 120px;">السعر</th><th style="width: 150px;">الإجمالي</th></tr>
             </thead>
             <tbody>
               ${invoice.items.map((item, index) => `
                 <tr>
-                  <td>${index + 1}</td>
-                  <td style="text-align: right; padding-right: 15px;">${item.itemName} ${item.itemCode ? `<span style="font-size: 10px; color: #777;">(${item.itemCode})</span>` : ''}</td>
-                  <td style="font-size: 15px;">${item.quantity}</td>
-                  <td>${item.price.toLocaleString()}</td>
-                  <td>${item.total.toLocaleString()}</td>
+                  <td style="text-align: center;">${index + 1}</td>
+                  <td style="text-align: center; padding-right: 10px;">${item.itemName}</td>
+                  <td style="text-align: center;">${item.quantity}</td>
+                  <td style="text-align: center;">${item.price.toLocaleString()}</td>
+                  <td style="text-align: center;">${item.total.toLocaleString()}</td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
-          <div class="footer-section">
-            <div class="notes"></div>
-            <div class="totals-box">
-              <div class="total-row"><span>الإجمالي:</span><strong>${invoice.total.toLocaleString()}</strong></div>
-              <div class="total-row" style="color: #666; font-size: 13px;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()}</span></div>
-              <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${invoice.currentBalance.toLocaleString()}</span></div>
+          
+          <div class="summary-container">
+            <div class="footer-section">
+              <div style="flex: 1;"></div>
+              <div class="totals-box">
+                <div class="total-row main"><span>الإجمالي:</span><strong>${invoice.total.toLocaleString()}</strong></div>
+                <div class="total-row" style="color: #666;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()}</span></div>
+                <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${invoice.currentBalance.toLocaleString()}</span></div>
+              </div>
+            </div>
+            <div class="signatures">
+              <div class="sig-box"><strong>المستلم</strong><div class="sig-line"></div></div>
+              <div class="sig-box"><strong>توقيع الإدارة</strong><div class="sig-line"></div></div>
             </div>
           </div>
-          <div class="signatures">
-            <div class="sig-box"><strong>المستلم</strong><div class="sig-line"></div></div>
-            <div class="sig-box"><strong>توقيع الإدارة</strong><div class="sig-line"></div></div>
-          </div>
         </div>
+
+        <!-- Fixed Footer -->
+        <div class="footer-fixed">
+           <div class="contact-info">
+              <span>للمبيعات والاستفسارات:</span>
+              <span dir="ltr">01280808532</span>
+              <span>-</span>
+              <span dir="ltr">01274688088</span>
+              <span>-</span>
+              <span dir="ltr">01000285428</span>
+           </div>
+        </div>
+
         <script>
           window.onload = function() {
             window.print();
@@ -1147,7 +1309,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
-      addPurchase, addInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
+      addPurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
       seedDatabase, printInvoice, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury,
       currentTreasuryBalance, balances
     }}>
