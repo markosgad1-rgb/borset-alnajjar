@@ -523,14 +523,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           });
         }
 
-        // SUPPLIER UPDATE LOGIC (FIXED)
-        // Purchase = Debt ON US (Increases Supplier Balance)
         const supplierRef = doc(db, 'suppliers', purchaseData.supplierCode);
         const supplierSnap = await getDoc(supplierRef);
         if (supplierSnap.exists()) {
           const s = supplierSnap.data() as Supplier;
           const amount = purchaseData.total;
-          const newBalance = s.balance + amount; // Increase debt
+          const newBalance = s.balance + amount; 
           const newHistory = [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${id}`, amount: amount }];
           await updateDoc(supplierRef, { balance: newBalance, history: newHistory });
         }
@@ -552,7 +550,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       setSuppliers(prev => prev.map(s => {
          if (s.code === purchaseData.supplierCode) {
-           // Increase Balance
            return { ...s, balance: s.balance + purchaseData.total, history: [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${id}`, amount: purchaseData.total }]};
          }
          return s;
@@ -768,21 +765,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             });
           }
         } else if (data.entityType === 'SUPPLIER') {
-          // SUPPLIER LOGIC (FIXED)
-          // Income (IN) = Refund from Supplier = Debt Decrease (Negative change)
-          // Outgo (OUT) = Payment to Supplier = Debt Decrease (Negative change)
-          // Wait, Payment to supplier decreases the balance (Debt).
-          
           const ref = doc(db, 'suppliers', data.entityCode);
           const snap = await getDoc(ref);
           if (snap.exists()) {
             const s = snap.data() as Supplier;
-            // OUT (Pay) -> Decrease balance (we owe less). Change is negative.
-            // IN (Refund) -> Also decrease? No.
-            // Let's follow the requested logic:
-            // "الدفع للمورد (تحويل صادر) ينقص رصيد المورد (بالسالب -)"
             const change = isIncome ? data.amount : -data.amount; 
-            // Check: isIncome=False (OUT). Change = -amount. Correct.
             
             await updateDoc(ref, {
               balance: s.balance + change,
@@ -809,7 +796,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (data.entityType === 'CUSTOMER') {
         setCustomers(prev => prev.map(c => c.code === data.entityCode ? { ...c, balance: c.balance + (isIncome ? data.amount : -data.amount), history: [...c.history, { date: data.date, description: historyDesc, amount: (isIncome ? data.amount : -data.amount) }] } : c));
       } else if (data.entityType === 'SUPPLIER') {
-        // Supplier Local
         setSuppliers(prev => prev.map(s => s.code === data.entityCode ? { ...s, balance: s.balance + (isIncome ? data.amount : -data.amount), history: [...s.history, { date: data.date, description: historyDesc, amount: (isIncome ? data.amount : -data.amount) }] } : s));
       } else if (data.entityType === 'EMPLOYEE') {
         setEmployees(prev => prev.map(e => e.code === data.entityCode ? { ...e, balance: e.balance + (isIncome ? -data.amount : data.amount), history: [...e.history, { date: data.date, description: historyDesc, amount: (isIncome ? -data.amount : data.amount) }] } : e));
@@ -968,30 +954,65 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const exportLedgerToExcel = (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER') => {
-    const data = history.map(h => {
-      let debit = 0;
-      let credit = 0;
+    const data: any[] = [];
 
-      if (type === 'CUSTOMER') {
-        if (h.amount < 0) debit = Math.abs(h.amount);
-        else credit = h.amount;
+    history.forEach((h: any) => {
+      // Check if this transaction is an invoice
+      const invoiceMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+      const invoice = invoiceMatch ? invoices.find(i => i.id === invoiceMatch[1]) : null;
+
+      if (invoice && type === 'CUSTOMER') {
+        // It's a customer invoice, break it down by items
+        invoice.items.forEach((item: InvoiceItem, index: number) => {
+          data.push({
+            'التاريخ': h.date,
+            'البيان': `فاتورة #${invoice.id}`,
+            'الصنف': item.itemName,
+            'الكمية': item.quantity,
+            'السعر': item.price,
+            'مدين (عليه)': item.total, // Item Total debt
+            'دائن (له)': ''
+          });
+        });
       } else {
-        // Supplier: Positive = Debt (Aliena/Debit), Negative = Payment (Lana/Credit)
-        if (h.amount > 0) debit = h.amount; // Aliena
-        else credit = Math.abs(h.amount); // Lana
-      }
+        // Regular transaction (Payment, Opening Balance, or Supplier Invoice/Payment)
+        // OR Invoice not found (deleted)
+        let debit = 0;
+        let credit = 0;
 
-      return {
-        'التاريخ': h.date,
-        'البيان': h.description,
-        [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: debit || '',
-        [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: credit || ''
-      };
+        if (type === 'CUSTOMER') {
+          if (h.amount < 0) debit = Math.abs(h.amount);
+          else credit = h.amount;
+        } else {
+          // Supplier: Positive = Debt (Aliena), Negative = Payment (Lana)
+          if (h.amount > 0) debit = h.amount; 
+          else credit = Math.abs(h.amount); 
+        }
+
+        data.push({
+          'التاريخ': h.date,
+          'البيان': h.description,
+          'الصنف': '-',
+          'الكمية': '-',
+          'السعر': '-',
+          [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: debit || '',
+          [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: credit || ''
+        });
+      }
     });
 
+    // Add empty row for visual separation
+    data.push({
+      'التاريخ': '', 'البيان': '', 'الصنف': '', 'الكمية': '', 'السعر': '',
+      [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: '',
+      [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: ''
+    });
+
+    // Add Total Row with distinct label
     data.push({
       'التاريخ': '',
-      'البيان': 'الرصيد النهائي الحالي',
+      'البيان': '=== الرصيد النهائي الحالي ===',
+      'الصنف': '', 'الكمية': '', 'السعر': '',
       [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: (type === 'SUPPLIER' && currentBalance > 0) || (type === 'CUSTOMER' && currentBalance < 0) ? Math.abs(currentBalance) : '',
       [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: (type === 'SUPPLIER' && currentBalance < 0) || (type === 'CUSTOMER' && currentBalance > 0) ? Math.abs(currentBalance) : ''
     });
@@ -1007,10 +1028,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     const wscols = [
-      { wch: 15 }, 
-      { wch: 60 }, 
-      { wch: 20 }, 
-      { wch: 20 }
+      { wch: 18 }, // Date
+      { wch: 40 }, // Description
+      { wch: 30 }, // Item
+      { wch: 12 }, // Qty
+      { wch: 12 }, // Price
+      { wch: 15 }, // Debit
+      { wch: 15 }  // Credit
     ];
     worksheet['!cols'] = wscols;
 
@@ -1158,7 +1182,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           /* LOGO STYLE */
           .logo-box img {
             max-height: 100px; 
-            max-width: 450px; 
+            max-width: 400px; 
             border: 3px double #0ea5e9; 
             border-radius: 10px; 
             box-shadow: 0 3px 6px rgba(0,0,0,0.1); 
