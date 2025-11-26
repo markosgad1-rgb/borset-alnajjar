@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, RefreshCcw, AlertTriangle } from 'lucide-react';
+import { UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, RefreshCcw, AlertTriangle, Eye, Printer } from 'lucide-react';
+import { SalesInvoice } from '../types';
 
 export const Customers: React.FC = () => {
-  const { customers, addCustomer, updateCustomer, deleteCustomer, exportLedgerToExcel, exportAllCustomersToExcel, clearLedger, currentUser } = useERP();
+  const { customers, addCustomer, updateCustomer, deleteCustomer, exportLedgerToExcel, exportAllCustomersToExcel, clearLedger, currentUser, invoices, printInvoice } = useERP();
   
   // State for form data
   const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: 0 });
@@ -19,6 +20,9 @@ export const Customers: React.FC = () => {
   
   // Clear Ledger confirmation state
   const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
+
+  // View Invoice Modal State
+  const [viewInvoice, setViewInvoice] = useState<SalesInvoice | null>(null);
 
   // Helper to generate next code
   const generateNextCode = () => {
@@ -101,6 +105,20 @@ export const Customers: React.FC = () => {
     if (success) {
        setShowClearLedgerConfirm(false);
        alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
+  };
+
+  const handleViewInvoiceDetails = (description: string) => {
+    // Extract invoice ID from description (e.g., "فاتورة بيع #N005")
+    const match = description.match(/#([A-Za-z0-9-]+)/);
+    if (match) {
+      const invoiceId = match[1];
+      const invoice = invoices.find(inv => inv.id === invoiceId);
+      if (invoice) {
+        setViewInvoice(invoice);
+      } else {
+        alert("عذراً، تفاصيل هذه الفاتورة غير متوفرة في السجل العام (ربما تم حذفها).");
+      }
     }
   };
 
@@ -358,11 +376,27 @@ export const Customers: React.FC = () => {
                           selectedCustomer.history.map((h, idx) => {
                             const isDebit = h.amount < 0;
                             const isCredit = h.amount > 0;
+                            // Check if description contains an invoice ID
+                            const invoiceIdMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+                            const hasInvoiceId = !!invoiceIdMatch;
 
                             return (
                               <tr key={idx}>
                                 <td className="p-3 text-gray-600 whitespace-nowrap">{h.date}</td>
-                                <td className="p-3 font-medium text-gray-800">{h.description}</td>
+                                <td className="p-3 font-medium text-gray-800">
+                                  <div className="flex justify-between items-center">
+                                    <span>{h.description}</span>
+                                    {hasInvoiceId && (
+                                      <button 
+                                        onClick={() => handleViewInvoiceDetails(h.description)}
+                                        className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 p-1 rounded transition-colors"
+                                        title="عرض تفاصيل الفاتورة"
+                                      >
+                                        <Eye size={16} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="p-3 font-bold text-red-600 bg-red-50/30">
                                   {isDebit ? Math.abs(h.amount).toLocaleString() : '-'}
                                 </td>
@@ -386,6 +420,86 @@ export const Customers: React.FC = () => {
            )}
         </div>
       </div>
+
+      {/* View Invoice Details Modal */}
+      {viewInvoice && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-fade-in">
+            <div className="bg-brand-600 p-4 flex justify-between items-center text-white">
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                <FileText size={20}/> تفاصيل الفاتورة {viewInvoice.id}
+              </h2>
+              <button onClick={() => setViewInvoice(null)} className="hover:bg-brand-700 p-1 rounded-full transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="bg-gray-50 p-3 rounded-lg">
+                   <span className="block text-gray-500 text-xs">العميل</span>
+                   <span className="font-bold text-gray-800 text-lg">{viewInvoice.customerName}</span>
+                </div>
+                <div className="bg-gray-50 p-3 rounded-lg">
+                   <span className="block text-gray-500 text-xs">التاريخ والوقت</span>
+                   <span className="font-bold text-gray-800">{viewInvoice.date} - {viewInvoice.time}</span>
+                </div>
+              </div>
+
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-right text-sm">
+                  <thead className="bg-gray-100 text-gray-700">
+                    <tr>
+                      <th className="p-3">الصنف</th>
+                      <th className="p-3">الكمية</th>
+                      <th className="p-3">السعر</th>
+                      <th className="p-3">الإجمالي</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {viewInvoice.items.map((item, idx) => (
+                      <tr key={idx}>
+                        <td className="p-3 font-medium">{item.itemName} <span className="text-xs text-gray-400">({item.itemCode})</span></td>
+                        <td className="p-3">{item.quantity}</td>
+                        <td className="p-3">{item.price.toLocaleString()}</td>
+                        <td className="p-3 font-bold">{item.total.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex justify-end">
+                <div className="bg-gray-900 text-white p-4 rounded-xl w-full md:w-1/2">
+                  <div className="flex justify-between items-center text-lg font-bold">
+                     <span>إجمالي الفاتورة</span>
+                     <span>{viewInvoice.total.toLocaleString()} ج.م</span>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-400 flex justify-between">
+                     <span>رصيد سابق: {viewInvoice.previousBalance.toLocaleString()}</span>
+                     <span>رصيد بعد الفاتورة: {viewInvoice.currentBalance.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 p-4 border-t flex justify-end gap-3">
+              <button 
+                onClick={() => printInvoice(viewInvoice)} 
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-bold hover:bg-gray-300 flex items-center gap-2"
+              >
+                <Printer size={16}/> طباعة
+              </button>
+              <button 
+                onClick={() => setViewInvoice(null)} 
+                className="px-6 py-2 bg-brand-600 text-white rounded-lg font-bold hover:bg-brand-700"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
