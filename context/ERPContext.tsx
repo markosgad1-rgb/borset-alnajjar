@@ -64,7 +64,7 @@ interface ERPContextType {
     items: InvoiceItem[];
     total: number;
   }) => void;
-  updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; // New Function
+  updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; 
   deleteInvoice: (id: string) => Promise<void>;
   clearAllInvoices: () => Promise<boolean>; 
   addCollection: (data: {
@@ -165,7 +165,7 @@ const sanitizeUser = (user: any): User => {
       permissions: {
         dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true,
         canEditWarehouse: true, canManageTreasury: true,
-        ...(user.permissions || {}) // Override with specific settings if they exist
+        ...(user.permissions || {}) 
       }
     };
   }
@@ -187,7 +187,7 @@ const INITIAL_USERS: User[] = [
     password: '123', 
     fullName: 'المدير العام', 
     role: 'ADMIN', 
-    permissions: {} // Will be filled by sanitizeUser
+    permissions: {} 
   })
 ];
 
@@ -227,9 +227,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // --- Data Sync Logic (Effect) ---
   useEffect(() => {
     if (isOnline) {
-      // --- FIREBASE MODE: Real-time Listeners ---
       const unsubs: Function[] = [];
-      
       const handleSnapshotError = (error: any) => {
         console.error("Snapshot listener error:", error);
         if (error.code === 'permission-denied' || error.message?.includes('permission-denied')) {
@@ -238,7 +236,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
 
       try {
-        // Settings Listener (Logo)
         unsubs.push(onSnapshot(doc(db, 'settings', 'general'), (doc: any) => {
            if(doc.exists()) {
              const data = doc.data();
@@ -283,7 +280,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return () => unsubs.forEach(u => u && u());
 
     } else {
-      // --- LOCAL STORAGE MODE ---
       const load = (key: string, setter: Function, def: any) => {
         const saved = localStorage.getItem(key);
         if (saved) {
@@ -305,13 +301,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       load(STORAGE_KEYS.PURCHASES, setPurchases, []);
       load(STORAGE_KEYS.INVOICES, setInvoices, []);
       load(STORAGE_KEYS.TREASURY, setTreasury, []);
-      
       const savedLogo = localStorage.getItem(STORAGE_KEYS.COMPANY_LOGO);
       if(savedLogo) setCompanyLogo(savedLogo);
     }
   }, [isOnline]);
 
-  // --- Persist to LocalStorage ---
   useEffect(() => {
     if (!isOnline) {
       localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
@@ -339,7 +333,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // --- Auth ---
   const login = (usernameInput: string, passwordInput: string) => {
     const username = usernameInput.trim();
     const password = passwordInput.trim();
@@ -502,8 +495,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // --- Complex Transaction Actions ---
-
   const addPurchase = async (purchaseData: Omit<Purchase, 'id'>) => {
     const id = Date.now().toString();
     const newPurchase: Purchase = { ...purchaseData, id };
@@ -532,13 +523,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           });
         }
 
+        // SUPPLIER UPDATE LOGIC (FIXED)
+        // Purchase = Debt ON US (Increases Supplier Balance)
         const supplierRef = doc(db, 'suppliers', purchaseData.supplierCode);
         const supplierSnap = await getDoc(supplierRef);
         if (supplierSnap.exists()) {
           const s = supplierSnap.data() as Supplier;
           const amount = purchaseData.total;
-          const newBalance = s.balance - amount;
-          const newHistory = [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${id}`, amount: -amount }];
+          const newBalance = s.balance + amount; // Increase debt
+          const newHistory = [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${id}`, amount: amount }];
           await updateDoc(supplierRef, { balance: newBalance, history: newHistory });
         }
       } catch (e) { handleFirebaseError(e); }
@@ -559,7 +552,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       setSuppliers(prev => prev.map(s => {
          if (s.code === purchaseData.supplierCode) {
-           return { ...s, balance: s.balance - purchaseData.total, history: [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${id}`, amount: -purchaseData.total }]};
+           // Increase Balance
+           return { ...s, balance: s.balance + purchaseData.total, history: [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${id}`, amount: purchaseData.total }]};
          }
          return s;
       }));
@@ -638,25 +632,18 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // NEW FUNCTION: Update Invoice
   const updateInvoice = async (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => {
-    // 1. Reverse old invoice effect (Add back stock, Add back customer balance)
-    const debtDifference = oldInvoice.total - newInvoiceData.total; // If positive, customer owes less. If negative, customer owes more.
+    const debtDifference = oldInvoice.total - newInvoiceData.total; 
     
     if (isOnline) {
       try {
-        // Update Invoice Doc
         await setDoc(doc(db, 'invoices', oldInvoice.id), newInvoiceData);
 
-        // Update Customer Balance & History
         const customerRef = doc(db, 'customers', oldInvoice.customerCode);
         const customerSnap = await getDoc(customerRef);
         if (customerSnap.exists()) {
           const c = customerSnap.data() as Customer;
-          // Logic: Old Debt was (-OldTotal). We remove it (+OldTotal). New Debt is (-NewTotal).
-          // Net change to balance = +OldTotal - NewTotal = +debtDifference
           const newBalance = c.balance + debtDifference;
-          
           const newHistory = [
             ...c.history, 
             { 
@@ -668,8 +655,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           await updateDoc(customerRef, { balance: newBalance, history: newHistory });
         }
 
-        // Update Inventory (Product Quantities)
-        // 1. Revert old items (Add qty back)
         for (const item of oldInvoice.items) {
           const pRef = doc(db, 'products', item.itemCode);
           const pSnap = await getDoc(pRef);
@@ -678,7 +663,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             await updateDoc(pRef, { quantity: p.quantity + item.quantity });
           }
         }
-        // 2. Deduct new items
         for (const item of newInvoiceData.items) {
           const pRef = doc(db, 'products', item.itemCode);
           const pSnap = await getDoc(pRef);
@@ -690,9 +674,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       } catch (e) { handleFirebaseError(e); }
     } else {
-      // Offline Mode
       setInvoices(prev => prev.map(inv => inv.id === oldInvoice.id ? newInvoiceData : inv));
-      
       setCustomers(prev => prev.map(c => {
         if (c.code === oldInvoice.customerCode) {
           return {
@@ -703,15 +685,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
         return c;
       }));
-
       setProducts(prev => {
         let tempProducts = [...prev];
-        // Revert old
         oldInvoice.items.forEach(item => {
           const idx = tempProducts.findIndex(p => p.code === item.itemCode);
           if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity + item.quantity};
         });
-        // Deduct new
         newInvoiceData.items.forEach(item => {
           const idx = tempProducts.findIndex(p => p.code === item.itemCode);
           if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity - item.quantity};
@@ -789,11 +768,22 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             });
           }
         } else if (data.entityType === 'SUPPLIER') {
+          // SUPPLIER LOGIC (FIXED)
+          // Income (IN) = Refund from Supplier = Debt Decrease (Negative change)
+          // Outgo (OUT) = Payment to Supplier = Debt Decrease (Negative change)
+          // Wait, Payment to supplier decreases the balance (Debt).
+          
           const ref = doc(db, 'suppliers', data.entityCode);
           const snap = await getDoc(ref);
           if (snap.exists()) {
             const s = snap.data() as Supplier;
-            const change = isIncome ? -data.amount : data.amount;
+            // OUT (Pay) -> Decrease balance (we owe less). Change is negative.
+            // IN (Refund) -> Also decrease? No.
+            // Let's follow the requested logic:
+            // "الدفع للمورد (تحويل صادر) ينقص رصيد المورد (بالسالب -)"
+            const change = isIncome ? data.amount : -data.amount; 
+            // Check: isIncome=False (OUT). Change = -amount. Correct.
+            
             await updateDoc(ref, {
               balance: s.balance + change,
               history: [...s.history, { date: data.date, description: `${isIncome ? 'استلام' : 'دفع'} (${methodLabel}) - ${data.notes || ''}`, amount: change }]
@@ -819,7 +809,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (data.entityType === 'CUSTOMER') {
         setCustomers(prev => prev.map(c => c.code === data.entityCode ? { ...c, balance: c.balance + (isIncome ? data.amount : -data.amount), history: [...c.history, { date: data.date, description: historyDesc, amount: (isIncome ? data.amount : -data.amount) }] } : c));
       } else if (data.entityType === 'SUPPLIER') {
-        setSuppliers(prev => prev.map(s => s.code === data.entityCode ? { ...s, balance: s.balance + (isIncome ? -data.amount : data.amount), history: [...s.history, { date: data.date, description: historyDesc, amount: (isIncome ? -data.amount : data.amount) }] } : s));
+        // Supplier Local
+        setSuppliers(prev => prev.map(s => s.code === data.entityCode ? { ...s, balance: s.balance + (isIncome ? data.amount : -data.amount), history: [...s.history, { date: data.date, description: historyDesc, amount: (isIncome ? data.amount : -data.amount) }] } : s));
       } else if (data.entityType === 'EMPLOYEE') {
         setEmployees(prev => prev.map(e => e.code === data.entityCode ? { ...e, balance: e.balance + (isIncome ? -data.amount : data.amount), history: [...e.history, { date: data.date, description: historyDesc, amount: (isIncome ? -data.amount : data.amount) }] } : e));
       }
@@ -965,7 +956,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       for(const c of dummyCustomers) await setDoc(doc(db, 'customers', c.code), c);
 
       const dummySuppliers: Supplier[] = [
-         { code: 'S001', name: 'مزارع دينا', phone: '01155555555', balance: -50000, history: [{date: new Date().toISOString().split('T')[0], description: 'رصيد افتتاحي', amount: -50000}] },
+         { code: 'S001', name: 'مزارع دينا', phone: '01155555555', balance: 50000, history: [{date: new Date().toISOString().split('T')[0], description: 'رصيد افتتاحي', amount: 50000}] },
          { code: 'S002', name: 'الوطنية للدواجن', phone: '01066666666', balance: 0, history: [] }
       ];
       for(const s of dummySuppliers) await setDoc(doc(db, 'suppliers', s.code), s);
@@ -985,8 +976,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (h.amount < 0) debit = Math.abs(h.amount);
         else credit = h.amount;
       } else {
-        if (h.amount < 0) debit = Math.abs(h.amount);
-        else credit = h.amount;
+        // Supplier: Positive = Debt (Aliena/Debit), Negative = Payment (Lana/Credit)
+        if (h.amount > 0) debit = h.amount; // Aliena
+        else credit = Math.abs(h.amount); // Lana
       }
 
       return {
@@ -1000,8 +992,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     data.push({
       'التاريخ': '',
       'البيان': 'الرصيد النهائي الحالي',
-      [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: currentBalance < 0 ? Math.abs(currentBalance) : '',
-      [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: currentBalance > 0 ? currentBalance : ''
+      [type === 'CUSTOMER' ? 'مدين (عليه)' : 'علينا (مدين)']: (type === 'SUPPLIER' && currentBalance > 0) || (type === 'CUSTOMER' && currentBalance < 0) ? Math.abs(currentBalance) : '',
+      [type === 'CUSTOMER' ? 'دائن (له)' : 'لنا (دائن)']: (type === 'SUPPLIER' && currentBalance < 0) || (type === 'CUSTOMER' && currentBalance > 0) ? Math.abs(currentBalance) : ''
     });
 
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -1071,7 +1063,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       'الاسم': s.name,
       'رقم الهاتف': s.phone || 'غير مسجل',
       'الرصيد الحالي': s.balance,
-      'الحالة': s.balance < 0 ? 'مدين (علينا)' : s.balance > 0 ? 'دائن (لنا)' : 'خالص'
+      'الحالة': s.balance > 0 ? 'مدين (علينا)' : s.balance < 0 ? 'دائن (لنا)' : 'خالص'
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -1100,7 +1092,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     XLSX.writeFile(workbook, `قائمة_الموردين_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  // NEW: Update System Logo
   const updateSystemLogo = async (base64Image: string) => {
     if(isOnline) {
        await setDoc(doc(db, 'settings', 'general'), { logo: base64Image }, { merge: true });
@@ -1240,7 +1231,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             <!-- Dynamic Logo -->
             <div class="logo-box">
               ${companyLogo ? `<img src="${companyLogo}" alt="Logo" />` : 
-                // Fallback if no uploaded logo, check for local file
                 `<img src="/logo.png" alt="Logo" onerror="this.style.display='none'"/>`
               }
             </div>

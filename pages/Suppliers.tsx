@@ -144,7 +144,7 @@ export const Suppliers: React.FC = () => {
                 onChange={e => setFormData({...formData, balance: Number(e.target.value)})}
               />
               <span className="absolute left-2 top-2 text-xs text-gray-400 pointer-events-none">
-                (سالب = عليه لنا)
+                (موجب = علينا)
               </span>
              </div>
           </div>
@@ -186,8 +186,8 @@ export const Suppliers: React.FC = () => {
                   </div>
                   <div className="text-left flex items-center gap-3">
                     <div>
-                      {/* Negative = We Owe Him (Red), Positive = He Owes Us (Green) */}
-                      <p className={`font-bold text-sm ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
+                      {/* Positive = We Owe Him (Green - as requested), Negative = He Owes Us (Red - as requested) */}
+                      <p className={`font-bold text-sm ${s.balance > 0 ? 'text-green-600' : s.balance < 0 ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
                         {s.balance.toLocaleString()}
                       </p>
                     </div>
@@ -233,11 +233,11 @@ export const Suppliers: React.FC = () => {
                   </div>
                   <div className="text-left bg-brand-50 p-3 rounded-lg">
                     <p className="text-sm text-gray-500">الرصيد الحالي</p>
-                    <p className={`text-2xl font-bold ${selectedSupplier.balance < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
+                    <p className={`text-2xl font-bold ${selectedSupplier.balance > 0 ? 'text-green-600' : selectedSupplier.balance < 0 ? 'text-red-600' : 'text-gray-800'}`} dir="ltr">
                       {selectedSupplier.balance.toLocaleString()} ج.م
                     </p>
                     <p className="text-xs text-gray-400">
-                      {selectedSupplier.balance < 0 ? '(مديونية علينا)' : '(رصيد لنا)'}
+                      {selectedSupplier.balance > 0 ? '(له - مديونية علينا)' : selectedSupplier.balance < 0 ? '(عليه - رصيد لنا)' : 'متزن'}
                     </p>
                   </div>
                 </div>
@@ -252,7 +252,7 @@ export const Suppliers: React.FC = () => {
                           showClearLedgerConfirm ? (
                              <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
                                <AlertTriangle size={16} className="text-red-500" />
-                               <span className="text-xs font-bold text-red-600">تأكيد التصفير؟</span>
+                               <span className="text-xs font-bold text-red-600">تأكيد الحذف؟</span>
                                <button 
                                  onClick={handleClearLedger}
                                  className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-red-700"
@@ -290,8 +290,8 @@ export const Suppliers: React.FC = () => {
                         <tr>
                           <th className="p-3">التاريخ</th>
                           <th className="p-3 w-1/3">البيان</th>
-                          <th className="p-3 text-red-600">علينا (مدين)</th>
-                          <th className="p-3 text-green-600">لنا (دائن)</th>
+                          <th className="p-3 text-green-600">علينا (له)</th>
+                          <th className="p-3 text-red-600">لنا (عليه)</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -300,20 +300,20 @@ export const Suppliers: React.FC = () => {
                         ) : (
                           selectedSupplier.history.map((h, idx) => {
                             // For Supplier:
-                            // Negative Amount = Debt Increased (We owe more) -> Red Column
-                            // Positive Amount = Debt Decreased (We paid) -> Green Column
-                            const isDebtIncrease = h.amount < 0;
-                            const isDebtDecrease = h.amount > 0;
+                            // Positive Amount = Debt Increased (We buy/We owe more) -> Green Column (Aliena/Lahu)
+                            // Negative Amount = Debt Decreased (We pay/Lana) -> Red Column (Lana/Alayh)
+                            const isDebtIncrease = h.amount > 0;
+                            const isDebtDecrease = h.amount < 0;
 
                             return (
                               <tr key={idx}>
                                 <td className="p-3 text-gray-600 whitespace-nowrap">{h.date}</td>
                                 <td className="p-3 font-medium text-gray-800">{h.description}</td>
-                                <td className="p-3 font-bold text-red-600 bg-red-50/30">
-                                  {isDebtIncrease ? Math.abs(h.amount).toLocaleString() : '-'}
-                                </td>
                                 <td className="p-3 font-bold text-green-600 bg-green-50/30">
-                                  {isDebtDecrease ? h.amount.toLocaleString() : '-'}
+                                  {isDebtIncrease ? h.amount.toLocaleString() : '-'}
+                                </td>
+                                <td className="p-3 font-bold text-red-600 bg-red-50/30">
+                                  {isDebtDecrease ? Math.abs(h.amount).toLocaleString() : '-'}
                                 </td>
                               </tr>
                             );
