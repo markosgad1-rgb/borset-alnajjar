@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Wallet, Building2, Banknote, Trash2, AlertTriangle, PlusCircle, X, Save } from 'lucide-react';
+import { Wallet, Building2, Banknote, Trash2, AlertTriangle, PlusCircle, X, Save, Smartphone } from 'lucide-react';
 import { PaymentMethod } from '../types';
 
 export const Treasury: React.FC = () => {
@@ -45,12 +45,15 @@ export const Treasury: React.FC = () => {
   const getMethodLabel = (method?: string) => {
     if (method === 'BANK_AHLY') return 'البنك الأهلي';
     if (method === 'BANK_MISR') return 'بنك مصر';
+    if (method === 'VF_CASH_AYMAN') return 'فودافون كاش أيمن';
+    if (method === 'VF_CASH_KYRILLOS') return 'فودافون كاش كيرلس';
     return 'خزنة (كاش)';
   };
 
   const getMethodColor = (method?: string) => {
     if (method === 'BANK_AHLY') return 'text-green-700 bg-green-50';
     if (method === 'BANK_MISR') return 'text-red-700 bg-red-50';
+    if (method === 'VF_CASH_AYMAN' || method === 'VF_CASH_KYRILLOS') return 'text-red-800 bg-red-100';
     return 'text-emerald-700 bg-emerald-50';
   };
 
@@ -104,9 +107,9 @@ export const Treasury: React.FC = () => {
       </div>
 
       {/* Balances Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {/* Total */}
-        <div className="bg-gray-900 rounded-xl p-6 text-white shadow-lg md:col-span-4 lg:col-span-1">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* Total - Full Width on Mobile */}
+        <div className="bg-gray-900 rounded-xl p-6 text-white shadow-lg md:col-span-2 lg:col-span-1">
           <div className="flex items-center gap-4">
             <div className="bg-white/20 p-3 rounded-full"><Wallet size={32}/></div>
             <div>
@@ -140,6 +143,24 @@ export const Treasury: React.FC = () => {
           <div>
              <p className="text-gray-500 text-sm font-bold">بنك مصر</p>
              <h2 className="text-2xl font-bold text-red-700">{balances.bankMisr.toLocaleString()}</h2>
+          </div>
+        </div>
+
+        {/* Vodafone Cash Ayman */}
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-red-100 flex items-center gap-4">
+          <div className="bg-red-100 text-red-700 p-3 rounded-full"><Smartphone size={32}/></div>
+          <div>
+             <p className="text-gray-500 text-sm font-bold">فودافون كاش أيمن</p>
+             <h2 className="text-2xl font-bold text-red-700">{balances.vfCashAyman.toLocaleString()}</h2>
+          </div>
+        </div>
+
+        {/* Vodafone Cash Kyrillos */}
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-red-100 flex items-center gap-4">
+          <div className="bg-red-100 text-red-700 p-3 rounded-full"><Smartphone size={32}/></div>
+          <div>
+             <p className="text-gray-500 text-sm font-bold">فودافون كاش كيرلس</p>
+             <h2 className="text-2xl font-bold text-red-700">{balances.vfCashKyrillos.toLocaleString()}</h2>
           </div>
         </div>
       </div>
@@ -212,6 +233,8 @@ export const Treasury: React.FC = () => {
                     <option value="CASH">خزنة (كاش)</option>
                     <option value="BANK_AHLY">البنك الأهلي</option>
                     <option value="BANK_MISR">بنك مصر</option>
+                    <option value="VF_CASH_AYMAN">فودافون كاش أيمن</option>
+                    <option value="VF_CASH_KYRILLOS">فودافون كاش كيرلس</option>
                   </select>
                 </div>
 

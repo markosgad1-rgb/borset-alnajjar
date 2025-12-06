@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Banknote, Save, Search, CheckCircle, AlertCircle, Building2, Wallet } from 'lucide-react';
+import { Banknote, Save, Search, CheckCircle, AlertCircle, Building2, Wallet, Smartphone } from 'lucide-react';
 import { PaymentMethod } from '../types';
 
 export const Collections: React.FC = () => {
@@ -156,9 +156,9 @@ export const Collections: React.FC = () => {
                {/* Payment Method */}
                <div className="md:col-span-2 space-y-2">
                   <label className="block text-sm font-bold text-gray-700 mb-2">طريقة التحصيل (إلى أين ستذهب الأموال؟)</label>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                     <label className={`
-                      flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                      flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
                       ${formData.paymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 hover:bg-gray-50'}
                     `}>
                       <input 
@@ -170,11 +170,11 @@ export const Collections: React.FC = () => {
                         className="hidden"
                       />
                       <Wallet size={20} />
-                      <span className="font-bold">خزنة (كاش)</span>
+                      <span className="font-bold text-xs">خزنة (كاش)</span>
                     </label>
 
                     <label className={`
-                      flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                      flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
                       ${formData.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
                     `}>
                       <input 
@@ -186,11 +186,11 @@ export const Collections: React.FC = () => {
                         className="hidden"
                       />
                       <Building2 size={20} />
-                      <span className="font-bold">البنك الأهلي</span>
+                      <span className="font-bold text-xs">البنك الأهلي</span>
                     </label>
 
                     <label className={`
-                      flex items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all
+                      flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
                       ${formData.paymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
                     `}>
                       <input 
@@ -202,7 +202,39 @@ export const Collections: React.FC = () => {
                         className="hidden"
                       />
                       <Building2 size={20} />
-                      <span className="font-bold">بنك مصر</span>
+                      <span className="font-bold text-xs">بنك مصر</span>
+                    </label>
+
+                    <label className={`
+                      flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                      ${formData.paymentMethod === 'VF_CASH_AYMAN' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                    `}>
+                      <input 
+                        type="radio" 
+                        name="method" 
+                        value="VF_CASH_AYMAN" 
+                        checked={formData.paymentMethod === 'VF_CASH_AYMAN'}
+                        onChange={() => setFormData({...formData, paymentMethod: 'VF_CASH_AYMAN'})} 
+                        className="hidden"
+                      />
+                      <Smartphone size={20} />
+                      <span className="font-bold text-xs">فودافون كاش أيمن</span>
+                    </label>
+
+                    <label className={`
+                      flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                      ${formData.paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                    `}>
+                      <input 
+                        type="radio" 
+                        name="method" 
+                        value="VF_CASH_KYRILLOS" 
+                        checked={formData.paymentMethod === 'VF_CASH_KYRILLOS'}
+                        onChange={() => setFormData({...formData, paymentMethod: 'VF_CASH_KYRILLOS'})} 
+                        className="hidden"
+                      />
+                      <Smartphone size={20} />
+                      <span className="font-bold text-xs">فودافون كاش كيرلس</span>
                     </label>
                   </div>
                </div>

@@ -27,8 +27,9 @@ export const UserManagement: React.FC = () => {
       financial: false,
       admin: false,
       canDeleteLedgers: false,
-      canEditWarehouse: false, // New
-      canManageTreasury: false // New
+      canEditWarehouse: false, 
+      canManageTreasury: false,
+      canEditPurchases: false // New
     }
   });
 
@@ -40,7 +41,7 @@ export const UserManagement: React.FC = () => {
       role: 'USER',
       permissions: { 
         dashboard: false, sales: false, warehouse: false, financial: false, admin: false, canDeleteLedgers: false,
-        canEditWarehouse: false, canManageTreasury: false
+        canEditWarehouse: false, canManageTreasury: false, canEditPurchases: false
       }
     });
     setIsEditing(false);
@@ -84,7 +85,8 @@ export const UserManagement: React.FC = () => {
         admin: user.permissions.admin,
         canDeleteLedgers: user.permissions.canDeleteLedgers || false,
         canEditWarehouse: user.permissions.canEditWarehouse || false,
-        canManageTreasury: user.permissions.canManageTreasury || false
+        canManageTreasury: user.permissions.canManageTreasury || false,
+        canEditPurchases: user.permissions.canEditPurchases || false
       }
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -311,6 +313,16 @@ export const UserManagement: React.FC = () => {
                 <span className="font-medium text-green-700">إدارة رصيد الخزنة</span>
               </label>
 
+              <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-brand-400 transition-colors">
+                <input 
+                  type="checkbox" 
+                  checked={formData.permissions.canEditPurchases}
+                  onChange={() => handlePermissionChange('canEditPurchases')}
+                  className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500"
+                />
+                <span className="font-medium text-purple-700">تعديل/حذف المشتريات</span>
+              </label>
+
               <label className="flex items-center gap-2 cursor-pointer bg-red-50 p-3 rounded-lg border border-red-200 hover:border-red-400 transition-colors md:col-span-full xl:col-span-1">
                 <input 
                   type="checkbox" 
@@ -381,6 +393,7 @@ export const UserManagement: React.FC = () => {
                        {user.permissions.canDeleteLedgers && <span className="bg-red-50 text-red-700 px-2 rounded border border-red-100">تصفير</span>}
                        {user.permissions.canEditWarehouse && <span className="bg-blue-50 text-blue-700 px-2 rounded border border-blue-100">تعديل أصناف</span>}
                        {user.permissions.canManageTreasury && <span className="bg-green-50 text-green-700 px-2 rounded border border-green-100">إدارة خزنة</span>}
+                       {user.permissions.canEditPurchases && <span className="bg-purple-50 text-purple-700 px-2 rounded border border-purple-100">تعديل مشتريات</span>}
                        {user.permissions.admin && <span className="bg-red-50 text-red-600 px-2 rounded border border-red-100">إدارة</span>}
                     </div>
                   </td>

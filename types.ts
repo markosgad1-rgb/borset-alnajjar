@@ -47,12 +47,16 @@ export interface Purchase {
   id: string;
   supplierCode: string; // Linked to Supplier
   supplierName: string;
-  itemCode: string;
-  itemName: string;
-  quantity: number;
-  price: number;
-  total: number;
   date: string;
+  total: number;
+  items: InvoiceItem[]; // New: Multiple items support
+  previousBalance?: number; // Snapshot of balance before this invoice
+  currentBalance?: number; // Snapshot of balance after this invoice
+  // Deprecated single-item fields (kept optional for backward compatibility if needed)
+  itemCode?: string;
+  itemName?: string;
+  quantity?: number;
+  price?: number;
 }
 
 export interface InvoiceItem {
@@ -75,7 +79,7 @@ export interface SalesInvoice {
   currentBalance: number;
 }
 
-export type PaymentMethod = 'CASH' | 'BANK_MISR' | 'BANK_AHLY';
+export type PaymentMethod = 'CASH' | 'BANK_MISR' | 'BANK_AHLY' | 'VF_CASH_AYMAN' | 'VF_CASH_KYRILLOS';
 
 export interface TreasuryTransaction {
   id: string;
@@ -103,6 +107,7 @@ export interface User {
     canDeleteLedgers: boolean;
     canEditWarehouse: boolean; // New: Add/Edit/Delete Products
     canManageTreasury: boolean; // New: Add Opening Balance
+    canEditPurchases: boolean; // New: Edit/Delete Purchases
   };
 }
 
