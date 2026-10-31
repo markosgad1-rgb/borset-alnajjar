@@ -133,6 +133,7 @@ interface ERPContextType {
       itemName: string;
       quantity?: number | string;
       price?: number | string;
+      lineTotal?: number | string;
       debit: number;
       credit: number;
       runningBalance: number;
@@ -1243,9 +1244,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         'الصنف / البيان': r.itemName || r.description,
         'الكمية (كرتونة)': (r.quantity !== undefined && r.quantity !== '-') ? r.quantity : '-',
         'السعر': (r.price !== undefined && r.price !== '-') ? r.price : '-',
+        'الإجمالي': (r.lineTotal !== undefined && r.lineTotal !== '-') ? r.lineTotal : (r.debit > 0 ? r.debit : (r.credit > 0 ? r.credit : '-')),
         [colDebit]: r.debit > 0 ? r.debit : 0,
         [colCredit]: r.credit > 0 ? r.credit : 0,
-        'الرصيد التراكمي': r.runningBalance !== undefined ? r.runningBalance : '-'
+        'الرصيد التراكمي': r.runningBalance !== undefined ? r.runningBalance : '-',
+        'الحالة': typeof r.runningBalance === 'number' ? (r.runningBalance < 0 ? (isCustomer ? 'مدين (عليه)' : 'لنا') : r.runningBalance > 0 ? (isCustomer ? 'دائن (له)' : 'علينا') : 'متزن') : '-'
       }));
     } else {
       data = history.map((h, idx) => ({
@@ -1264,9 +1267,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       'الصنف / البيان': 'الرصيد الحالي النهائي',
       'الكمية (كرتونة)': '---',
       'السعر': '---',
+      'الإجمالي': '---',
       [colDebit]: '---',
       [colCredit]: '---',
-      'الرصيد التراكمي': currentBalance
+      'الرصيد التراكمي': currentBalance,
+      'الحالة': currentBalance < 0 ? (isCustomer ? 'مدين (عليه)' : 'لنا') : currentBalance > 0 ? (isCustomer ? 'دائن (له)' : 'علينا') : 'متزن'
     });
 
     const ws = XLSX.utils.json_to_sheet(data);
@@ -1787,6 +1792,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       itemName: string;
       quantity?: number | string;
       price?: number | string;
+      lineTotal?: number | string;
       debit: number;
       credit: number;
       runningBalance: number;
@@ -1867,15 +1873,17 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         <table>
           <thead>
             <tr>
-              <th style="width: 35px;">م</th>
-              <th style="width: 80px;">التاريخ</th>
-              <th style="width: 85px;">الفاتورة</th>
+              <th style="width: 32px;">م</th>
+              <th style="width: 75px;">التاريخ</th>
+              <th style="width: 75px;">الفاتورة</th>
               <th>الصنف / البيان</th>
-              <th style="width: 75px;">الكمية</th>
-              <th style="width: 75px;">السعر</th>
-              <th style="width: 85px;">${colDebitTitle}</th>
-              <th style="width: 85px;">${colCreditTitle}</th>
-              <th style="width: 95px;">الرصيد</th>
+              <th style="width: 65px;">الكمية</th>
+              <th style="width: 65px;">السعر</th>
+              <th style="width: 75px;">الإجمالي</th>
+              <th style="width: 80px;">${colDebitTitle}</th>
+              <th style="width: 80px;">${colCreditTitle}</th>
+              <th style="width: 85px;">الرصيد</th>
+              <th style="width: 65px;">الحالة</th>
             </tr>
           </thead>
           <tbody>
@@ -1887,9 +1895,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 <td class="text-right" style="padding-right: 8px;">${r.itemName}</td>
                 <td>${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
                 <td>${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</td>
+                <td style="font-weight: 800;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</td>
                 <td style="color: #b91c1c; font-weight: 800;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
                 <td style="color: #15803d; font-weight: 800;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
                 <td style="font-weight: 900;" dir="ltr">${r.runningBalance.toLocaleString()}</td>
+                <td style="font-size: 11px; font-weight: 800;">${r.runningBalance < 0 ? (isCustomer ? 'مدين (عليه)' : 'لنا') : r.runningBalance > 0 ? (isCustomer ? 'دائن (له)' : 'علينا') : 'متزن'}</td>
               </tr>
             `).join('')}
           </tbody>

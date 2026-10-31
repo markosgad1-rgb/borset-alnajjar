@@ -167,10 +167,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto p-4 md:p-8 h-screen">
-        <header className="mb-8 hidden md:flex justify-between items-center bg-white p-4 rounded-xl shadow-sm">
+      <main className="flex-1 overflow-y-auto p-2 md:p-4 h-screen">
+        <header className="mb-3 hidden md:flex justify-between items-center bg-white py-2 px-4 rounded-xl shadow-xs border border-brand-100">
            <div className="flex items-center gap-4">
-              <h2 className="text-2xl font-bold text-brand-900">
+              <h2 className="text-xl font-bold text-brand-900">
                 {navItems.find(i => i.id === activePage)?.label}
               </h2>
               {!isOnline && (
