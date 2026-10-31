@@ -64,17 +64,22 @@ interface ERPContextType {
     customerName: string;
     items: InvoiceItem[];
     total: number;
-  }) => void;
+    paidAmount?: number;
+    remainingAmount?: number;
+    paymentMethod?: PaymentMethod;
+  }) => Promise<void>;
   updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; 
   deleteInvoice: (id: string) => Promise<void>;
   clearAllInvoices: () => Promise<boolean>; 
   addCollection: (data: {
     customerCode: string;
+    customerName?: string;
     invoiceId?: string;
     amount: number;
     date: string;
     paymentMethod: PaymentMethod;
-  }) => void;
+    notes?: string;
+  }) => Promise<void>;
   addTransfer: (data: {
     entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE';
     entityCode: string;
@@ -115,7 +120,28 @@ interface ERPContextType {
   seedDatabase: () => Promise<void>;
   printInvoice: (invoice: SalesInvoice) => void;
   printPurchaseInvoice: (purchase: Purchase) => void; 
-  exportLedgerToExcel: (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER') => void;
+  printLedger: (options: {
+    title: string;
+    entityName: string;
+    entityCode: string;
+    entityPhone?: string;
+    type: 'CUSTOMER' | 'SUPPLIER';
+    rows: Array<{
+      num: number;
+      date: string;
+      ref?: string;
+      itemName: string;
+      quantity?: number | string;
+      price?: number | string;
+      debit: number;
+      credit: number;
+      runningBalance: number;
+    }>;
+    totalDebit: number;
+    totalCredit: number;
+    finalBalance: number;
+  }) => void;
+  exportLedgerToExcel: (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER', isItemized?: boolean) => void;
   exportAllCustomersToExcel: () => void;
   exportAllSuppliersToExcel: () => void;
   clearLedger: (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => Promise<boolean>;
@@ -145,6 +171,22 @@ const STORAGE_KEYS = {
   TREASURY: 'erp_treasury',
   CURRENT_USER: 'erp_current_user',
   COMPANY_LOGO: 'erp_logo'
+};
+
+// Helper to recursively remove all undefined properties so Firestore never throws unsupported field value error
+export const cleanDoc = <T = any>(obj: T): T => {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) return obj.map(cleanDoc) as any;
+  if (typeof obj === 'object' && !(obj instanceof Date)) {
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v !== undefined) {
+        res[k] = cleanDoc(v);
+      }
+    }
+    return res as any;
+  }
+  return obj;
 };
 
 // Helper to patch old user objects with new permissions
@@ -277,7 +319,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const qTreasury = query(collection(db, 'treasury')); 
         unsubs.push(onSnapshot(qTreasury, (snap: any) => {
            const data = snap.docs.map((d: any) => d.data() as TreasuryTransaction);
-           data.sort((a, b) => a.id.localeCompare(b.id));
+           data.sort((a, b) => {
+             const dateA = a.date || '';
+             const dateB = b.date || '';
+             if (dateA !== dateB) return dateA.localeCompare(dateB);
+             return a.id.localeCompare(b.id);
+           });
            setTreasury(data);
         }, handleSnapshotError));
       } catch (err) {
@@ -582,36 +629,166 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const getPaymentMethodArabicName = (method?: PaymentMethod): string => {
+    if (method === 'BANK_AHLY') return 'البنك الأهلي';
+    if (method === 'BANK_MISR') return 'بنك مصر';
+    if (method === 'VF_CASH_AYMAN') return 'فودافون كاش أيمن';
+    if (method === 'VF_CASH_KYRILLOS') return 'فودافون كاش كيرلس';
+    return 'خزنة (كاش)';
+  };
+
   const addInvoice = async (invoiceData: {
-    id: string; date: string; time: string; customerCode: string; customerName: string; items: InvoiceItem[]; total: number;
+    id: string; 
+    date: string; 
+    time: string; 
+    customerCode: string; 
+    customerName: string; 
+    items: InvoiceItem[]; 
+    total: number;
+    paidAmount?: number;
+    remainingAmount?: number;
+    paymentMethod?: PaymentMethod;
   }) => {
     const { id, total } = invoiceData;
-    const debtAmount = total;
+    const rawPaid = Number(invoiceData.paidAmount || 0);
+    const paidAmount = Math.max(0, isNaN(rawPaid) ? 0 : rawPaid);
+    const remainingAmount = Math.max(0, total - paidAmount);
+    const paymentMethod: PaymentMethod = invoiceData.paymentMethod || 'CASH';
+
     const currentCustomer = customers.find(c => c.code === invoiceData.customerCode);
+    const prevBalance = currentCustomer ? currentCustomer.balance : 0;
+    // Customer balance: debt is -total, payment is +paidAmount => net change is -(total - paidAmount) = -remainingAmount
+    const netDebtIncrease = remainingAmount;
+    const newCustomerBalance = prevBalance - netDebtIncrease;
     
+    // Clean newInvoice without ANY undefined fields
     const newInvoice: SalesInvoice = {
-      ...invoiceData,
-      previousBalance: currentCustomer ? currentCustomer.balance : 0,
-      currentBalance: (currentCustomer ? currentCustomer.balance : 0) - debtAmount
+      id: invoiceData.id,
+      date: invoiceData.date,
+      time: invoiceData.time,
+      customerCode: invoiceData.customerCode,
+      customerName: invoiceData.customerName,
+      items: invoiceData.items.map(item => ({
+        itemCode: item.itemCode,
+        itemName: item.itemName,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total
+      })),
+      total: invoiceData.total,
+      paidAmount,
+      remainingAmount,
+      previousBalance: prevBalance,
+      currentBalance: newCustomerBalance,
+      ...(paidAmount > 0 && paymentMethod ? { paymentMethod } : {})
     };
+
+    // Customer history entries
+    const historyEntries: { date: string; description: string; amount: number }[] = [];
+    if (paidAmount === 0) {
+      historyEntries.push({ 
+        date: invoiceData.date, 
+        description: `فاتورة بيع #${id} (آجل بالكامل)`, 
+        amount: -total 
+      });
+    } else if (paidAmount >= total) {
+      historyEntries.push({ 
+        date: invoiceData.date, 
+        description: `فاتورة بيع #${id} (إجمالي ${total.toLocaleString()})`, 
+        amount: -total 
+      });
+      historyEntries.push({ 
+        date: invoiceData.date, 
+        description: `سداد نقدي كامل فاتورة #${id} (${getPaymentMethodArabicName(paymentMethod)})`, 
+        amount: paidAmount 
+      });
+    } else {
+      historyEntries.push({ 
+        date: invoiceData.date, 
+        description: `فاتورة بيع #${id} (إجمالي ${total.toLocaleString()})`, 
+        amount: -total 
+      });
+      historyEntries.push({ 
+        date: invoiceData.date, 
+        description: `دفعة نقدية مسددة من فاتورة #${id} (${getPaymentMethodArabicName(paymentMethod)})`, 
+        amount: paidAmount 
+      });
+    }
+
+    // Treasury Transaction if paidAmount > 0
+    let treasuryTx: TreasuryTransaction | null = null;
+    if (paidAmount > 0) {
+      const tId = `T_INV_${id}_${Date.now()}`;
+      const desc = paidAmount >= total 
+        ? `تحصيل كلي فاتورة بيع #${id} - العميل (${invoiceData.customerName || invoiceData.customerCode})`
+        : `تحصيل دفعة من فاتورة بيع #${id} - العميل (${invoiceData.customerName || invoiceData.customerCode}) [متبقي: ${remainingAmount.toLocaleString()}]`;
+
+      treasuryTx = {
+        id: tId,
+        invoiceNumber: id,
+        date: invoiceData.date,
+        credit: paidAmount,
+        debit: 0,
+        balance: 0,
+        paymentMethod: paymentMethod,
+        description: desc
+      };
+    }
+
+    // Immediate Optimistic State Update so invoice and customer ledger reflect instantly
+    setInvoices(prev => [newInvoice, ...prev.filter(inv => inv.id !== newInvoice.id)]);
+    setCustomers(prev => {
+      const exists = prev.find(c => c.code === invoiceData.customerCode);
+      if (exists) {
+        return prev.map(c => c.code === invoiceData.customerCode ? { 
+          ...c, 
+          balance: newCustomerBalance, 
+          history: [...(c.history || []), ...historyEntries] 
+        } : c);
+      } else {
+        return [...prev, { 
+          code: invoiceData.customerCode, 
+          name: invoiceData.customerName, 
+          balance: newCustomerBalance, 
+          history: historyEntries 
+        }];
+      }
+    });
+    if (treasuryTx) {
+      setTreasury(prev => [...prev.filter(t => t.id !== treasuryTx!.id), treasuryTx!]);
+    }
+    setProducts(prev => {
+      let newP = [...prev];
+      invoiceData.items.forEach(item => {
+        const idx = newP.findIndex(p => p.code === item.itemCode);
+        if (idx >= 0) newP[idx] = { ...newP[idx], quantity: newP[idx].quantity - item.quantity };
+      });
+      return newP;
+    });
 
     if (isOnline) {
       try {
-        await setDoc(doc(db, 'invoices', id), newInvoice);
+        await setDoc(doc(db, 'invoices', id), cleanDoc(newInvoice));
         
         const customerRef = doc(db, 'customers', invoiceData.customerCode);
         const customerSnap = await getDoc(customerRef);
         
         if (customerSnap.exists()) {
           const c = customerSnap.data() as Customer;
-          const newBalance = c.balance - debtAmount;
-          const newHistory = [...c.history, { date: invoiceData.date, description: `فاتورة بيع #${id} (آجل)`, amount: -debtAmount }];
-          await updateDoc(customerRef, { balance: newBalance, history: newHistory });
+          const updatedHistory = [...(c.history || []), ...historyEntries];
+          await updateDoc(customerRef, cleanDoc({ balance: newCustomerBalance, history: updatedHistory }));
         } else {
-          await setDoc(customerRef, {
-              code: invoiceData.customerCode, name: invoiceData.customerName, balance: -debtAmount,
-              history: [{ date: invoiceData.date, description: `فاتورة بيع #${id} (آجل)`, amount: -debtAmount }]
-          });
+          await setDoc(customerRef, cleanDoc({
+            code: invoiceData.customerCode, 
+            name: invoiceData.customerName, 
+            balance: newCustomerBalance, 
+            history: historyEntries
+          }));
+        }
+
+        // Write Treasury transaction if payment was made
+        if (treasuryTx) {
+          await setDoc(doc(db, 'treasury', treasuryTx.id), cleanDoc(treasuryTx));
         }
 
         for (const item of invoiceData.items) {
@@ -623,33 +800,85 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
         }
       } catch (e) { handleFirebaseError(e); }
-    } else {
-      setInvoices(prev => [newInvoice, ...prev]);
-      setCustomers(prev => {
-        const exists = prev.find(c => c.code === invoiceData.customerCode);
-        if (exists) {
-          return prev.map(c => c.code === invoiceData.customerCode ? { ...c, balance: c.balance - debtAmount, history: [...c.history, { date: invoiceData.date, description: `فاتورة بيع #${id} (آجل)`, amount: -debtAmount }] } : c);
-        } else {
-          return [...prev, { code: invoiceData.customerCode, name: invoiceData.customerName, balance: -debtAmount, history: [{ date: invoiceData.date, description: `فاتورة بيع #${id} (آجل)`, amount: -debtAmount }] }];
-        }
-      });
-      setProducts(prev => {
-        let newP = [...prev];
-        invoiceData.items.forEach(item => {
-          const idx = newP.findIndex(p => p.code === item.itemCode);
-          if (idx >= 0) newP[idx] = { ...newP[idx], quantity: newP[idx].quantity - item.quantity };
-        });
-        return newP;
-      });
     }
   };
 
   const updateInvoice = async (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => {
-    const debtDifference = oldInvoice.total - newInvoiceData.total; 
+    const oldPaid = Number(oldInvoice.paidAmount || 0);
+    const newPaid = Number(newInvoiceData.paidAmount || 0);
+    const oldRemaining = oldInvoice.total - oldPaid;
+    const newRemaining = newInvoiceData.total - newPaid;
+    // If old remaining debt was 1000 and new remaining debt is 800, customer balance increases by +200.
+    const debtDifference = oldRemaining - newRemaining; 
+
+    // Calculate customer currentBalance snapshot for updated invoice
+    const finalNewInvoice: SalesInvoice = {
+      ...newInvoiceData,
+      paidAmount: newPaid,
+      remainingAmount: newRemaining,
+      currentBalance: oldInvoice.previousBalance - newRemaining,
+      ...(newPaid > 0 && newInvoiceData.paymentMethod ? { paymentMethod: newInvoiceData.paymentMethod } : {})
+    };
+    if (newPaid === 0) {
+      delete (finalNewInvoice as any).paymentMethod;
+    }
+
+    // Immediate Optimistic State Update
+    setInvoices(prev => prev.map(inv => inv.id === oldInvoice.id ? finalNewInvoice : inv));
+    setCustomers(prev => prev.map(c => {
+      if (c.code === oldInvoice.customerCode) {
+        return {
+          ...c,
+          balance: c.balance + debtDifference,
+          history: [...(c.history || []), { 
+            date: newInvoiceData.date, 
+            description: `تعديل فاتورة #${oldInvoice.id} (الإجمالي: ${newInvoiceData.total.toLocaleString()}، مدفوع: ${newPaid.toLocaleString()})`, 
+            amount: debtDifference 
+          }]
+        };
+      }
+      return c;
+    }));
+
+    setTreasury(prev => {
+      const withoutOld = prev.filter(t => t.invoiceNumber !== oldInvoice.id);
+      if (newPaid > 0) {
+        const tId = `T_INV_${oldInvoice.id}_${Date.now()}`;
+        const desc = newPaid >= newInvoiceData.total
+          ? `تحصيل كلي فاتورة بيع #${oldInvoice.id} - العميل (${newInvoiceData.customerName}) [معدلة]`
+          : `تحصيل دفعة من فاتورة بيع #${oldInvoice.id} - العميل (${newInvoiceData.customerName}) [معدلة - متبقي: ${newRemaining.toLocaleString()}]`;
+
+        const newTx: TreasuryTransaction = {
+          id: tId,
+          invoiceNumber: oldInvoice.id,
+          date: newInvoiceData.date,
+          credit: newPaid,
+          debit: 0,
+          balance: 0,
+          paymentMethod: newInvoiceData.paymentMethod || 'CASH',
+          description: desc
+        };
+        return [...withoutOld, newTx];
+      }
+      return withoutOld;
+    });
+
+    setProducts(prev => {
+      let tempProducts = [...prev];
+      oldInvoice.items.forEach(item => {
+        const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+        if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity + item.quantity};
+      });
+      newInvoiceData.items.forEach(item => {
+        const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+        if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity - item.quantity};
+      });
+      return tempProducts;
+    });
     
     if (isOnline) {
       try {
-        await setDoc(doc(db, 'invoices', oldInvoice.id), newInvoiceData);
+        await setDoc(doc(db, 'invoices', oldInvoice.id), cleanDoc(finalNewInvoice));
 
         const customerRef = doc(db, 'customers', oldInvoice.customerCode);
         const customerSnap = await getDoc(customerRef);
@@ -657,16 +886,47 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const c = customerSnap.data() as Customer;
           const newBalance = c.balance + debtDifference;
           const newHistory = [
-            ...c.history, 
+            ...(c.history || []), 
             { 
               date: newInvoiceData.date, 
-              description: `تعديل فاتورة #${oldInvoice.id}`, 
+              description: `تعديل فاتورة #${oldInvoice.id} (الإجمالي: ${newInvoiceData.total.toLocaleString()}، مدفوع: ${newPaid.toLocaleString()})`, 
               amount: debtDifference 
             }
           ];
-          await updateDoc(customerRef, { balance: newBalance, history: newHistory });
+          await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: newHistory }));
         }
 
+        // Handle Treasury Update/Reconciliation
+        const qTreasury = query(collection(db, 'treasury'));
+        const snap = await getDocs(qTreasury);
+        const oldTxDocs = snap.docs.filter(d => (d.data() as TreasuryTransaction).invoiceNumber === oldInvoice.id);
+        
+        // Delete old treasury docs for this invoice
+        for (const tDoc of oldTxDocs) {
+          await deleteDoc(tDoc.ref);
+        }
+
+        // If new invoice has payment, add new treasury doc
+        if (newPaid > 0) {
+          const tId = `T_INV_${oldInvoice.id}_${Date.now()}`;
+          const desc = newPaid >= newInvoiceData.total
+            ? `تحصيل كلي فاتورة بيع #${oldInvoice.id} - العميل (${newInvoiceData.customerName}) [معدلة]`
+            : `تحصيل دفعة من فاتورة بيع #${oldInvoice.id} - العميل (${newInvoiceData.customerName}) [معدلة - متبقي: ${newRemaining.toLocaleString()}]`;
+
+          const newTx: TreasuryTransaction = {
+            id: tId,
+            invoiceNumber: oldInvoice.id,
+            date: newInvoiceData.date,
+            credit: newPaid,
+            debit: 0,
+            balance: 0,
+            paymentMethod: newInvoiceData.paymentMethod || 'CASH',
+            description: desc
+          };
+          await setDoc(doc(db, 'treasury', tId), cleanDoc(newTx));
+        }
+
+        // Adjust Inventory
         for (const item of oldInvoice.items) {
           const pRef = doc(db, 'products', item.itemCode);
           const pSnap = await getDoc(pRef);
@@ -685,40 +945,83 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
       } catch (e) { handleFirebaseError(e); }
-    } else {
-      setInvoices(prev => prev.map(inv => inv.id === oldInvoice.id ? newInvoiceData : inv));
-      setCustomers(prev => prev.map(c => {
-        if (c.code === oldInvoice.customerCode) {
-          return {
-            ...c,
-            balance: c.balance + debtDifference,
-            history: [...c.history, { date: newInvoiceData.date, description: `تعديل فاتورة #${oldInvoice.id}`, amount: debtDifference }]
-          };
-        }
-        return c;
-      }));
-      setProducts(prev => {
-        let tempProducts = [...prev];
-        oldInvoice.items.forEach(item => {
-          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-          if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity + item.quantity};
-        });
-        newInvoiceData.items.forEach(item => {
-          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-          if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity - item.quantity};
-        });
-        return tempProducts;
-      });
     }
   };
 
   const deleteInvoice = async (id: string) => {
+    const inv = invoices.find(i => i.id === id);
+    if (!inv) return;
+
+    const remainingDebt = inv.remainingAmount !== undefined ? inv.remainingAmount : (inv.total - (inv.paidAmount || 0));
+
+    // Immediate Optimistic State Update
+    setInvoices(prev => prev.filter(i => i.id !== id));
+    setCustomers(prev => prev.map(c => {
+      if (c.code === inv.customerCode) {
+        return {
+          ...c,
+          balance: c.balance + remainingDebt,
+          history: [
+            ...(c.history || []),
+            {
+              date: new Date().toISOString().split('T')[0],
+              description: `إلغاء فاتورة بيع #${id}`,
+              amount: remainingDebt
+            }
+          ]
+        };
+      }
+      return c;
+    }));
+    setTreasury(prev => prev.filter(t => t.invoiceNumber !== id));
+    setProducts(prev => {
+      let temp = [...prev];
+      inv.items.forEach(item => {
+        const idx = temp.findIndex(p => p.code === item.itemCode);
+        if (idx >= 0) temp[idx] = { ...temp[idx], quantity: temp[idx].quantity + item.quantity };
+      });
+      return temp;
+    });
+
     if (isOnline) {
       try {
         await deleteDoc(doc(db, 'invoices', id));
+
+        // Revert Customer Balance for the remaining debt of this invoice
+        const customerRef = doc(db, 'customers', inv.customerCode);
+        const customerSnap = await getDoc(customerRef);
+        if (customerSnap.exists()) {
+          const c = customerSnap.data() as Customer;
+          const newBalance = c.balance + remainingDebt;
+          const newHistory = [
+            ...(c.history || []),
+            {
+              date: new Date().toISOString().split('T')[0],
+              description: `إلغاء فاتورة بيع #${id}`,
+              amount: remainingDebt
+            }
+          ];
+          await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: newHistory }));
+        }
+
+        // Delete linked Treasury transactions
+        const qTreasury = query(collection(db, 'treasury'));
+        const snap = await getDocs(qTreasury);
+        const linkedDocs = snap.docs.filter(d => (d.data() as TreasuryTransaction).invoiceNumber === id);
+        for (const d of linkedDocs) {
+          await deleteDoc(d.ref);
+        }
+
+        // Restore Inventory items
+        for (const item of inv.items) {
+          const pRef = doc(db, 'products', item.itemCode);
+          const pSnap = await getDoc(pRef);
+          if (pSnap.exists()) {
+            const p = pSnap.data() as Product;
+            await updateDoc(pRef, { quantity: p.quantity + item.quantity });
+          }
+        }
       } catch (e) { handleFirebaseError(e); }
-    } else {
-      setInvoices(prev => prev.filter(inv => inv.id !== id));
     }
   };
 
@@ -764,35 +1067,64 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const addCollection = async (data: { customerCode: string; invoiceId?: string; amount: number; date: string; paymentMethod: PaymentMethod }) => {
-    const { customerCode, invoiceId, amount, date, paymentMethod } = data;
-    const tId = `T${Date.now()}`;
-    const description = `تحصيل من عميل (${customerCode})${invoiceId ? ` - فاتورة ${invoiceId}` : ''}`;
+  const addCollection = async (data: { 
+    customerCode: string; 
+    customerName?: string;
+    invoiceId?: string; 
+    amount: number; 
+    date: string; 
+    paymentMethod: PaymentMethod;
+    notes?: string;
+  }) => {
+    const { customerCode, invoiceId, amount, date, paymentMethod, notes } = data;
+    const tId = `T_COL_${Date.now()}`;
+    
+    // Find customer for clear name display
+    const customer = customers.find(c => c.code === customerCode);
+    const displayName = customer?.name || data.customerName || customerCode;
+
+    const descParts = [`تحصيل من عميل: ${displayName} (${customerCode})`];
+    if (invoiceId && invoiceId.trim()) descParts.push(`فاتورة #${invoiceId.trim()}`);
+    if (notes && notes.trim()) descParts.push(notes.trim());
+    const description = descParts.join(' - ');
     
     // Update Customer Balance
-    const customer = customers.find(c => c.code === customerCode);
-    if(customer) {
+    if (customer) {
         const newBalance = customer.balance + amount;
-        const newHistory = [...customer.history, { date, description: `سداد/تحصيل نقدية`, amount }];
+        const newHistory = [...(customer.history || []), { 
+          date, 
+          description: `سداد/تحصيل نقدية: ${description}`, 
+          amount 
+        }];
         await updateCustomer(customerCode, { balance: newBalance, history: newHistory });
     }
 
-    // Add to Treasury
+    // Add to Treasury (Ensure no field is undefined for Firestore compatibility)
     const transaction: TreasuryTransaction = {
         id: tId,
         date,
         credit: amount,
         debit: 0,
         balance: 0,
-        paymentMethod,
-        description,
-        invoiceNumber: invoiceId
+        paymentMethod: paymentMethod || 'CASH',
+        description
     };
+    if (invoiceId && invoiceId.trim()) {
+        transaction.invoiceNumber = invoiceId.trim();
+    }
     
+    // Optimistic update so UI reflects immediately both online and offline
+    setTreasury(prev => {
+        const withoutThis = prev.filter(t => t.id !== tId);
+        return [...withoutThis, transaction];
+    });
+
     if (isOnline) {
-        try { await setDoc(doc(db, 'treasury', tId), transaction); } catch (e) { handleFirebaseError(e); }
-    } else {
-        setTreasury(prev => [...prev, transaction]);
+        try { 
+          await setDoc(doc(db, 'treasury', tId), transaction); 
+        } catch (e) { 
+          handleFirebaseError(e); 
+        }
     }
   };
 
@@ -837,10 +1169,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           description
       };
       
+      // Optimistic update
+      setTreasury(prev => {
+          const withoutThis = prev.filter(t => t.id !== tId);
+          return [...withoutThis, transaction];
+      });
+
       if (isOnline) {
           try { await setDoc(doc(db, 'treasury', tId), transaction); } catch (e) { handleFirebaseError(e); }
-      } else {
-          setTreasury(prev => [...prev, transaction]);
       }
   };
 
@@ -886,25 +1222,57 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
      }
   };
 
-  const exportLedgerToExcel = (entityName: string, entityCode: string, history: any[], currentBalance: number, type: string) => {
-    const data = history.map(h => ({
-      'التاريخ': h.date,
-      'البيان': h.description,
-      'مدين': h.amount < 0 ? Math.abs(h.amount) : 0,
-      'دائن': h.amount > 0 ? h.amount : 0
-    }));
+  const exportLedgerToExcel = (
+    entityName: string, 
+    entityCode: string, 
+    history: any[], 
+    currentBalance: number, 
+    type: 'CUSTOMER' | 'SUPPLIER',
+    isItemized: boolean = false
+  ) => {
+    let data: any[] = [];
+    const isCustomer = type === 'CUSTOMER';
+    const colDebit = isCustomer ? 'مدين (عليه)' : 'لنا (سداد)';
+    const colCredit = isCustomer ? 'دائن (له/سداد)' : 'علينا (له)';
+
+    if (isItemized) {
+      data = history.map((r, idx) => ({
+        'م': idx + 1,
+        'التاريخ': r.date,
+        'رقم الفاتورة': r.ref || '-',
+        'الصنف / البيان': r.itemName || r.description,
+        'الكمية (كرتونة)': (r.quantity !== undefined && r.quantity !== '-') ? r.quantity : '-',
+        'السعر': (r.price !== undefined && r.price !== '-') ? r.price : '-',
+        [colDebit]: r.debit > 0 ? r.debit : 0,
+        [colCredit]: r.credit > 0 ? r.credit : 0,
+        'الرصيد التراكمي': r.runningBalance !== undefined ? r.runningBalance : '-'
+      }));
+    } else {
+      data = history.map((h, idx) => ({
+        'م': idx + 1,
+        'التاريخ': h.date,
+        'البيان': h.description,
+        [colDebit]: isCustomer ? (h.amount < 0 ? Math.abs(h.amount) : 0) : (h.amount < 0 ? Math.abs(h.amount) : 0),
+        [colCredit]: isCustomer ? (h.amount > 0 ? h.amount : 0) : (h.amount > 0 ? h.amount : 0)
+      }));
+    }
     
     data.push({
+      'م': '---',
       'التاريخ': '---',
-      'البيان': 'الرصيد الحالي النهائي',
-      'مدين': currentBalance < 0 ? Math.abs(currentBalance) : 0,
-      'دائن': currentBalance > 0 ? currentBalance : 0
+      'رقم الفاتورة': '---',
+      'الصنف / البيان': 'الرصيد الحالي النهائي',
+      'الكمية (كرتونة)': '---',
+      'السعر': '---',
+      [colDebit]: '---',
+      [colCredit]: '---',
+      'الرصيد التراكمي': currentBalance
     });
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Statement");
-    XLSX.writeFile(wb, `${type}_${entityName}_${entityCode}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "كشف الحساب");
+    XLSX.writeFile(wb, `كشف_حساب_${isCustomer ? 'عميل' : 'مورد'}_${entityName}_${entityCode}.xlsx`);
   };
 
   const exportAllCustomersToExcel = () => {
@@ -975,44 +1343,225 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // --- Printing Helper (Shared CSS) ---
   const getPrintStyle = () => `
     :root { --primary-color: #000; --border-color: #000; }
-    @page { size: A4; margin: 0; }
-    body { 
-      font-family: 'Cairo', sans-serif; 
-      padding: 20mm;
+    @page { 
+      size: A4 portrait; 
+      margin: 6mm 10mm 6mm 10mm; 
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    html, body { 
+      font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; 
+      padding: 0;
       margin: 0;
       direction: rtl; 
       background-color: #fff;
-      -webkit-print-color-adjust: exact !important;
-      print-color-adjust: exact !important;
-      font-size: 20px; 
+      font-size: 17px; 
+      color: #000;
+      line-height: 1.3;
     }
-    .invoice-container { background: white; width: 100%; margin: 0 auto; position: relative; min-height: auto; }
-    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border-color); padding-bottom: 5px; margin-bottom: 10px; }
-    .company-info h1 { margin: 0; font-size: 34px; font-weight: 900; }
-    .company-info p { margin: 0; color: #555; font-size: 20px; font-weight: bold; }
-    .invoice-title h2 { margin: 0; font-size: 30px; color: #333; text-transform: uppercase; border: 2px solid #000; padding: 2px 10px; display: inline-block; font-weight: 800; }
-    .logo-box img { max-height: 120px; max-width: 450px; border: 3px double #0ea5e9; border-radius: 10px; box-shadow: 0 3px 6px rgba(0,0,0,0.1); padding: 4px; background: white; object-fit: contain; }
-    .info-bar { display: flex; justify-content: space-between; margin-bottom: 15px; border: 1px solid #ddd; padding: 8px; border-radius: 4px; font-size: 18px; }
-    .info-item { display: flex; flex-direction: column; }
-    .info-label { font-weight: bold; color: #666; margin-bottom: 0; font-size: 16px; }
-    .info-value { font-weight: 800; font-size: 20px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-    th { background-color: #eee; color: #000; font-weight: 900; padding: 8px; border: 1px solid #000; font-size: 20px; }
-    td { padding: 8px; border: 1px solid #000; font-weight: 700; font-size: 20px; text-align: center; }
-    tr { page-break-inside: avoid; }
-    .summary-container { page-break-inside: avoid; margin-top: 20px; }
-    .footer-section { display: flex; justify-content: space-between; align-items: flex-start; }
-    .totals-box { width: 350px; border: 2px solid #000; }
-    .total-row { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid #ddd; font-size: 20px; font-weight: bold; }
-    .total-row.main { font-weight: 900; font-size: 24px; border-bottom: 2px solid #000; background-color: #f9f9f9; }
-    .total-row.final { background-color: #000; color: white; border-bottom: none; font-size: 28px; font-weight: 900; padding: 12px 10px; }
-    .signatures { margin-top: 40px; display: flex; justify-content: space-between; padding: 0 50px; font-size: 18px; font-weight: bold; }
-    .sig-box { text-align: center; width: 150px; }
-    .sig-line { border-top: 2px solid #000; margin-top: 40px; }
-    .footer-fixed { position: fixed; bottom: 0; left: 0; right: 0; width: 100%; height: 40px; background-color: white; display: flex; justify-content: center; align-items: center; font-size: 16px; font-weight: bold; z-index: 1000; }
-    .contact-info { display: flex; gap: 20px; flex-direction: row; }
-    .footer-fixed a, .footer-fixed span { text-decoration: none !important; color: #000 !important; }
-    @media print { body { background: none; } .invoice-container { border: none; padding: 0; width: 100%; max-width: 100%; } }
+    .invoice-container { 
+      background: white; 
+      width: 100%; 
+      max-width: 100%;
+      min-height: 275mm;
+      height: 275mm;
+      margin: 0 auto; 
+      position: relative; 
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-sizing: border-box;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+      page-break-after: avoid !important;
+      break-after: avoid !important;
+    }
+    .invoice-main-content {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .header { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      border-bottom: 3px solid #000; 
+      padding-bottom: 8px; 
+      margin-bottom: 10px; 
+    }
+    .company-info h1 { 
+      margin: 0; 
+      font-size: 38px; 
+      font-weight: 900; 
+      line-height: 1.1; 
+      color: #000; 
+      letter-spacing: -0.5px;
+    }
+    .company-info p { 
+      margin: 3px 0 0 0; 
+      color: #1f2937; 
+      font-size: 20px; 
+      font-weight: 800; 
+    }
+    .invoice-title h2 { 
+      margin: 0; 
+      font-size: 24px; 
+      color: #000; 
+      text-transform: uppercase; 
+      border: 3px solid #000; 
+      padding: 6px 20px; 
+      display: inline-block; 
+      font-weight: 900; 
+      border-radius: 8px; 
+      background-color: #f8fafc;
+    }
+    .logo-box img { 
+      max-height: 85px; 
+      max-width: 260px; 
+      border: 2.5px solid #0ea5e9; 
+      border-radius: 8px; 
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+      padding: 3px; 
+      background: white; 
+      object-fit: contain; 
+    }
+    .info-bar { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      margin-bottom: 10px; 
+      border: 2.5px solid #000; 
+      padding: 8px 16px; 
+      border-radius: 8px; 
+      font-size: 16px; 
+      background-color: #f8fafc; 
+    }
+    .info-item { display: flex; flex-direction: column; align-items: center; }
+    .info-label { font-weight: 800; color: #475569; margin-bottom: 2px; font-size: 14px; }
+    .info-value { font-weight: 900; font-size: 18.5px; color: #000; }
+    table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      margin-bottom: 10px; 
+      border: 2.5px solid #000; 
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    th { 
+      background-color: #e2e8f0; 
+      color: #000; 
+      font-weight: 900; 
+      padding: 8px 6px; 
+      border: 2px solid #000; 
+      font-size: 18px; 
+      text-align: center;
+    }
+    td { 
+      padding: 7px 8px; 
+      border: 1.5px solid #000; 
+      font-weight: 800; 
+      font-size: 17px; 
+      text-align: center; 
+      color: #000; 
+    }
+    .totals-section { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: flex-start; 
+      margin-top: 8px;
+      width: 100%;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    .totals-box { 
+      width: 400px; 
+      border: 3px solid #000; 
+      border-radius: 6px; 
+      overflow: hidden; 
+      background-color: #fff;
+    }
+    .total-row { 
+      display: flex; 
+      justify-content: space-between; 
+      padding: 6px 12px; 
+      border-bottom: 1.5px solid #cbd5e1; 
+      font-size: 17px; 
+      font-weight: 800; 
+    }
+    .total-row.main { 
+      font-weight: 900; 
+      font-size: 20px; 
+      border-bottom: 2.5px solid #000; 
+      background-color: #f1f5f9; 
+    }
+    .total-row.final { 
+      background-color: #000; 
+      color: #fff; 
+      border-bottom: none; 
+      font-size: 22px; 
+      font-weight: 900; 
+      padding: 8px 12px; 
+    }
+    .invoice-bottom-pinned {
+      width: 100%;
+      margin-top: auto;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    .signatures { 
+      margin-bottom: 14px; 
+      display: flex; 
+      justify-content: space-between; 
+      padding: 0 45px; 
+      font-size: 18px; 
+      font-weight: 900; 
+    }
+    .sig-box { text-align: center; width: 170px; }
+    .sig-line { border-top: 2.5px solid #000; margin-top: 30px; width: 100%; }
+    .footer-bar { 
+      padding-top: 8px; 
+      border-top: 2.5px solid #000; 
+      width: 100%; 
+      display: flex; 
+      justify-content: center; 
+      align-items: center; 
+      font-size: 16px; 
+      font-weight: 900; 
+      color: #000; 
+    }
+    .contact-info { display: flex; gap: 20px; flex-direction: row; align-items: center; }
+    .contact-info a, .contact-info span { text-decoration: none !important; color: #000 !important; }
+    @media print { 
+      html, body { 
+        height: 100% !important; 
+        max-height: 100% !important; 
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important; 
+      } 
+      .invoice-container { 
+        border: none; 
+        padding: 0; 
+        width: 100% !important; 
+        max-width: 100% !important; 
+        height: 275mm !important;
+        min-height: 275mm !important;
+        max-height: 275mm !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: space-between !important;
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+        page-break-before: avoid !important;
+        break-before: avoid !important;
+      } 
+      .invoice-bottom-pinned {
+        margin-top: auto !important;
+      }
+    }
   `;
 
   // ... (Print functions use the same logo image tag)
@@ -1031,74 +1580,83 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         <title>فاتورة مبيعات - ${invoice.id}</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
         <style>${getPrintStyle()}</style>
       </head>
       <body>
         <div class="invoice-container">
-          <div class="header">
-            <div class="company-info">
-              <h1>بورصة النجار</h1>
-              <p>لتجارة البيض</p>
+          <div class="invoice-main-content">
+            <div class="header">
+              <div class="company-info">
+                <h1>بورصة النجار</h1>
+                <p>لتجارة البيض</p>
+              </div>
+              <div class="logo-box">
+                <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
+              </div>
+              <div class="invoice-title">
+                <h2>فاتورة مبيعات</h2>
+              </div>
             </div>
-            <div class="logo-box">
-              <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
+            
+            <div class="info-bar">
+               <div class="info-item"><span class="info-label">العميل</span><span class="info-value">${invoice.customerName}</span></div>
+               <div class="info-item"><span class="info-label">كود العميل</span><span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span></div>
+               <div class="info-item"><span class="info-label">رقم الفاتورة</span><span class="info-value" style="font-family: monospace;">${invoice.id}</span></div>
+               <div class="info-item"><span class="info-label">التاريخ</span><span class="info-value">${invoice.date}</span></div>
+               <div class="info-item"><span class="info-label">الوقت</span><span class="info-value">${invoice.time}</span></div>
             </div>
-            <div class="invoice-title">
-              <h2>فاتورة مبيعات</h2>
-            </div>
-          </div>
-          
-          <div class="info-bar">
-             <div class="info-item"><span class="info-label">العميل</span><span class="info-value">${invoice.customerName}</span></div>
-             <div class="info-item"><span class="info-label">كود العميل</span><span class="info-value" style="font-family: monospace;">${invoice.customerCode}</span></div>
-             <div class="info-item"><span class="info-label">رقم الفاتورة</span><span class="info-value" style="font-family: monospace;">${invoice.id}</span></div>
-             <div class="info-item"><span class="info-label">التاريخ</span><span class="info-value">${invoice.date}</span></div>
-             <div class="info-item"><span class="info-label">الوقت</span><span class="info-value">${invoice.time}</span></div>
-          </div>
 
-          <table>
-            <thead>
-              <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 100px;">الكمية</th><th style="width: 120px;">السعر</th><th style="width: 150px;">الإجمالي</th></tr>
-            </thead>
-            <tbody>
-              ${invoice.items.map((item, index) => `
-                <tr>
-                  <td style="text-align: center;">${index + 1}</td>
-                  <td style="text-align: center; padding-right: 10px;">${item.itemName}</td>
-                  <td style="text-align: center;">${item.quantity}</td>
-                  <td style="text-align: center;">${item.price.toLocaleString()}</td>
-                  <td style="text-align: center;">${item.total.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-          
-          <div class="summary-container">
-            <div class="footer-section">
+            <table>
+              <thead>
+                <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 110px;">الكمية</th><th style="width: 130px;">السعر</th><th style="width: 160px;">الإجمالي</th></tr>
+              </thead>
+              <tbody>
+                ${invoice.items.map((item, index) => `
+                  <tr>
+                    <td style="text-align: center;">${index + 1}</td>
+                    <td style="text-align: center; padding-right: 10px;">${item.itemName}</td>
+                    <td style="text-align: center;">${item.quantity}</td>
+                    <td style="text-align: center;">${item.price.toLocaleString()}</td>
+                    <td style="text-align: center;">${item.total.toLocaleString()}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            
+            <div class="totals-section">
               <div style="flex: 1;"></div>
               <div class="totals-box">
                 <div class="total-row main"><span>الإجمالي:</span><strong>${invoice.total.toLocaleString()}</strong></div>
-                <div class="total-row" style="color: #444;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()}</span></div>
+                ${(invoice.paidAmount !== undefined && invoice.paidAmount > 0) ? `
+                  <div class="total-row" style="color: #047857; font-size: 17.5px;"><span>المدفوع (${getPaymentMethodArabicName(invoice.paymentMethod)}):</span><strong>${invoice.paidAmount.toLocaleString()}</strong></div>
+                  <div class="total-row" style="color: #b91c1c; font-size: 17.5px;"><span>المتبقي من الفاتورة:</span><strong>${((invoice.remainingAmount !== undefined) ? invoice.remainingAmount : (invoice.total - invoice.paidAmount)).toLocaleString()}</strong></div>
+                ` : `
+                  <div class="total-row" style="color: #374151; font-size: 17px;"><span>حالة السداد:</span><span>آجل بالكامل</span></div>
+                `}
+                <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()}</span></div>
                 <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${invoice.currentBalance.toLocaleString()}</span></div>
               </div>
             </div>
+          </div>
+
+          <div class="invoice-bottom-pinned">
             <div class="signatures">
               <div class="sig-box"><strong>المستلم</strong><div class="sig-line"></div></div>
               <div class="sig-box"><strong>توقيع الإدارة</strong><div class="sig-line"></div></div>
             </div>
-          </div>
-        </div>
 
-        <div class="footer-fixed">
-           <div class="contact-info">
-              <span>للمبيعات والاستفسارات:</span>
-              <span dir="ltr">01280808532</span>
-              <span>-</span>
-              <span dir="ltr">01274688088</span>
-              <span>-</span>
-              <span dir="ltr">01000285428</span>
-           </div>
+            <div class="footer-bar">
+               <div class="contact-info">
+                  <span>للمبيعات والاستفسارات:</span>
+                  <span dir="ltr">01280808532</span>
+                  <span>-</span>
+                  <span dir="ltr">01274688088</span>
+                  <span>-</span>
+                  <span dir="ltr">01000285428</span>
+               </div>
+            </div>
+          </div>
         </div>
 
         <script>
@@ -1129,75 +1687,78 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         <title>فاتورة مشتريات - ${purchase.id}</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
         <style>${getPrintStyle()}</style>
       </head>
       <body>
         <div class="invoice-container">
-          <div class="header">
-            <div class="company-info">
-              <h1>بورصة النجار</h1>
-              <p>لتجارة البيض</p>
+          <div class="invoice-main-content">
+            <div class="header">
+              <div class="company-info">
+                <h1>بورصة النجار</h1>
+                <p>لتجارة البيض</p>
+              </div>
+              <div class="logo-box">
+                <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
+              </div>
+              <div class="invoice-title">
+                <h2>فاتورة مشتريات</h2>
+              </div>
             </div>
-            <div class="logo-box">
-              <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
+            
+            <div class="info-bar">
+               <div class="info-item"><span class="info-label">المورد</span><span class="info-value">${purchase.supplierName}</span></div>
+               <div class="info-item"><span class="info-label">كود المورد</span><span class="info-value" style="font-family: monospace;">${purchase.supplierCode}</span></div>
+               <div class="info-item"><span class="info-label">رقم الفاتورة</span><span class="info-value" style="font-family: monospace;">${purchase.id}</span></div>
+               <div class="info-item"><span class="info-label">التاريخ</span><span class="info-value">${purchase.date}</span></div>
             </div>
-            <div class="invoice-title">
-              <h2>فاتورة مشتريات</h2>
-            </div>
-          </div>
-          
-          <div class="info-bar">
-             <div class="info-item"><span class="info-label">المورد</span><span class="info-value">${purchase.supplierName}</span></div>
-             <div class="info-item"><span class="info-label">كود المورد</span><span class="info-value" style="font-family: monospace;">${purchase.supplierCode}</span></div>
-             <div class="info-item"><span class="info-label">رقم الفاتورة</span><span class="info-value" style="font-family: monospace;">${purchase.id}</span></div>
-             <div class="info-item"><span class="info-label">التاريخ</span><span class="info-value">${purchase.date}</span></div>
-          </div>
 
-          <table>
-            <thead>
-              <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 100px;">الكمية</th><th style="width: 120px;">السعر</th><th style="width: 150px;">الإجمالي</th></tr>
-            </thead>
-            <tbody>
-              ${(purchase.items || []).map((item, index) => `
-                <tr>
-                  <td style="text-align: center;">${index + 1}</td>
-                  <td style="text-align: center; padding-right: 10px;">${item.itemName}</td>
-                  <td style="text-align: center;">${item.quantity}</td>
-                  <td style="text-align: center;">${item.price.toLocaleString()}</td>
-                  <td style="text-align: center;">${item.total.toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-          
-          <div class="summary-container">
-            <div class="footer-section">
+            <table>
+              <thead>
+                <tr><th style="width: 50px;">م</th><th>الصنف</th><th style="width: 110px;">الكمية</th><th style="width: 130px;">السعر</th><th style="width: 160px;">الإجمالي</th></tr>
+              </thead>
+              <tbody>
+                ${(purchase.items || []).map((item, index) => `
+                  <tr>
+                    <td style="text-align: center;">${index + 1}</td>
+                    <td style="text-align: center; padding-right: 10px;">${item.itemName}</td>
+                    <td style="text-align: center;">${item.quantity}</td>
+                    <td style="text-align: center;">${item.price.toLocaleString()}</td>
+                    <td style="text-align: center;">${item.total.toLocaleString()}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            
+            <div class="totals-section">
               <div style="flex: 1;"></div>
               <div class="totals-box">
                 <div class="total-row final"><span>الإجمالي:</span><strong>${purchase.total.toLocaleString()}</strong></div>
                 ${purchase.previousBalance !== undefined ? `
-                  <div class="total-row" style="color: #444;"><span>رصيد سابق:</span><span>${purchase.previousBalance.toLocaleString()}</span></div>
+                  <div class="total-row" style="color: #333;"><span>رصيد سابق:</span><span>${purchase.previousBalance.toLocaleString()}</span></div>
                   <div class="total-row main"><span>الرصيد الحالي:</span><span>${purchase.currentBalance?.toLocaleString()}</span></div>
                 ` : ''}
               </div>
             </div>
+          </div>
+
+          <div class="invoice-bottom-pinned">
             <div class="signatures">
               <div class="sig-box"><strong>المستلم</strong><div class="sig-line"></div></div>
               <div class="sig-box"><strong>توقيع المورد</strong><div class="sig-line"></div></div>
             </div>
-          </div>
-        </div>
 
-        <div class="footer-fixed">
-           <div class="contact-info">
-              <span>للمبيعات والاستفسارات:</span>
-              <span dir="ltr">01280808532</span>
-              <span>-</span>
-              <span dir="ltr">01274688088</span>
-              <span>-</span>
-              <span dir="ltr">01000285428</span>
-           </div>
+            <div class="footer-bar">
+               <div class="contact-info">
+                  <span>للمبيعات والاستفسارات:</span>
+                  <span dir="ltr">01280808532</span>
+                  <span>-</span>
+                  <span dir="ltr">01274688088</span>
+                  <span>-</span>
+                  <span dir="ltr">01000285428</span>
+               </div>
+            </div>
+          </div>
         </div>
 
         <script>
@@ -1213,12 +1774,163 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     printWindow.document.close();
   };
 
+  const printLedger = (options: {
+    title: string;
+    entityName: string;
+    entityCode: string;
+    entityPhone?: string;
+    type: 'CUSTOMER' | 'SUPPLIER';
+    rows: Array<{
+      num: number;
+      date: string;
+      ref?: string;
+      itemName: string;
+      quantity?: number | string;
+      price?: number | string;
+      debit: number;
+      credit: number;
+      runningBalance: number;
+    }>;
+    totalDebit: number;
+    totalCredit: number;
+    finalBalance: number;
+  }) => {
+    const printWindow = window.open('', '_blank', 'width=1100,height=850');
+    if (!printWindow) {
+      alert("يرجى السماح بالنوافذ المنبثقة (Popups) لطباعة كشف الحساب");
+      return;
+    }
+
+    const { title, entityName, entityCode, entityPhone, type, rows, totalDebit, totalCredit, finalBalance } = options;
+    const isCustomer = type === 'CUSTOMER';
+    const colDebitTitle = isCustomer ? 'مدين (عليه)' : 'لنا (سداد)';
+    const colCreditTitle = isCustomer ? 'دائن (له/سداد)' : 'علينا (له)';
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="UTF-8">
+        <title>${title} - ${entityName}</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
+        <style>
+          @page { size: A4 portrait; margin: 8mm; }
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; margin: 0; padding: 10px; color: #000; font-size: 13px; line-height: 1.25; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 6px; margin-bottom: 8px; }
+          .company-info h1 { margin: 0; font-size: 26px; font-weight: 900; line-height: 1.1; }
+          .company-info p { margin: 2px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
+          .logo-box img { max-height: 65px; max-width: 200px; object-fit: contain; }
+          .statement-title h2 { margin: 0; font-size: 18px; border: 2.5px solid #000; padding: 4px 14px; font-weight: 900; border-radius: 6px; background-color: #f8fafc; }
+          .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2px solid #000; padding: 6px 12px; border-radius: 6px; background: #f8fafc; margin-bottom: 8px; font-size: 13px; }
+          .info-item { display: flex; flex-direction: column; align-items: center; }
+          .info-label { font-weight: 800; color: #475569; font-size: 11px; }
+          .info-value { font-weight: 900; font-size: 14px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 4px; margin-bottom: 10px; }
+          th { border: 1.5px solid #000; padding: 4px 6px; background-color: #f1f5f9; font-weight: 900; font-size: 12px; text-align: center; }
+          td { border: 1px solid #cbd5e1; padding: 4px 6px; font-size: 11.5px; font-weight: 700; text-align: center; }
+          tr:nth-child(even) td { background-color: #fbfcfe; }
+          .text-right { text-align: right !important; }
+          .totals-summary { display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 14px; }
+          .totals-box { width: 340px; border: 2.5px solid #000; border-radius: 6px; overflow: hidden; }
+          .total-row { display: flex; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid #cbd5e1; font-weight: 800; font-size: 13px; }
+          .total-row.final { background: #000; color: #fff; font-size: 15px; font-weight: 900; border-bottom: none; }
+          .signatures { display: flex; justify-content: space-between; padding: 0 40px; margin-top: 15px; margin-bottom: 10px; font-size: 14px; font-weight: 900; }
+          .sig-box { text-align: center; width: 150px; }
+          .sig-line { border-top: 2px solid #000; margin-top: 25px; width: 100%; }
+          .footer-bar { border-top: 2px solid #000; padding-top: 6px; display: flex; justify-content: center; font-size: 12px; font-weight: 800; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="company-info">
+            <h1>بورصة النجار</h1>
+            <p>لتجارة البيض</p>
+          </div>
+          <div class="logo-box">
+            <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
+          </div>
+          <div class="statement-title">
+            <h2>${title}</h2>
+          </div>
+        </div>
+
+        <div class="info-bar">
+          <div class="info-item"><span class="info-label">${isCustomer ? 'العميل' : 'المورد'}</span><span class="info-value">${entityName}</span></div>
+          <div class="info-item"><span class="info-label">الكود</span><span class="info-value" style="font-family: monospace;">${entityCode}</span></div>
+          ${entityPhone ? `<div class="info-item"><span class="info-label">الهاتف</span><span class="info-value" dir="ltr">${entityPhone}</span></div>` : ''}
+          <div class="info-item"><span class="info-label">تاريخ الطباعة</span><span class="info-value">${new Date().toISOString().split('T')[0]}</span></div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 35px;">م</th>
+              <th style="width: 80px;">التاريخ</th>
+              <th style="width: 85px;">الفاتورة</th>
+              <th>الصنف / البيان</th>
+              <th style="width: 75px;">الكمية</th>
+              <th style="width: 75px;">السعر</th>
+              <th style="width: 85px;">${colDebitTitle}</th>
+              <th style="width: 85px;">${colCreditTitle}</th>
+              <th style="width: 95px;">الرصيد</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>${r.num}</td>
+                <td>${r.date}</td>
+                <td style="font-family: monospace;">${r.ref || '-'}</td>
+                <td class="text-right" style="padding-right: 8px;">${r.itemName}</td>
+                <td>${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
+                <td>${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</td>
+                <td style="color: #b91c1c; font-weight: 800;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
+                <td style="color: #15803d; font-weight: 800;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
+                <td style="font-weight: 900;" dir="ltr">${r.runningBalance.toLocaleString()}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <div class="totals-summary">
+          <div class="totals-box">
+            <div class="total-row"><span>إجمالي ${colDebitTitle}:</span><span>${totalDebit.toLocaleString()} ج.م</span></div>
+            <div class="total-row"><span>إجمالي ${colCreditTitle}:</span><span>${totalCredit.toLocaleString()} ج.م</span></div>
+            <div class="total-row final"><span>الرصيد النهائي:</span><span dir="ltr">${finalBalance.toLocaleString()} ج.م</span></div>
+          </div>
+        </div>
+
+        <div class="signatures">
+          <div class="sig-box"><strong>المستلم / الطرف الآخر</strong><div class="sig-line"></div></div>
+          <div class="sig-box"><strong>توقيع إدارة البورصة</strong><div class="sig-line"></div></div>
+        </div>
+
+        <div class="footer-bar">
+          للمبيعات والاستفسارات: 01280808532 - 01274688088 - 01000285428
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+            window.setTimeout(function(){ window.close(); }, 1200);
+          }
+        </script>
+      </body>
+      </html>
+    `;
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
       addPurchase, updatePurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
-      seedDatabase, printInvoice, printPurchaseInvoice, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
+      seedDatabase, printInvoice, printPurchaseInvoice, printLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
       currentTreasuryBalance, balances
     }}>
       {children}

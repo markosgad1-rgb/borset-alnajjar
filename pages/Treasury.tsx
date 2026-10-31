@@ -3,10 +3,12 @@ import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Wallet, Building2, Banknote, Trash2, AlertTriangle, PlusCircle, X, Save, Smartphone } from 'lucide-react';
 import { PaymentMethod } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Treasury: React.FC = () => {
   const { treasury, currentTreasuryBalance, balances, clearTreasury, currentUser, addOpeningBalance } = useERP();
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [selectedFilter, setSelectedFilter] = useState<'ALL' | PaymentMethod>('ALL');
   
   // Opening Balance Modal State
   const [showOpeningModal, setShowOpeningModal] = useState(false);
@@ -16,6 +18,21 @@ export const Treasury: React.FC = () => {
     date: new Date().toISOString().split('T')[0],
     notes: ''
   });
+
+  const sortedTransactions = [...treasury]
+    .filter(t => selectedFilter === 'ALL' || t.paymentMethod === selectedFilter || (!t.paymentMethod && selectedFilter === 'CASH'))
+    .sort((a, b) => {
+      const dateDiff = (b.date || '').localeCompare(a.date || '');
+      if (dateDiff !== 0) return dateDiff;
+      const getTimestamp = (id: string) => {
+        const match = id.match(/\d{10,}/);
+        return match ? Number(match[0]) : 0;
+      };
+      const tA = getTimestamp(a.id);
+      const tB = getTimestamp(b.id);
+      if (tA && tB && tA !== tB) return tB - tA;
+      return b.id.localeCompare(a.id);
+    });
 
   const handleClearTreasury = async () => {
     const success = await clearTreasury();
@@ -27,7 +44,7 @@ export const Treasury: React.FC = () => {
 
   const handleOpeningSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Number(openingForm.amount);
+    const amount = parseNumberFromCommas(openingForm.amount);
     if (amount <= 0) return alert("الرجاء إدخال مبلغ صحيح");
 
     await addOpeningBalance({
@@ -167,40 +184,89 @@ export const Treasury: React.FC = () => {
 
       {/* Transactions Table */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
-        <div className="p-6 border-b border-brand-50">
-          <h3 className="text-lg font-bold text-brand-800">سجل المعاملات المالية</h3>
+        <div className="p-6 border-b border-brand-50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-brand-800">سجل المعاملات المالية</h3>
+            <p className="text-xs text-gray-500 mt-1">يتم تسجيل كل إيراد وصرف فوراً (تحصيلات، تحويلات، سداد فواتير، مصروفات)</p>
+          </div>
+
+          {/* Account Filter Pills */}
+          <div className="flex flex-wrap gap-2 text-xs font-bold">
+            <button 
+              onClick={() => setSelectedFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg border transition-all ${selectedFilter === 'ALL' ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
+            >
+              الكل ({treasury.length})
+            </button>
+            <button 
+              onClick={() => setSelectedFilter('CASH')}
+              className={`px-3 py-1.5 rounded-lg border transition-all ${selectedFilter === 'CASH' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'}`}
+            >
+              خزنة كاش
+            </button>
+            <button 
+              onClick={() => setSelectedFilter('BANK_AHLY')}
+              className={`px-3 py-1.5 rounded-lg border transition-all ${selectedFilter === 'BANK_AHLY' ? 'bg-green-700 text-white border-green-700 shadow-sm' : 'bg-green-50 text-green-800 hover:bg-green-100'}`}
+            >
+              الأهلي
+            </button>
+            <button 
+              onClick={() => setSelectedFilter('BANK_MISR')}
+              className={`px-3 py-1.5 rounded-lg border transition-all ${selectedFilter === 'BANK_MISR' ? 'bg-red-700 text-white border-red-700 shadow-sm' : 'bg-red-50 text-red-800 hover:bg-red-100'}`}
+            >
+              بنك مصر
+            </button>
+            <button 
+              onClick={() => setSelectedFilter('VF_CASH_AYMAN')}
+              className={`px-3 py-1.5 rounded-lg border transition-all ${selectedFilter === 'VF_CASH_AYMAN' ? 'bg-red-700 text-white border-red-700 shadow-sm' : 'bg-red-50 text-red-800 hover:bg-red-100'}`}
+            >
+              فودافون أيمن
+            </button>
+            <button 
+              onClick={() => setSelectedFilter('VF_CASH_KYRILLOS')}
+              className={`px-3 py-1.5 rounded-lg border transition-all ${selectedFilter === 'VF_CASH_KYRILLOS' ? 'bg-red-700 text-white border-red-700 shadow-sm' : 'bg-red-50 text-red-800 hover:bg-red-100'}`}
+            >
+              فودافون كيرلس
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-right">
-            <thead className="bg-brand-50 text-brand-700">
-              <tr>
-                <th className="p-4">التاريخ</th>
-                <th className="p-4">طريقة الدفع</th>
-                <th className="p-4 w-1/3">البيان</th>
-                <th className="p-4 text-green-700">دائن (وارد)</th>
-                <th className="p-4 text-red-700">مدين (صادر)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {[...treasury].reverse().map((t) => (
-                <tr key={t.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="p-4 text-gray-600 whitespace-nowrap">{t.date}</td>
-                  <td className="p-4">
-                    <span className={`text-xs font-bold px-2 py-1 rounded border ${getMethodColor(t.paymentMethod)}`}>
-                        {getMethodLabel(t.paymentMethod)}
-                    </span>
-                  </td>
-                  <td className="p-4 text-gray-800 font-medium">{t.description}</td>
-                  <td className="p-4 font-bold text-green-600">
-                    {t.credit > 0 ? t.credit.toLocaleString() : '-'}
-                  </td>
-                  <td className="p-4 font-bold text-red-500">
-                    {t.debit > 0 ? t.debit.toLocaleString() : '-'}
-                  </td>
+          {sortedTransactions.length === 0 ? (
+            <div className="p-8 text-center text-gray-400">
+              <p>لا توجد معاملات مالية مسجلة في هذا الحساب</p>
+            </div>
+          ) : (
+            <table className="w-full text-right">
+              <thead className="bg-brand-50 text-brand-700">
+                <tr>
+                  <th className="p-4">التاريخ</th>
+                  <th className="p-4">طريقة الدفع / الحساب</th>
+                  <th className="p-4 w-1/3">البيان</th>
+                  <th className="p-4 text-green-700">دائن (وارد)</th>
+                  <th className="p-4 text-red-700">مدين (صادر)</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {sortedTransactions.map((t) => (
+                  <tr key={t.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="p-4 text-gray-600 whitespace-nowrap">{t.date}</td>
+                    <td className="p-4">
+                      <span className={`text-xs font-bold px-2 py-1 rounded border ${getMethodColor(t.paymentMethod)}`}>
+                          {getMethodLabel(t.paymentMethod)}
+                      </span>
+                    </td>
+                    <td className="p-4 text-gray-800 font-medium">{t.description}</td>
+                    <td className="p-4 font-bold text-green-600">
+                      {t.credit > 0 ? `${t.credit.toLocaleString()} ج.م` : '-'}
+                    </td>
+                    <td className="p-4 font-bold text-red-500">
+                      {t.debit > 0 ? `${t.debit.toLocaleString()} ج.م` : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
@@ -217,10 +283,20 @@ export const Treasury: React.FC = () => {
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-1">المبلغ</label>
                   <input 
-                    type="number" min="1" step="0.01" required 
-                    className="w-full p-2 border rounded focus:ring-2 focus:ring-brand-500 outline-none"
-                    value={openingForm.amount} onChange={e => setOpeningForm({...openingForm, amount: e.target.value})}
+                    type="text" 
+                    dir="ltr" 
+                    required 
+                    placeholder="0"
+                    className="w-full p-2 border rounded focus:ring-2 focus:ring-brand-500 outline-none font-bold text-lg text-center font-mono"
+                    value={openingForm.amount} 
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setOpeningForm({...openingForm, amount: val}))}
                   />
+                  {parseNumberFromCommas(openingForm.amount) > 0 && (
+                    <p className="text-xs font-bold text-blue-700 bg-blue-50 p-1.5 rounded mt-1 flex justify-between">
+                      <span>المبلغ:</span>
+                      <span dir="ltr">{parseNumberFromCommas(openingForm.amount).toLocaleString()} ج.م</span>
+                    </p>
+                  )}
                 </div>
                 
                 <div>

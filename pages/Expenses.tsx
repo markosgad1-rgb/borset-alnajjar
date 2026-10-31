@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Receipt, Save } from 'lucide-react';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Expenses: React.FC = () => {
   const { addExpense, treasury } = useERP();
@@ -15,7 +16,7 @@ export const Expenses: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Number(formData.amount);
+    const amount = parseNumberFromCommas(formData.amount);
 
     if (!formData.name) {
       alert('الرجاء إدخال اسم الشخص/الجهة');
@@ -77,17 +78,22 @@ export const Expenses: React.FC = () => {
                 <label className="block text-sm font-bold text-gray-700 text-red-700">قيمة المصروف</label>
                 <div className="relative">
                   <input 
-                    type="number" 
+                    type="text" 
+                    dir="ltr"
                     required
-                    min="1"
-                    step="0.01"
-                    className="w-full p-3 border-2 border-red-100 rounded-lg focus:ring-2 focus:ring-red-500 outline-none font-bold text-xl"
-                    placeholder="0.00"
+                    className="w-full p-3 border-2 border-red-100 rounded-lg focus:ring-2 focus:ring-red-500 outline-none font-bold text-xl text-center font-mono"
+                    placeholder="0"
                     value={formData.amount}
-                    onChange={e => setFormData({...formData, amount: e.target.value})}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, amount: val}))}
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
+                {parseNumberFromCommas(formData.amount) > 0 && (
+                  <p className="text-xs font-bold text-red-700 bg-red-50 p-2 rounded border border-red-100 flex justify-between">
+                    <span>المبلغ المحدد:</span>
+                    <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
+                  </p>
+                )}
                 <p className="text-xs text-gray-500">سيتم خصم المبلغ مباشرة من الخزنة النقدية (الكاش)</p>
               </div>
 

@@ -1,11 +1,12 @@
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Banknote, Save, Search, CheckCircle, AlertCircle, Building2, Wallet, Smartphone } from 'lucide-react';
+import { Banknote, Save, Search, CheckCircle, AlertCircle, Building2, Wallet, Smartphone, History, ArrowDownLeft } from 'lucide-react';
 import { PaymentMethod } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Collections: React.FC = () => {
-  const { customers, addCollection } = useERP();
+  const { customers, addCollection, treasury } = useERP();
   
   const [formData, setFormData] = useState({
     invoiceId: '',
@@ -13,7 +14,8 @@ export const Collections: React.FC = () => {
     customerName: '',
     amount: '',
     date: new Date().toISOString().split('T')[0],
-    paymentMethod: 'CASH' as PaymentMethod
+    paymentMethod: 'CASH' as PaymentMethod,
+    notes: ''
   });
 
   const [customerBalance, setCustomerBalance] = useState<number | null>(null);
@@ -50,9 +52,9 @@ export const Collections: React.FC = () => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Number(formData.amount);
+    const amount = parseNumberFromCommas(formData.amount);
 
     if (!formData.customerCode || !formData.customerName) {
       alert('الرجاء اختيار العميل');
@@ -63,25 +65,32 @@ export const Collections: React.FC = () => {
       return;
     }
 
-    addCollection({
-      customerCode: formData.customerCode,
-      invoiceId: formData.invoiceId || undefined,
-      amount: amount,
-      date: formData.date,
-      paymentMethod: formData.paymentMethod
-    });
+    try {
+      await addCollection({
+        customerCode: formData.customerCode,
+        customerName: formData.customerName,
+        invoiceId: formData.invoiceId?.trim() || undefined,
+        amount: amount,
+        date: formData.date,
+        paymentMethod: formData.paymentMethod,
+        notes: formData.notes?.trim() || undefined
+      });
 
-    // Reset Form
-    setFormData({
-      invoiceId: '',
-      customerCode: '',
-      customerName: '',
-      amount: '',
-      date: new Date().toISOString().split('T')[0],
-      paymentMethod: 'CASH'
-    });
-    setCustomerBalance(null);
-    alert('تم حفظ عملية التحصيل بنجاح، وتحديث رصيد العميل والخزنة.');
+      // Reset Form
+      setFormData({
+        invoiceId: '',
+        customerCode: '',
+        customerName: '',
+        amount: '',
+        date: new Date().toISOString().split('T')[0],
+        paymentMethod: 'CASH',
+        notes: ''
+      });
+      setCustomerBalance(null);
+      alert('تم حفظ عملية التحصيل بنجاح وتحديث رصيد العميل والخزنة فوراً.');
+    } catch (err: any) {
+      alert('حدث خطأ أثناء حفظ التحصيل: ' + (err?.message || err));
+    }
   };
 
   return (
@@ -263,20 +272,36 @@ export const Collections: React.FC = () => {
               </div>
 
               <div className="md:col-span-2 space-y-2">
+                <label className="block text-sm font-bold text-gray-700">ملاحظات / بيان إضافي</label>
+                <input 
+                  type="text"
+                  className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none"
+                  placeholder="أضف أي ملاحظات أو تفاصيل حول التحصيل..."
+                  value={formData.notes}
+                  onChange={e => setFormData({...formData, notes: e.target.value})}
+                />
+              </div>
+
+              <div className="md:col-span-2 space-y-2">
                 <label className="block text-sm font-bold text-gray-700 text-emerald-700">المبلغ المحصل (تم دفع)</label>
                 <div className="relative">
                   <input 
-                    type="number"
+                    type="text"
+                    dir="ltr"
                     required
-                    min="1"
-                    step="0.01"
-                    className="w-full p-3 border-2 border-emerald-100 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-xl"
-                    placeholder="0.00"
+                    className="w-full p-3 border-2 border-emerald-100 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-xl text-center font-mono"
+                    placeholder="0"
                     value={formData.amount}
-                    onChange={e => setFormData({...formData, amount: e.target.value})}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, amount: val}))}
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
+                {parseNumberFromCommas(formData.amount) > 0 && (
+                  <p className="text-xs font-bold text-emerald-700 bg-emerald-50 p-2 rounded border border-emerald-100 flex justify-between">
+                    <span>المبلغ المحدد:</span>
+                    <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
+                  </p>
+                )}
               </div>
             </div>
 
@@ -295,15 +320,75 @@ export const Collections: React.FC = () => {
         </div>
       </div>
 
+      {/* Recent Collections Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
+        <div className="p-4 bg-brand-50 border-b border-brand-100 flex items-center justify-between">
+          <h3 className="font-bold text-brand-900 flex items-center gap-2">
+            <History size={20} className="text-brand-600" />
+            سجل عمليات التحصيل الأخيرة المسجلة بالخزنة
+          </h3>
+          <span className="text-xs text-brand-700 font-bold">
+            محدثة تلقائياً مع الخزنة
+          </span>
+        </div>
+        
+        {treasury.filter(t => t.id.startsWith('T_COL_') || t.description.includes('تحصيل من عميل')).length === 0 ? (
+          <div className="p-8 text-center text-gray-400">
+            <p>لا توجد عمليات تحصيل مسجلة بعد</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-gray-50 text-gray-600 font-bold">
+                <tr>
+                  <th className="p-3">التاريخ</th>
+                  <th className="p-3">الحساب / الخزنة</th>
+                  <th className="p-3">البيان</th>
+                  <th className="p-3 text-emerald-700 font-bold">المبلغ المسدد</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {treasury
+                  .filter(t => t.id.startsWith('T_COL_') || t.description.includes('تحصيل من عميل'))
+                  .slice(-8)
+                  .reverse()
+                  .map((t) => (
+                    <tr key={t.id} className="hover:bg-brand-50/40 transition-colors">
+                      <td className="p-3 text-gray-600 whitespace-nowrap">{t.date}</td>
+                      <td className="p-3">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                          t.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 text-green-700 border-green-200' :
+                          t.paymentMethod === 'BANK_MISR' ? 'bg-red-50 text-red-700 border-red-200' :
+                          t.paymentMethod === 'VF_CASH_AYMAN' || t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-100 text-red-800 border-red-200' :
+                          'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}>
+                          {t.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' :
+                           t.paymentMethod === 'BANK_MISR' ? 'بنك مصر' :
+                           t.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون أيمن' :
+                           t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كيرلس' : 'خزنة كاش'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-gray-800 font-medium">{t.description}</td>
+                      <td className="p-3 font-bold text-emerald-600">
+                        {t.credit > 0 ? `${t.credit.toLocaleString()} ج.م` : '-'}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Hint Section */}
-      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-500 text-sm">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-500 text-sm">
         <div className="flex items-start gap-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
           <CheckCircle size={16} className="mt-1 text-blue-500"/>
-          <p>عند الحفظ، سيتم إضافة المبلغ المدخل إلى <strong>الحساب المختار (خزنة/بنك)</strong> كإيراد.</p>
+          <p>عند الحفظ، سيتم إضافة المبلغ المدخل إلى <strong>الحساب المختار (خزنة/بنك)</strong> كإيراد ويسمع فوراً في الخزنة.</p>
         </div>
         <div className="flex items-start gap-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
           <CheckCircle size={16} className="mt-1 text-blue-500"/>
-          <p>سيتم خصم المبلغ من مديونية العميل (أو إضافته لرصيده) وتحديث كشف الحساب تلقائياً.</p>
+          <p>سيتم خصم المبلغ من مديونية العميل وتحديث كشف الحساب تلقائياً.</p>
         </div>
       </div>
     </div>

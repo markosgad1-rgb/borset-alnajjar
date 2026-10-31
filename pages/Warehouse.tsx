@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Search, Edit2, Save, X, Trash2, Check, PlusCircle, PackagePlus } from 'lucide-react';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Warehouse: React.FC = () => {
   const { products, addProduct, updateProduct, deleteProduct, currentUser } = useERP();
@@ -9,12 +10,18 @@ export const Warehouse: React.FC = () => {
   
   // Add New Product State
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newProduct, setNewProduct] = useState({
+  const [newProduct, setNewProduct] = useState<{
+    code: string;
+    name: string;
+    quantity: number | '';
+    avgCost: string;
+    price: string;
+  }>({
     code: '',
     name: '',
-    quantity: 0,
-    avgCost: 0,
-    price: 0
+    quantity: '',
+    avgCost: '',
+    price: ''
   });
 
   // Edit State
@@ -40,15 +47,19 @@ export const Warehouse: React.FC = () => {
       return;
     }
 
+    const qty = typeof newProduct.quantity === 'number' ? newProduct.quantity : 0;
+    const cost = parseNumberFromCommas(newProduct.avgCost);
+    const salePrice = parseNumberFromCommas(newProduct.price);
+
     addProduct({
       code: newProduct.code,
       name: newProduct.name,
-      quantity: Number(newProduct.quantity),
-      avgCost: Number(newProduct.avgCost),
-      price: Number(newProduct.price)
+      quantity: qty,
+      avgCost: cost,
+      price: salePrice
     });
 
-    setNewProduct({ code: '', name: '', quantity: 0, avgCost: 0, price: 0 });
+    setNewProduct({ code: '', name: '', quantity: '', avgCost: '', price: '' });
     setShowAddForm(false);
     alert("تم إضافة الصنف بنجاح");
   };
@@ -136,24 +147,32 @@ export const Warehouse: React.FC = () => {
               <label className="block text-xs font-bold text-gray-600 mb-1">الكمية الافتتاحية</label>
               <input 
                 type="number" min="0"
-                className="w-full p-2 border rounded focus:outline-none focus:border-brand-500 font-bold text-blue-600"
-                value={newProduct.quantity} onChange={e => setNewProduct({...newProduct, quantity: Number(e.target.value)})}
+                placeholder="0"
+                className="w-full p-2 border rounded focus:outline-none focus:border-brand-500 font-bold text-blue-600 text-center"
+                value={newProduct.quantity} 
+                onChange={e => setNewProduct({...newProduct, quantity: e.target.value === '' ? '' : Number(e.target.value)})}
               />
             </div>
             <div className="md:col-span-1">
               <label className="block text-xs font-bold text-gray-600 mb-1">سعر التكلفة (متوسط)</label>
               <input 
-                type="number" min="0" step="0.01"
-                className="w-full p-2 border rounded focus:outline-none focus:border-brand-500"
-                value={newProduct.avgCost} onChange={e => setNewProduct({...newProduct, avgCost: Number(e.target.value)})}
+                type="text" 
+                dir="ltr"
+                placeholder="0"
+                className="w-full p-2 border rounded focus:outline-none focus:border-brand-500 font-mono font-bold text-center"
+                value={newProduct.avgCost} 
+                onChange={e => handleNumericChangeWithCommas(e.target.value, val => setNewProduct({...newProduct, avgCost: val}))}
               />
             </div>
             <div className="md:col-span-1">
               <label className="block text-xs font-bold text-gray-600 mb-1">سعر البيع</label>
               <input 
-                type="number" min="0" step="0.01"
-                className="w-full p-2 border rounded focus:outline-none focus:border-brand-500 font-bold text-green-600"
-                value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: Number(e.target.value)})}
+                type="text" 
+                dir="ltr"
+                placeholder="0"
+                className="w-full p-2 border rounded focus:outline-none focus:border-brand-500 font-mono font-bold text-green-600 text-center"
+                value={newProduct.price} 
+                onChange={e => handleNumericChangeWithCommas(e.target.value, val => setNewProduct({...newProduct, price: val}))}
               />
             </div>
             <div className="md:col-span-6 flex justify-end mt-2">

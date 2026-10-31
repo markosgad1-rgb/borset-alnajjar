@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock } from 'lucide-react';
-import { InvoiceItem, SalesInvoice } from '../types';
+import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet } from 'lucide-react';
+import { InvoiceItem, SalesInvoice, PaymentMethod } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, printInvoice } = useERP();
@@ -15,16 +16,21 @@ export const Sales: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
   const [customerBalance, setCustomerBalance] = useState(0);
   
+  // Payment State
+  const [paymentType, setPaymentType] = useState<'CREDIT' | 'CASH_FULL' | 'PARTIAL'>('CREDIT');
+  const [paidAmountInput, setPaidAmountInput] = useState<string>('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+
   // Cart Item State
   const [currentItem, setCurrentItem] = useState<{
     itemCode: string;
     itemName: string;
-    quantity: number;
+    quantity: number | '';
     price: number;
   }>({
     itemCode: '',
     itemName: '',
-    quantity: 1,
+    quantity: '',
     price: 0
   });
 
@@ -56,7 +62,20 @@ export const Sales: React.FC = () => {
 
   // Calculated Totals
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
-  const newBalance = customerBalance - cartTotal;
+
+  // Effective Paid Amount (Supports comma separators like 10,000 / 100,000)
+  const parsedPaid = parseNumberFromCommas(paidAmountInput);
+
+  const currentPaid = paymentType === 'CREDIT' 
+    ? 0 
+    : paymentType === 'CASH_FULL' 
+      ? cartTotal 
+      : Math.min(Math.max(0, parsedPaid), cartTotal);
+
+  const remainingAmount = Math.max(0, cartTotal - currentPaid);
+  // Negative customer balance = owes us debt
+  // Net balance after invoice: previousBalance - remainingAmount
+  const newBalance = customerBalance - remainingAmount;
 
   // Handle Customer Selection (By Code)
   const handleCustomerCode = (code: string) => {
@@ -81,7 +100,7 @@ export const Sales: React.FC = () => {
     }
   };
 
-  // Handle Item Selection
+  // Handle Item Selection - Quantity starts completely empty as requested
   const handleItemCode = (code: string) => {
     const product = products.find(p => p.code === code);
     if (product) {
@@ -89,11 +108,12 @@ export const Sales: React.FC = () => {
         ...prev,
         itemCode: code,
         itemName: product.name,
+        quantity: '', // Empty field so the user can immediately type their quantity
         price: product.price
       }));
       setCurrentStock(product.quantity);
     } else {
-      setCurrentItem(prev => ({ ...prev, itemCode: code, itemName: '', price: 0 }));
+      setCurrentItem(prev => ({ ...prev, itemCode: code, itemName: '', quantity: '', price: 0 }));
       setCurrentStock(0);
     }
   };
@@ -104,19 +124,22 @@ export const Sales: React.FC = () => {
       alert("الرجاء اختيار صنف صحيح");
       return;
     }
-    if (currentItem.quantity <= 0) {
-      alert("الكمية يجب أن تكون أكبر من صفر");
+    const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : 0;
+    if (qty <= 0) {
+      alert("الرجاء إدخال الكمية المطلوبة");
       return;
     }
-    if (currentItem.quantity > currentStock) {
+    if (qty > currentStock) {
       alert("الكمية المطلوبة غير متوفرة بالمخزن");
       return;
     }
 
+    const itemPrice = typeof currentItem.price === 'number' ? currentItem.price : 0;
+
     const existingItemIndex = cartItems.findIndex(i => i.itemCode === currentItem.itemCode);
     if (existingItemIndex >= 0) {
       const updatedCart = [...cartItems];
-      updatedCart[existingItemIndex].quantity += currentItem.quantity;
+      updatedCart[existingItemIndex].quantity += qty;
       updatedCart[existingItemIndex].total = updatedCart[existingItemIndex].quantity * updatedCart[existingItemIndex].price;
       
       if (updatedCart[existingItemIndex].quantity > currentStock) {
@@ -127,12 +150,16 @@ export const Sales: React.FC = () => {
       setCartItems(updatedCart);
     } else {
       setCartItems(prev => [...prev, {
-        ...currentItem,
-        total: currentItem.quantity * currentItem.price
+        itemCode: currentItem.itemCode,
+        itemName: currentItem.itemName,
+        quantity: qty,
+        price: itemPrice,
+        total: qty * itemPrice
       }]);
     }
 
-    setCurrentItem({ itemCode: '', itemName: '', quantity: 1, price: 0 });
+    // Reset item with empty quantity
+    setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: 0 });
     setCurrentStock(0);
   };
 
@@ -140,7 +167,12 @@ export const Sales: React.FC = () => {
     setCartItems(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleSaveInvoice = () => {
+  const handleQuickPercent = (percent: number) => {
+    const amt = Math.round((cartTotal * percent) / 100);
+    setPaidAmountInput(formatWithCommas(amt.toString()));
+  };
+
+  const handleSaveInvoice = async () => {
     if (cartItems.length === 0) {
       alert("الفاتورة فارغة! أضف أصناف أولاً.");
       return;
@@ -158,7 +190,12 @@ export const Sales: React.FC = () => {
       return;
     }
 
-    const invoiceData = {
+    if (paymentType === 'PARTIAL' && parsedPaid > cartTotal) {
+      alert("المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة!");
+      return;
+    }
+
+    const invoiceData: any = {
       id: invoiceId,
       date: invoiceDate,
       time: invoiceTime,
@@ -166,9 +203,12 @@ export const Sales: React.FC = () => {
       customerName,
       items: cartItems,
       total: cartTotal,
+      paidAmount: currentPaid,
+      remainingAmount: remainingAmount,
+      ...(currentPaid > 0 && paymentMethod ? { paymentMethod } : {})
     };
 
-    addInvoice(invoiceData);
+    await addInvoice(invoiceData);
     
     // Store for printing/modal
     setLastSavedInvoice({
@@ -183,7 +223,9 @@ export const Sales: React.FC = () => {
     setCustomerCode('');
     setCustomerName('');
     setCustomerBalance(0);
-    setCurrentItem({ itemCode: '', itemName: '', quantity: 1, price: 0 });
+    setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: 0 });
+    setPaymentType('CREDIT');
+    setPaidAmountInput('0');
   };
 
   const handleCloseModal = () => {
@@ -312,8 +354,12 @@ export const Sales: React.FC = () => {
                 className="w-full p-2 border rounded font-bold text-center text-sm" 
                 min="1" 
                 max={currentStock}
+                placeholder="الكمية"
                 value={currentItem.quantity}
-                onChange={e => setCurrentItem({...currentItem, quantity: Number(e.target.value)})}
+                onChange={e => {
+                  const val = e.target.value;
+                  setCurrentItem({...currentItem, quantity: val === '' ? '' : Number(val)});
+                }}
               />
             </div>
             
@@ -339,7 +385,7 @@ export const Sales: React.FC = () => {
         </div>
 
         {/* 3. Cart Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-brand-100 flex-1 flex flex-col min-h-[200px]">
+        <div className="bg-white rounded-xl shadow-sm border border-brand-100 flex-1 flex flex-col min-h-[180px]">
           <div className="p-3 bg-brand-50 border-b border-brand-100 font-bold text-brand-800 flex justify-between items-center text-sm">
             <span className="flex items-center gap-2"><ShoppingCart size={18}/> الأصناف</span>
             <span className="bg-white px-2 py-0.5 rounded-full text-xs border">{cartItems.length}</span>
@@ -385,29 +431,197 @@ export const Sales: React.FC = () => {
             </table>
           </div>
         </div>
+
+        {/* 4. Payment & Settlement Section */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-brand-100 space-y-4">
+          <div className="flex justify-between items-center border-b pb-2">
+            <h3 className="font-bold text-brand-800 flex items-center gap-2 text-sm md:text-base">
+              <CreditCard size={18} className="text-brand-600" /> طريقة السداد والدفع
+            </h3>
+            <span className="text-xs text-gray-500">
+              {paymentType === 'CREDIT' ? 'الفاتورة بالكامل على الحساب (آجل)' : paymentType === 'CASH_FULL' ? 'سداد كامل الفاتورة نقداً' : 'سداد دفعة نقدية والباقي آجل'}
+            </span>
+          </div>
+
+          {/* Payment Type Selection */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPaymentType('CREDIT');
+                setPaidAmountInput('0');
+              }}
+              className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 ${
+                paymentType === 'CREDIT'
+                  ? 'border-red-500 bg-red-50 text-red-700 shadow-sm font-bold ring-2 ring-red-300'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <FileText size={18} />
+              <span className="text-xs md:text-sm font-bold">آجل بالكامل</span>
+              <span className="text-[10px] text-gray-500">0 ج.م مدفوع</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setPaymentType('PARTIAL');
+                if (parsedPaid === 0 || parsedPaid >= cartTotal) {
+                  setPaidAmountInput(Math.round(cartTotal * 0.5).toString());
+                }
+              }}
+              className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 ${
+                paymentType === 'PARTIAL'
+                  ? 'border-amber-500 bg-amber-50 text-amber-800 shadow-sm font-bold ring-2 ring-amber-300'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Coins size={18} />
+              <span className="text-xs md:text-sm font-bold">دفع جزء (دفعة)</span>
+              <span className="text-[10px] text-gray-500">جزء نقداً والباقي آجل</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setPaymentType('CASH_FULL');
+                setPaidAmountInput(cartTotal.toString());
+              }}
+              className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 ${
+                paymentType === 'CASH_FULL'
+                  ? 'border-emerald-600 bg-emerald-50 text-emerald-800 shadow-sm font-bold ring-2 ring-emerald-300'
+                  : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Banknote size={18} />
+              <span className="text-xs md:text-sm font-bold">نقداً بالكامل</span>
+              <span className="text-[10px] text-gray-500">{cartTotal.toLocaleString()} ج.م</span>
+            </button>
+          </div>
+
+          {/* If Partial Payment Selected: Show Amount Input and Quick Buttons */}
+          {paymentType === 'PARTIAL' && (
+            <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200 space-y-3 animate-fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                  <Coins size={14} /> حدد المبلغ المدفوع نقداً:
+                </label>
+                <div className="flex items-center gap-1 text-xs">
+                  <span className="text-gray-500">المتبقي على الحساب:</span>
+                  <span className="font-bold font-mono text-red-600 text-sm">
+                    {remainingAmount.toLocaleString()} ج.م
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={paidAmountInput}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, setPaidAmountInput)}
+                    placeholder="اكتب المبلغ (مثال: 50,000)"
+                    className="w-full p-2.5 pl-12 border border-amber-300 rounded-lg font-bold font-mono text-base md:text-lg text-gray-800 focus:ring-2 focus:ring-amber-500 outline-none bg-white text-center"
+                  />
+                  <span className="absolute left-3 top-3 text-xs text-gray-400 font-bold">ج.م</span>
+                </div>
+
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickPercent(25)}
+                    className="px-2.5 py-2 text-xs font-bold bg-white border border-amber-200 text-amber-800 rounded-lg hover:bg-amber-100 transition-colors"
+                  >
+                    25%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickPercent(50)}
+                    className="px-2.5 py-2 text-xs font-bold bg-white border border-amber-200 text-amber-800 rounded-lg hover:bg-amber-100 transition-colors"
+                  >
+                    50%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickPercent(75)}
+                    className="px-2.5 py-2 text-xs font-bold bg-white border border-amber-200 text-amber-800 rounded-lg hover:bg-amber-100 transition-colors"
+                  >
+                    75%
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Treasury / Account Destination Selector (Shown when currentPaid > 0) */}
+          {currentPaid > 0 && (
+            <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200 space-y-2 animate-fade-in">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-emerald-900 flex items-center gap-1">
+                  <Wallet size={15} /> إيداع المبلغ المدفوع ({currentPaid.toLocaleString()} ج.م) في:
+                </label>
+                <span className="text-[11px] font-bold text-emerald-700 bg-white px-2 py-0.5 rounded-full border border-emerald-200">
+                  سيتم إضافة المبلغ للخزنة
+                </span>
+              </div>
+
+              <select
+                value={paymentMethod}
+                onChange={e => setPaymentMethod(e.target.value as PaymentMethod)}
+                className="w-full p-2.5 border border-emerald-300 rounded-lg text-sm font-bold text-gray-800 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="CASH">خزنة رئيسية (كاش نقدية)</option>
+                <option value="BANK_MISR">بنك مصر</option>
+                <option value="BANK_AHLY">البنك الأهلي</option>
+                <option value="VF_CASH_AYMAN">فودافون كاش - أيمن</option>
+                <option value="VF_CASH_KYRILLOS">فودافون كاش - كيرلس</option>
+              </select>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 4. Desktop Sidebar (Summary & History) - Hidden on Mobile */}
       <div className="hidden xl:col-span-1 xl:flex flex-col gap-6">
         {/* Totals Card */}
-        <div className="bg-gray-900 text-white p-6 rounded-xl shadow-lg space-y-4">
-           <h3 className="text-lg font-bold border-b border-gray-700 pb-2 text-gray-300">ملخص الحساب</h3>
+        <div className="bg-gray-900 text-white p-6 rounded-xl shadow-lg space-y-3">
+           <h3 className="text-lg font-bold border-b border-gray-700 pb-2 text-gray-300">ملخص الفاتورة والحساب</h3>
+           
            <div className="flex justify-between items-center text-gray-300">
              <span>إجمالي الفاتورة</span>
-             <span className="font-mono text-xl text-white">{cartTotal.toLocaleString()}</span>
+             <span className="font-mono text-xl text-white">{cartTotal.toLocaleString()} ج.م</span>
            </div>
+
+           <div className="flex justify-between items-center text-emerald-400 bg-gray-800/80 px-3 py-2 rounded-lg border border-emerald-900/50">
+             <span className="text-sm font-bold flex items-center gap-1">
+               <CheckCircle size={14}/> المدفوع الآن:
+             </span>
+             <span className="font-mono font-bold text-lg text-emerald-300">
+               {currentPaid.toLocaleString()} ج.م
+             </span>
+           </div>
+
+           <div className="flex justify-between items-center text-amber-400 bg-gray-800/80 px-3 py-2 rounded-lg border border-amber-900/50">
+             <span className="text-sm font-bold">المتبقي من الفاتورة:</span>
+             <span className="font-mono font-bold text-lg text-amber-300">
+               {remainingAmount.toLocaleString()} ج.م
+             </span>
+           </div>
+
            <div className="pt-2 space-y-2 border-t border-gray-700 mt-2">
              <div className="flex justify-between items-center text-sm text-gray-400">
-               <span>رصيد سابق</span>
+               <span>رصيد سابق للعميل</span>
                <span className="font-mono" dir="ltr">{customerBalance.toLocaleString()}</span>
              </div>
-             <div className="flex justify-between items-center bg-gray-800 p-2 rounded mt-2">
-               <span className="font-bold text-yellow-400">الرصيد المتوقع</span>
+             <div className="flex justify-between items-center bg-gray-800 p-2.5 rounded-lg mt-2">
+               <span className="font-bold text-yellow-400">الرصيد النهائي للعميل</span>
                <span className={`font-mono text-2xl font-bold ${newBalance < 0 ? 'text-red-400' : 'text-green-400'}`} dir="ltr">
                  {newBalance.toLocaleString()}
                </span>
              </div>
            </div>
+
            <button 
             onClick={handleSaveInvoice}
             className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-4 rounded-lg shadow-lg transition-all transform hover:scale-[1.02] flex justify-center items-center gap-2 mt-4"
@@ -446,14 +660,20 @@ export const Sales: React.FC = () => {
       <div className="xl:hidden fixed bottom-0 left-0 right-0 bg-gray-900 text-white p-3 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
         <div className="flex justify-between items-center gap-3">
           <div className="flex flex-col">
-             <span className="text-xs text-gray-400">الإجمالي النهائي</span>
-             <span className="font-bold text-xl font-mono text-yellow-400">{cartTotal.toLocaleString()} ج.م</span>
+             <div className="flex items-center gap-2">
+               <span className="text-xs text-gray-400">الإجمالي:</span>
+               <span className="font-bold text-base font-mono text-yellow-400">{cartTotal.toLocaleString()}</span>
+             </div>
+             <div className="flex items-center gap-2 text-xs">
+               <span className="text-emerald-400">مدفوع: {currentPaid.toLocaleString()}</span>
+               <span className="text-red-400">| متبقي: {remainingAmount.toLocaleString()}</span>
+             </div>
           </div>
           <button 
             onClick={handleSaveInvoice}
             className="flex-1 bg-brand-600 active:bg-brand-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg flex justify-center items-center gap-2"
           >
-             <Save size={20} /> حفظ
+             <Save size={20} /> حفظ الفاتورة
           </button>
         </div>
       </div>
@@ -461,14 +681,37 @@ export const Sales: React.FC = () => {
       {/* Success Modal */}
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-8 text-center animate-fade-in">
-            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6 text-center animate-fade-in">
+            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-3">
               <CheckCircle size={32} />
             </div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">تم حفظ الفاتورة بنجاح!</h2>
-            <p className="text-gray-500 mb-6">تم تسجيل الفاتورة كأجل وتحديث رصيد العميل والمخزن.</p>
+            <h2 className="text-2xl font-bold text-gray-800 mb-1">تم حفظ الفاتورة بنجاح!</h2>
+            <div className="bg-gray-50 border rounded-xl p-3 my-4 text-sm text-right space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-gray-500">رقم الفاتورة:</span>
+                <span className="font-bold font-mono">{lastSavedInvoice?.id}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">إجمالي الفاتورة:</span>
+                <span className="font-bold font-mono">{lastSavedInvoice?.total.toLocaleString()} ج.م</span>
+              </div>
+              <div className="flex justify-between text-emerald-700 font-bold">
+                <span>المبلغ المدفوع:</span>
+                <span className="font-mono">{(lastSavedInvoice?.paidAmount || 0).toLocaleString()} ج.م</span>
+              </div>
+              <div className="flex justify-between text-red-600 font-bold">
+                <span>المتبقي على الحساب (آجل):</span>
+                <span className="font-mono">{(lastSavedInvoice?.remainingAmount || 0).toLocaleString()} ج.م</span>
+              </div>
+              <div className="flex justify-between border-t pt-1.5 text-xs">
+                <span className="text-gray-600">رصيد العميل النهائي:</span>
+                <span className={`font-bold font-mono ${(lastSavedInvoice?.currentBalance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
+                  {(lastSavedInvoice?.currentBalance || 0).toLocaleString()} ج.م
+                </span>
+              </div>
+            </div>
             
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3">
               <button 
                 onClick={handlePrint}
                 className="bg-gray-800 hover:bg-gray-900 text-white py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"

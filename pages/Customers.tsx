@@ -1,14 +1,15 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, RefreshCcw, AlertTriangle, Eye, Printer } from 'lucide-react';
+import { UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, RefreshCcw, AlertTriangle, Eye, Printer, Layers, Package } from 'lucide-react';
 import { SalesInvoice } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Customers: React.FC = () => {
-  const { customers, addCustomer, updateCustomer, deleteCustomer, exportLedgerToExcel, exportAllCustomersToExcel, clearLedger, currentUser, invoices, printInvoice } = useERP();
+  const { customers, addCustomer, updateCustomer, deleteCustomer, exportLedgerToExcel, exportAllCustomersToExcel, clearLedger, currentUser, invoices, printInvoice, printLedger } = useERP();
   
   // State for form data
-  const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: 0 });
+  const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: '' });
   
   // State to track selection and editing mode
   const [selectedCustomerCode, setSelectedCustomerCode] = useState<string | null>(null);
@@ -48,13 +49,14 @@ export const Customers: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.code && formData.name) {
+      const parsedBal = parseNumberFromCommas(formData.balance);
       if (isEditing && editingOldCode) {
         // Update existing customer (pass old code to find, and full new data including potential new code)
         updateCustomer(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
           phone: formData.phone,
-          balance: Number(formData.balance) 
+          balance: parsedBal 
         });
         handleCancelEdit();
       } else {
@@ -63,9 +65,15 @@ export const Customers: React.FC = () => {
           alert('هذا الكود مستخدم بالفعل لعميل آخر!');
           return;
         }
-        addCustomer({ ...formData, history: [] });
+        addCustomer({ 
+          code: formData.code,
+          name: formData.name,
+          phone: formData.phone,
+          balance: parsedBal,
+          history: [] 
+        });
         // Reset form (code will auto-regenerate via useEffect)
-        setFormData({ code: '', name: '', phone: '', balance: 0 });
+        setFormData({ code: '', name: '', phone: '', balance: '' });
       }
     }
   };
@@ -78,7 +86,7 @@ export const Customers: React.FC = () => {
       code: customer.code,
       name: customer.name,
       phone: customer.phone || '',
-      balance: customer.balance
+      balance: formatWithCommas(customer.balance)
     });
     // Scroll to top to see the form
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -87,7 +95,7 @@ export const Customers: React.FC = () => {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', phone: '', balance: 0 });
+    setFormData({ code: generateNextCode(), name: '', phone: '', balance: '' });
   };
 
   const handleDelete = async (e: React.MouseEvent, code: string) => {
@@ -122,7 +130,96 @@ export const Customers: React.FC = () => {
     }
   };
 
+  // View Mode for Ledger: 'ITEMS' (default, itemized breakdown) or 'INVOICES' (summary)
+  const [viewMode, setViewMode] = useState<'ITEMS' | 'INVOICES'>('ITEMS');
+
   const selectedCustomer = customers.find(c => c.code === selectedCustomerCode);
+
+  // Compute itemized ledger rows by expanding sales invoices into their egg items
+  const itemizedRows = useMemo(() => {
+    if (!selectedCustomer || !selectedCustomer.history) return [];
+
+    const rows: Array<{
+      num: number;
+      date: string;
+      ref: string;
+      itemName: string;
+      quantity: number | string;
+      price: number | string;
+      debit: number; // مدين (عليه)
+      credit: number; // دائن (له/سداد)
+      runningBalance: number;
+      isInvoiceItem: boolean;
+      invoiceId?: string;
+    }> = [];
+
+    let running = 0;
+    let counter = 1;
+
+    for (const h of selectedCustomer.history) {
+      // Check if description is an invoice sale (e.g., "فاتورة بيع #N005")
+      const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
+      const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+      const invId = invMatch ? invMatch[1] : null;
+      const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+
+      if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
+        // Expand invoice into individual items
+        invoice.items.forEach((item) => {
+          const itemTotal = item.quantity * item.price;
+          running -= itemTotal;
+          rows.push({
+            num: counter++,
+            date: invoice.date || h.date,
+            ref: invoice.id,
+            itemName: item.itemName,
+            quantity: item.quantity,
+            price: item.price,
+            debit: itemTotal,
+            credit: 0,
+            runningBalance: running,
+            isInvoiceItem: true,
+            invoiceId: invoice.id
+          });
+        });
+      } else {
+        // Regular non-invoice entry or payment or adjustment
+        const isDebit = h.amount < 0;
+        const debit = isDebit ? Math.abs(h.amount) : 0;
+        const credit = !isDebit ? h.amount : 0;
+        running += h.amount;
+
+        rows.push({
+          num: counter++,
+          date: h.date,
+          ref: invId || '-',
+          itemName: h.description,
+          quantity: '-',
+          price: '-',
+          debit,
+          credit,
+          runningBalance: running,
+          isInvoiceItem: false,
+          invoiceId: invId || undefined
+        });
+      }
+    }
+
+    return rows;
+  }, [selectedCustomer, invoices]);
+
+  // Aggregate itemized statistics
+  const totalEggQuantity = useMemo(() => {
+    return itemizedRows.reduce((sum, r) => typeof r.quantity === 'number' ? sum + r.quantity : sum, 0);
+  }, [itemizedRows]);
+
+  const totalItemizedDebit = useMemo(() => {
+    return itemizedRows.reduce((sum, r) => sum + r.debit, 0);
+  }, [itemizedRows]);
+
+  const totalItemizedCredit = useMemo(() => {
+    return itemizedRows.reduce((sum, r) => sum + r.credit, 0);
+  }, [itemizedRows]);
 
   return (
     <div className="space-y-8">
@@ -182,10 +279,12 @@ export const Customers: React.FC = () => {
              <label className="block text-sm text-gray-600 mb-1">{isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}</label>
              <div className="relative">
                <input 
-                type="number" 
-                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+                type="text" 
+                dir="ltr"
+                placeholder="0"
+                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500 font-mono font-bold text-center"
                 value={formData.balance}
-                onChange={e => setFormData({...formData, balance: Number(e.target.value)})}
+                onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), true)}
               />
               <span className="absolute left-2 top-2 text-xs text-gray-400 pointer-events-none">
                 (سالب = عليه)
@@ -308,21 +407,73 @@ export const Customers: React.FC = () => {
                       )}
                     </div>
                   </div>
-                  <div className="text-left bg-brand-50 p-3 rounded-lg">
-                    <p className="text-sm text-gray-500">الرصيد الحالي</p>
-                    {/* Red if negative (Owes us), Green if positive (We owe him) */}
-                    <p className={`text-2xl font-bold ${selectedCustomer.balance < 0 ? 'text-red-600' : selectedCustomer.balance > 0 ? 'text-green-600' : 'text-gray-800'}`} dir="ltr">
+                  <div className="text-left bg-brand-50 p-3 rounded-lg border border-brand-200">
+                    <p className="text-sm text-gray-500 font-bold">الرصيد الحالي</p>
+                    <p className={`text-2xl font-black ${selectedCustomer.balance < 0 ? 'text-red-600' : selectedCustomer.balance > 0 ? 'text-green-600' : 'text-gray-800'}`} dir="ltr">
                       {selectedCustomer.balance.toLocaleString()} ج.م
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {selectedCustomer.balance < 0 ? '(مدين - عليه لنا)' : selectedCustomer.balance > 0 ? '(دائن - له رصيد)' : 'متزن'}
                     </p>
                   </div>
                 </div>
 
+                {/* Summary Strip for Itemized Activity */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center shadow-xs">
+                    <span className="text-xs text-gray-500 block mb-1 font-bold">إجمالي كراتين البيض</span>
+                    <span className="text-lg font-black text-amber-700 flex items-center justify-center gap-1">
+                      <Package size={16} /> {totalEggQuantity.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center shadow-xs">
+                    <span className="text-xs text-gray-500 block mb-1 font-bold">إجمالي المسحوبات (مدين)</span>
+                    <span className="text-lg font-black text-red-600" dir="ltr">
+                      {totalItemizedDebit.toLocaleString()} ج.م
+                    </span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center shadow-xs">
+                    <span className="text-xs text-gray-500 block mb-1 font-bold">إجمالي المدفوعات (دائن)</span>
+                    <span className="text-lg font-black text-green-600" dir="ltr">
+                      {totalItemizedCredit.toLocaleString()} ج.م
+                    </span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-center shadow-xs">
+                    <span className="text-xs text-gray-500 block mb-1 font-bold">صافي المديونية</span>
+                    <span className={`text-lg font-black ${selectedCustomer.balance < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
+                      {selectedCustomer.balance.toLocaleString()} ج.م
+                    </span>
+                  </div>
+                </div>
+
                 <div>
-                  <div className="flex flex-col sm:flex-row justify-between items-center mb-3 gap-3">
-                    <h4 className="font-bold text-gray-700 flex items-center gap-2">
-                      <FileText size={18} /> كشف حساب تفصيلي
-                    </h4>
-                    <div className="flex gap-2 items-center">
+                  {/* Ledger Actions & View Mode Toggle */}
+                  <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-3 gap-3">
+                    <div className="flex items-center gap-3">
+                      <h4 className="font-bold text-gray-800 flex items-center gap-2">
+                        <FileText size={18} className="text-brand-600" /> كشف الحساب
+                      </h4>
+
+                      {/* View Mode Toggle Switch */}
+                      <div className="inline-flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('ITEMS')}
+                          className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 ${viewMode === 'ITEMS' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-brand-700'}`}
+                        >
+                          <Package size={14} /> تفصيلي بالأصناف
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('INVOICES')}
+                          className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 ${viewMode === 'INVOICES' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-brand-700'}`}
+                        >
+                          <Layers size={14} /> مجمع بالفواتير
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 items-center">
                         {currentUser?.permissions.canDeleteLedgers && (
                           showClearLedgerConfirm ? (
                              <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
@@ -344,71 +495,195 @@ export const Customers: React.FC = () => {
                           ) : (
                             <button 
                               onClick={() => setShowClearLedgerConfirm(true)}
-                              className="flex items-center gap-2 bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-sm font-bold hover:bg-red-200 transition-colors shadow-sm"
+                              className="flex items-center gap-1.5 bg-red-50 text-red-600 px-2.5 py-1.5 rounded-lg text-xs font-bold hover:bg-red-100 transition-colors border border-red-200"
                             >
-                              <Trash2 size={16} /> حذف كشف الحساب (تصفير)
+                              <Trash2 size={14} /> تصفير الحساب
                             </button>
                           )
                         )}
+
+                        <button 
+                          onClick={() => {
+                            printLedger({
+                              title: viewMode === 'ITEMS' ? 'كشف حساب عميل تفصيلي بالأصناف' : 'كشف حساب عميل مجمع بالفواتير',
+                              entityName: selectedCustomer.name,
+                              entityCode: selectedCustomer.code,
+                              entityPhone: selectedCustomer.phone,
+                              type: 'CUSTOMER',
+                              rows: viewMode === 'ITEMS' ? itemizedRows : selectedCustomer.history.map((h, i) => ({
+                                num: i + 1,
+                                date: h.date,
+                                ref: h.description.match(/#([A-Za-z0-9-]+)/)?.[1] || '-',
+                                itemName: h.description,
+                                quantity: '-',
+                                price: '-',
+                                debit: h.amount < 0 ? Math.abs(h.amount) : 0,
+                                credit: h.amount > 0 ? h.amount : 0,
+                                runningBalance: selectedCustomer.balance
+                              })),
+                              totalDebit: totalItemizedDebit,
+                              totalCredit: totalItemizedCredit,
+                              finalBalance: selectedCustomer.balance
+                            });
+                          }}
+                          className="flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors shadow-xs"
+                        >
+                          <Printer size={15} /> طباعة كشف الحساب
+                        </button>
                         
                         <button 
-                          onClick={() => exportLedgerToExcel(selectedCustomer.name, selectedCustomer.code, selectedCustomer.history, selectedCustomer.balance, 'CUSTOMER')}
-                          className="flex items-center gap-2 bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-green-700 transition-colors shadow-sm"
+                          onClick={() => exportLedgerToExcel(
+                            selectedCustomer.name, 
+                            selectedCustomer.code, 
+                            viewMode === 'ITEMS' ? itemizedRows : selectedCustomer.history, 
+                            selectedCustomer.balance, 
+                            'CUSTOMER',
+                            viewMode === 'ITEMS'
+                          )}
+                          className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors shadow-xs"
                         >
-                          <Download size={16} /> تصدير (Excel)
+                          <Download size={15} /> تصدير (Excel)
                         </button>
                     </div>
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-right">
-                      <thead className="bg-gray-50 text-gray-600 border-y">
-                        <tr>
-                          <th className="p-3">التاريخ</th>
-                          <th className="p-3 w-1/3">البيان</th>
-                          <th className="p-3 text-red-600">مدين (عليه)</th>
-                          <th className="p-3 text-green-600">دائن (له)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {selectedCustomer.history.length === 0 ? (
-                          <tr><td colSpan={4} className="p-4 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
-                        ) : (
-                          selectedCustomer.history.map((h, idx) => {
-                            const isDebit = h.amount < 0;
-                            const isCredit = h.amount > 0;
-                            // Check if description contains an invoice ID
-                            const invoiceIdMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-                            const hasInvoiceId = !!invoiceIdMatch;
 
-                            return (
-                              <tr key={idx}>
-                                <td className="p-3 text-gray-600 whitespace-nowrap">{h.date}</td>
-                                <td className="p-3 font-medium text-gray-800">
-                                  <div className="flex justify-between items-center">
-                                    <span>{h.description}</span>
-                                    {hasInvoiceId && (
-                                      <button 
-                                        onClick={() => handleViewInvoiceDetails(h.description)}
-                                        className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 p-1 rounded transition-colors"
-                                        title="عرض تفاصيل الفاتورة"
-                                      >
-                                        <Eye size={16} />
-                                      </button>
-                                    )}
-                                  </div>
+                  {/* Table Display */}
+                  <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                    {viewMode === 'ITEMS' ? (
+                      /* ITEM-BY-ITEM VIEW */
+                      <table className="w-full text-xs text-right">
+                        <thead className="bg-gray-100 text-gray-700 border-b border-gray-200 font-bold">
+                          <tr>
+                            <th className="p-2.5 text-center w-10">م</th>
+                            <th className="p-2.5 text-center w-24">التاريخ</th>
+                            <th className="p-2.5 text-center w-24">الفاتورة</th>
+                            <th className="p-2.5">الصنف / البيان</th>
+                            <th className="p-2.5 text-center w-24">الكمية (كرتونة)</th>
+                            <th className="p-2.5 text-center w-24">السعر</th>
+                            <th className="p-2.5 text-center w-28 text-red-700">مدين (عليه)</th>
+                            <th className="p-2.5 text-center w-28 text-green-700">دائن (له/سداد)</th>
+                            <th className="p-2.5 text-center w-28">الرصيد</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {itemizedRows.length === 0 ? (
+                            <tr><td colSpan={9} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة لهذا العميل</td></tr>
+                          ) : (
+                            itemizedRows.map((r, idx) => (
+                              <tr key={idx} className={r.isInvoiceItem ? 'hover:bg-amber-50/40' : 'bg-gray-50/60 hover:bg-gray-100/60'}>
+                                <td className="p-2.5 text-center text-gray-500 font-mono">{r.num}</td>
+                                <td className="p-2.5 text-center text-gray-600 whitespace-nowrap font-mono">{r.date}</td>
+                                <td className="p-2.5 text-center font-mono">
+                                  {r.invoiceId ? (
+                                    <button 
+                                      onClick={() => handleViewInvoiceDetails(`فاتورة #${r.invoiceId}`)}
+                                      className="text-brand-700 hover:text-brand-900 bg-brand-50 hover:bg-brand-100 px-1.5 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
+                                      title="عرض الفاتورة"
+                                    >
+                                      #{r.invoiceId}
+                                      <Eye size={12} />
+                                    </button>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
                                 </td>
-                                <td className="p-3 font-bold text-red-600 bg-red-50/30">
-                                  {isDebit ? Math.abs(h.amount).toLocaleString() : '-'}
+                                <td className="p-2.5 font-bold text-gray-800">
+                                  {r.isInvoiceItem ? (
+                                    <span className="inline-flex items-center gap-1.5">
+                                      <span className="w-2 h-2 rounded-full bg-amber-500 inline-block"></span>
+                                      {r.itemName}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-700 font-medium">{r.itemName}</span>
+                                  )}
                                 </td>
-                                <td className="p-3 font-bold text-green-600 bg-green-50/30">
-                                  {isCredit ? h.amount.toLocaleString() : '-'}
+                                <td className="p-2.5 text-center font-bold text-gray-800">
+                                  {typeof r.quantity === 'number' ? (
+                                    <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-mono font-bold">
+                                      {r.quantity.toLocaleString()}
+                                    </span>
+                                  ) : '-'}
+                                </td>
+                                <td className="p-2.5 text-center font-mono text-gray-700">
+                                  {typeof r.price === 'number' ? `${r.price.toLocaleString()} ج.م` : '-'}
+                                </td>
+                                <td className="p-2.5 text-center font-bold text-red-600 bg-red-50/30 font-mono">
+                                  {r.debit > 0 ? r.debit.toLocaleString() : '-'}
+                                </td>
+                                <td className="p-2.5 text-center font-bold text-green-600 bg-green-50/30 font-mono">
+                                  {r.credit > 0 ? r.credit.toLocaleString() : '-'}
+                                </td>
+                                <td className="p-2.5 text-center font-black font-mono text-gray-900" dir="ltr">
+                                  {r.runningBalance.toLocaleString()}
                                 </td>
                               </tr>
-                            );
-                          })
+                            ))
+                          )}
+                        </tbody>
+                        {itemizedRows.length > 0 && (
+                          <tfoot className="bg-gray-100 font-bold border-t-2 border-gray-300">
+                            <tr>
+                              <td colSpan={4} className="p-3 text-right font-black">الإجماليات:</td>
+                              <td className="p-3 text-center text-amber-800 font-black font-mono">{totalEggQuantity.toLocaleString()} كرتونة</td>
+                              <td className="p-3 text-center text-gray-400">-</td>
+                              <td className="p-3 text-center text-red-700 font-black font-mono">{totalItemizedDebit.toLocaleString()}</td>
+                              <td className="p-3 text-center text-green-700 font-black font-mono">{totalItemizedCredit.toLocaleString()}</td>
+                              <td className="p-3 text-center font-black font-mono text-brand-900" dir="ltr">{selectedCustomer.balance.toLocaleString()}</td>
+                            </tr>
+                          </tfoot>
                         )}
-                      </tbody>
-                    </table>
+                      </table>
+                    ) : (
+                      /* SUMMARY INVOICE VIEW */
+                      <table className="w-full text-sm text-right">
+                        <thead className="bg-gray-50 text-gray-600 border-y">
+                          <tr>
+                            <th className="p-3">التاريخ</th>
+                            <th className="p-3 w-1/3">البيان</th>
+                            <th className="p-3 text-red-600">مدين (عليه)</th>
+                            <th className="p-3 text-green-600">دائن (له)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {selectedCustomer.history.length === 0 ? (
+                            <tr><td colSpan={4} className="p-4 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
+                          ) : (
+                            selectedCustomer.history.map((h, idx) => {
+                              const isDebit = h.amount < 0;
+                              const isCredit = h.amount > 0;
+                              const invoiceIdMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+                              const hasInvoiceId = !!invoiceIdMatch;
+
+                              return (
+                                <tr key={idx}>
+                                  <td className="p-3 text-gray-600 whitespace-nowrap">{h.date}</td>
+                                  <td className="p-3 font-medium text-gray-800">
+                                    <div className="flex justify-between items-center">
+                                      <span>{h.description}</span>
+                                      {hasInvoiceId && (
+                                        <button 
+                                          onClick={() => handleViewInvoiceDetails(h.description)}
+                                          className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 p-1 rounded transition-colors"
+                                          title="عرض تفاصيل الفاتورة"
+                                        >
+                                          <Eye size={16} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="p-3 font-bold text-red-600 bg-red-50/30">
+                                    {isDebit ? Math.abs(h.amount).toLocaleString() : '-'}
+                                  </td>
+                                  <td className="p-3 font-bold text-green-600 bg-green-50/30">
+                                    {isCredit ? h.amount.toLocaleString() : '-'}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 </div>
              </div>
@@ -470,14 +745,32 @@ export const Customers: React.FC = () => {
               </div>
 
               <div className="flex justify-end">
-                <div className="bg-gray-900 text-white p-4 rounded-xl w-full md:w-1/2">
+                <div className="bg-gray-900 text-white p-5 rounded-xl w-full md:w-3/5 space-y-2">
                   <div className="flex justify-between items-center text-lg font-bold">
-                     <span>إجمالي الفاتورة</span>
+                     <span>إجمالي الفاتورة:</span>
                      <span>{viewInvoice.total.toLocaleString()} ج.م</span>
                   </div>
+                  {(viewInvoice.paidAmount !== undefined && viewInvoice.paidAmount > 0) ? (
+                    <>
+                      <div className="flex justify-between items-center text-sm text-emerald-400 bg-gray-800 px-3 py-1.5 rounded">
+                         <span>المسدد نقداً ({viewInvoice.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' : viewInvoice.paymentMethod === 'BANK_MISR' ? 'بنك مصر' : viewInvoice.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون كاش أيمن' : viewInvoice.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كاش كيرلس' : 'خزنة (كاش)'}):</span>
+                         <span className="font-bold font-mono">{viewInvoice.paidAmount.toLocaleString()} ج.م</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm text-amber-400 bg-gray-800 px-3 py-1.5 rounded">
+                         <span>المتبقي على الحساب (آجل):</span>
+                         <span className="font-bold font-mono">
+                           {((viewInvoice.remainingAmount !== undefined ? viewInvoice.remainingAmount : (viewInvoice.total - viewInvoice.paidAmount))).toLocaleString()} ج.م
+                         </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-xs text-red-400 bg-gray-800 px-3 py-1 rounded">
+                      حالة السداد: آجل بالكامل على الحساب
+                    </div>
+                  )}
                   <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-400 flex justify-between">
                      <span>رصيد سابق: {viewInvoice.previousBalance.toLocaleString()}</span>
-                     <span>رصيد بعد الفاتورة: {viewInvoice.currentBalance.toLocaleString()}</span>
+                     <span className="font-bold text-gray-200">رصيد بعد الفاتورة: {viewInvoice.currentBalance.toLocaleString()}</span>
                   </div>
                 </div>
               </div>

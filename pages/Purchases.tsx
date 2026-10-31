@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck } from 'lucide-react';
 import { InvoiceItem, Purchase } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Purchases: React.FC = () => {
   const { addPurchase, updatePurchase, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice } = useERP();
@@ -14,11 +15,16 @@ export const Purchases: React.FC = () => {
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
 
   // Current Item State
-  const [currentItem, setCurrentItem] = useState({
+  const [currentItem, setCurrentItem] = useState<{
+    itemCode: string;
+    itemName: string;
+    quantity: number | '';
+    price: number | '';
+  }>({
     itemCode: '',
     itemName: '',
-    quantity: 0,
-    price: 0,
+    quantity: '',
+    price: '',
   });
 
   // Cart State
@@ -29,7 +35,7 @@ export const Purchases: React.FC = () => {
   const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
   const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
-  const [editNewItem, setEditNewItem] = useState<{ code: string, quantity: number, price: number }>({ code: '', quantity: 1, price: 0 });
+  const [editNewItem, setEditNewItem] = useState<{ code: string, quantity: number | '', price: number | '' }>({ code: '', quantity: '', price: '' });
 
   const currentSupplier = suppliers.find(s => s.code === supplierCode);
 
@@ -66,22 +72,31 @@ export const Purchases: React.FC = () => {
   const handleProductCodeChange = (code: string) => {
     const product = products.find(p => p.code === code);
     if (product) {
-      setCurrentItem(prev => ({ ...prev, itemCode: code, itemName: product.name }));
+      setCurrentItem(prev => ({ 
+        ...prev, 
+        itemCode: code, 
+        itemName: product.name,
+        quantity: '',
+        price: product.cost ? product.cost : ''
+      }));
     } else {
-      setCurrentItem(prev => ({ ...prev, itemCode: code }));
+      setCurrentItem(prev => ({ ...prev, itemCode: code, quantity: '', price: '' }));
     }
   };
 
   const addToCart = () => {
+    const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : 0;
+    const price = typeof currentItem.price === 'number' ? currentItem.price : parseNumberFromCommas(currentItem.price);
+
     if (!currentItem.itemCode || !currentItem.itemName) {
       alert("الرجاء اختيار صنف صحيح");
       return;
     }
-    if (currentItem.quantity <= 0) {
+    if (qty <= 0) {
       alert("الكمية يجب أن تكون أكبر من صفر");
       return;
     }
-    if (currentItem.price <= 0) {
+    if (price <= 0) {
       alert("الرجاء إدخال سعر الشراء");
       return;
     }
@@ -89,17 +104,20 @@ export const Purchases: React.FC = () => {
     const existingItemIndex = cartItems.findIndex(i => i.itemCode === currentItem.itemCode);
     if (existingItemIndex >= 0) {
       const updatedCart = [...cartItems];
-      updatedCart[existingItemIndex].quantity += currentItem.quantity;
+      updatedCart[existingItemIndex].quantity += qty;
       updatedCart[existingItemIndex].total = updatedCart[existingItemIndex].quantity * updatedCart[existingItemIndex].price;
       setCartItems(updatedCart);
     } else {
       setCartItems(prev => [...prev, {
-        ...currentItem,
-        total: currentItem.quantity * currentItem.price
+        itemCode: currentItem.itemCode,
+        itemName: currentItem.itemName,
+        quantity: qty,
+        price: price,
+        total: qty * price
       }]);
     }
 
-    setCurrentItem(prev => ({ ...prev, itemCode: '', itemName: '', quantity: 0, price: 0 }));
+    setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
   };
 
   const removeFromCart = (index: number) => {
@@ -300,18 +318,21 @@ export const Purchases: React.FC = () => {
             <label className="block text-xs font-bold text-gray-500 mb-1">الكمية</label>
             <input 
               type="number" min="1"
+              placeholder="الكمية"
               className="w-full p-2 border rounded text-sm text-center font-bold text-blue-600"
-              value={currentItem.quantity || ''}
-              onChange={e => setCurrentItem({...currentItem, quantity: Number(e.target.value)})}
+              value={currentItem.quantity}
+              onChange={e => setCurrentItem({...currentItem, quantity: e.target.value === '' ? '' : Number(e.target.value)})}
             />
           </div>
           <div className="md:col-span-2">
             <label className="block text-xs font-bold text-gray-500 mb-1">سعر الشراء</label>
             <input 
-              type="number" min="0" step="0.01"
-              className="w-full p-2 border rounded text-sm text-center"
-              value={currentItem.price || ''}
-              onChange={e => setCurrentItem({...currentItem, price: Number(e.target.value)})}
+              type="text"
+              dir="ltr"
+              placeholder="السعر (مثال: 115)"
+              className="w-full p-2 border rounded text-sm text-center font-mono font-bold"
+              value={currentItem.price === '' ? '' : formatWithCommas(currentItem.price)}
+              onChange={e => handleNumericChangeWithCommas(e.target.value, val => setCurrentItem({...currentItem, price: val}))}
             />
           </div>
           <div className="md:col-span-2">

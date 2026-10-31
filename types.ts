@@ -75,6 +75,9 @@ export interface SalesInvoice {
   customerName: string;
   items: InvoiceItem[];
   total: number;
+  paidAmount?: number; // Amount paid immediately
+  remainingAmount?: number; // Total - paidAmount
+  paymentMethod?: PaymentMethod; // Treasury account where payment was deposited
   previousBalance: number;
   currentBalance: number;
 }

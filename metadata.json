@@ -1,5 +1,6 @@
 {
-  "name": "Copy of Copy of بورصة النجار - ERP",
+  "name": "بورصة النجار - ERP",
   "description": "نظام إدارة موارد المؤسسة لشركة بورصة النجار لتجارة البيض، يشمل المشتريات، المخازن، المبيعات، العملاء، والخزنة.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": []
 }

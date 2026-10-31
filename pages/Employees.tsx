@@ -2,11 +2,12 @@
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
 import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle, Check, X } from 'lucide-react';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Employees: React.FC = () => {
   const { employees, addEmployee, updateEmployee, deleteEmployee, clearLedger, currentUser } = useERP();
   
-  const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: 0, balance: 0 });
+  const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: '', balance: '' });
   const [selectedEmployeeCode, setSelectedEmployeeCode] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
@@ -35,13 +36,15 @@ export const Employees: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.code && formData.name) {
+      const parsedSalary = parseNumberFromCommas(formData.salary);
+      const parsedBalance = parseNumberFromCommas(formData.balance);
       if (isEditing && editingOldCode) {
         updateEmployee(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
           role: formData.role,
-          salary: Number(formData.salary),
-          balance: Number(formData.balance) 
+          salary: parsedSalary,
+          balance: parsedBalance 
         });
         handleCancelEdit();
       } else {
@@ -49,8 +52,15 @@ export const Employees: React.FC = () => {
           alert('هذا الكود مستخدم بالفعل لموظف آخر!');
           return;
         }
-        addEmployee({ ...formData, salary: Number(formData.salary), balance: Number(formData.balance), history: [] });
-        setFormData({ code: '', name: '', role: '', salary: 0, balance: 0 });
+        addEmployee({ 
+          code: formData.code,
+          name: formData.name,
+          role: formData.role,
+          salary: parsedSalary, 
+          balance: parsedBalance, 
+          history: [] 
+        });
+        setFormData({ code: '', name: '', role: '', salary: '', balance: '' });
       }
     }
   };
@@ -63,8 +73,8 @@ export const Employees: React.FC = () => {
       code: employee.code,
       name: employee.name,
       role: employee.role,
-      salary: employee.salary,
-      balance: employee.balance
+      salary: formatWithCommas(employee.salary),
+      balance: formatWithCommas(employee.balance)
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -72,7 +82,7 @@ export const Employees: React.FC = () => {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', role: '', salary: 0, balance: 0 });
+    setFormData({ code: generateNextCode(), name: '', role: '', salary: '', balance: '' });
   };
 
   const handleDelete = async (e: React.MouseEvent, code: string) => {
@@ -140,20 +150,24 @@ export const Employees: React.FC = () => {
           <div className="md:col-span-1">
             <label className="block text-sm text-gray-600 mb-1">الراتب الشهري</label>
             <input 
-              type="number" 
-              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+              type="text" 
+              dir="ltr"
+              placeholder="0"
+              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500 font-mono font-bold text-center"
               value={formData.salary}
-              onChange={e => setFormData({...formData, salary: Number(e.target.value)})}
+              onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, salary: val}))}
             />
           </div>
           <div className="md:col-span-2">
              <label className="block text-sm text-gray-600 mb-1">{isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}</label>
              <div className="relative">
                <input 
-                type="number" 
-                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+                type="text" 
+                dir="ltr"
+                placeholder="0"
+                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500 font-mono font-bold text-center"
                 value={formData.balance}
-                onChange={e => setFormData({...formData, balance: Number(e.target.value)})}
+                onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), true)}
               />
               <span className="absolute left-2 top-2 text-xs text-gray-400 pointer-events-none">
                 (سالب = مستحقات له)

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { ArrowRightLeft, Save, Search, AlertCircle, ArrowDownCircle, ArrowUpCircle, Users, Truck, Briefcase, Wallet, Building2, Smartphone } from 'lucide-react';
 import { PaymentMethod } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Transfers: React.FC = () => {
   const { customers, suppliers, employees, addTransfer } = useERP();
@@ -66,7 +67,7 @@ export const Transfers: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Number(formData.amount);
+    const amount = parseNumberFromCommas(formData.amount);
 
     if (!formData.code || !formData.name) {
       alert('الرجاء اختيار الاسم');
@@ -343,17 +344,22 @@ export const Transfers: React.FC = () => {
                 <label className="block text-sm font-bold text-gray-700">قيمة التحويل</label>
                 <div className="relative">
                   <input 
-                    type="number"
+                    type="text"
+                    dir="ltr"
                     required
-                    min="1"
-                    step="0.01"
-                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-bold text-xl"
-                    placeholder="0.00"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-bold text-xl text-center font-mono"
+                    placeholder="0"
                     value={formData.amount}
-                    onChange={e => setFormData({...formData, amount: e.target.value})}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, amount: val}))}
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
+                {parseNumberFromCommas(formData.amount) > 0 && (
+                  <p className="text-xs font-bold text-purple-700 bg-purple-50 p-2 rounded border border-purple-100 flex justify-between">
+                    <span>المبلغ المحدد:</span>
+                    <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
