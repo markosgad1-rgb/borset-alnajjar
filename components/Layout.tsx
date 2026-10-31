@@ -168,26 +168,28 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto p-2 md:p-4 h-screen">
-        <header className="mb-3 hidden md:flex justify-between items-center bg-white py-2 px-4 rounded-xl shadow-xs border border-brand-100">
-           <div className="flex items-center gap-4">
-              <h2 className="text-xl font-bold text-brand-900">
-                {navItems.find(i => i.id === activePage)?.label}
-              </h2>
-              {!isOnline && (
-                <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-amber-200">
-                   <WifiOff size={12}/> وضع غير متصل (Offline)
-                </span>
-              )}
-              {isOnline && (
-                <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-green-200">
-                   <Wifi size={12}/> متصل (Online)
-                </span>
-              )}
-           </div>
-           <div className="text-brand-600 text-sm font-medium">
-             {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-           </div>
-        </header>
+        {activePage !== 'customers' && activePage !== 'suppliers' && (
+          <header className="mb-3 hidden md:flex justify-between items-center bg-white py-2 px-4 rounded-xl shadow-xs border border-brand-100">
+             <div className="flex items-center gap-4">
+                <h2 className="text-xl font-bold text-brand-900">
+                  {navItems.find(i => i.id === activePage)?.label}
+                </h2>
+                {!isOnline && (
+                  <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-amber-200">
+                     <WifiOff size={12}/> وضع غير متصل (Offline)
+                  </span>
+                )}
+                {isOnline && (
+                  <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-green-200">
+                     <Wifi size={12}/> متصل (Online)
+                  </span>
+                )}
+             </div>
+             <div className="text-brand-600 text-sm font-medium">
+               {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+             </div>
+          </header>
+        )}
         <div className="animate-fade-in pb-20 md:pb-0">
           {children}
         </div>

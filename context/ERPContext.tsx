@@ -141,6 +141,7 @@ interface ERPContextType {
     totalDebit: number;
     totalCredit: number;
     finalBalance: number;
+    dateRange?: { from?: string; to?: string };
   }) => void;
   exportLedgerToExcel: (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER', isItemized?: boolean) => void;
   exportAllCustomersToExcel: () => void;
@@ -1800,6 +1801,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     totalDebit: number;
     totalCredit: number;
     finalBalance: number;
+    dateRange?: { from?: string; to?: string };
   }) => {
     const printWindow = window.open('', '_blank', 'width=1100,height=850');
     if (!printWindow) {
@@ -1807,7 +1809,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return;
     }
 
-    const { title, entityName, entityCode, entityPhone, type, rows, totalDebit, totalCredit, finalBalance } = options;
+    const { title, entityName, entityCode, entityPhone, type, rows, totalDebit, totalCredit, finalBalance, dateRange } = options;
     const isCustomer = type === 'CUSTOMER';
     const colDebitTitle = isCustomer ? 'مدين (عليه)' : 'لنا (سداد)';
     const colCreditTitle = isCustomer ? 'دائن (له/سداد)' : 'علينا (له)';
@@ -1830,7 +1832,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           .company-info p { margin: 2px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
           .logo-box img { max-height: 65px; max-width: 200px; object-fit: contain; }
           .statement-title h2 { margin: 0; font-size: 18px; border: 2.5px solid #000; padding: 4px 14px; font-weight: 900; border-radius: 6px; background-color: #f8fafc; }
-          .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2px solid #000; padding: 6px 12px; border-radius: 6px; background: #f8fafc; margin-bottom: 8px; font-size: 13px; }
+          .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2px solid #000; padding: 6px 12px; border-radius: 6px; background: #f8fafc; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; gap: 8px; }
           .info-item { display: flex; flex-direction: column; align-items: center; }
           .info-label { font-weight: 800; color: #475569; font-size: 11px; }
           .info-value { font-weight: 900; font-size: 14px; }
@@ -1867,6 +1869,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           <div class="info-item"><span class="info-label">${isCustomer ? 'العميل' : 'المورد'}</span><span class="info-value">${entityName}</span></div>
           <div class="info-item"><span class="info-label">الكود</span><span class="info-value" style="font-family: monospace;">${entityCode}</span></div>
           ${entityPhone ? `<div class="info-item"><span class="info-label">الهاتف</span><span class="info-value" dir="ltr">${entityPhone}</span></div>` : ''}
+          ${dateRange && (dateRange.from || dateRange.to) ? `
+            <div class="info-item">
+              <span class="info-label">الفترة المحددة</span>
+              <span class="info-value" style="color: #0369a1;">
+                ${dateRange.from ? `من: ${dateRange.from}` : ''} ${dateRange.to ? `إلى: ${dateRange.to}` : ''}
+              </span>
+            </div>
+          ` : ''}
           <div class="info-item"><span class="info-label">تاريخ الطباعة</span><span class="info-value">${new Date().toISOString().split('T')[0]}</span></div>
         </div>
 

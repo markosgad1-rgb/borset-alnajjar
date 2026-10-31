@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, 
-  AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle 
+  AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle, ArrowRight,
+  Calendar, Filter
 } from 'lucide-react';
 import { SalesInvoice } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
@@ -14,6 +15,9 @@ export const Customers: React.FC = () => {
     currentUser, invoices, printInvoice, printLedger 
   } = useERP();
   
+  // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
+  const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
+
   // Search state
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -25,6 +29,15 @@ export const Customers: React.FC = () => {
 
   // Selected customer
   const [selectedCustomerCode, setSelectedCustomerCode] = useState<string | null>(null);
+
+  // Date Filter state for statement
+  const [filterStartDate, setFilterStartDate] = useState<string>('');
+  const [filterEndDate, setFilterEndDate] = useState<string>('');
+
+  // Print Date Modal state
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [printStartDate, setPrintStartDate] = useState<string>('');
+  const [printEndDate, setPrintEndDate] = useState<string>('');
 
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -158,9 +171,31 @@ export const Customers: React.FC = () => {
     }
   };
 
-  // Compute itemized ledger rows by expanding sales invoices into individual egg products
-  const itemizedRows = useMemo(() => {
+  // Helper to compute itemized ledger rows by expanding sales invoices into individual egg products with optional date filter
+  const getItemizedRowsForRange = (startDate?: string, endDate?: string) => {
     if (!selectedCustomer || !selectedCustomer.history) return [];
+
+    let priorBalance = 0;
+
+    // 1. Calculate prior balance if startDate is specified
+    if (startDate) {
+      for (const h of selectedCustomer.history) {
+        if (h.date < startDate) {
+          const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
+          const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+          const invId = invMatch ? invMatch[1] : null;
+          const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+
+          if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
+            invoice.items.forEach((item) => {
+              priorBalance -= (item.quantity * item.price);
+            });
+          } else {
+            priorBalance += h.amount;
+          }
+        }
+      }
+    }
 
     const rows: Array<{
       num: number;
@@ -178,10 +213,31 @@ export const Customers: React.FC = () => {
       invoiceId?: string;
     }> = [];
 
-    let running = 0;
+    let running = startDate ? priorBalance : 0;
     let counter = 1;
 
+    // Insert opening balance row if there is a prior balance before the start date
+    if (startDate && priorBalance !== 0) {
+      rows.push({
+        num: counter++,
+        date: startDate,
+        ref: '-',
+        itemName: 'رصيد سابق ما قبل الفترة',
+        quantity: '-',
+        price: '-',
+        lineTotal: '-',
+        debit: priorBalance < 0 ? Math.abs(priorBalance) : 0,
+        credit: priorBalance > 0 ? priorBalance : 0,
+        runningBalance: running,
+        status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
+        isInvoiceItem: false
+      });
+    }
+
     for (const h of selectedCustomer.history) {
+      if (startDate && h.date < startDate) continue;
+      if (endDate && h.date > endDate) continue;
+
       const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
       const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
       const invId = invMatch ? invMatch[1] : null;
@@ -209,7 +265,6 @@ export const Customers: React.FC = () => {
           });
         });
       } else {
-        // Payment, collection, opening balance, or manual adjustment
         const isDebit = h.amount < 0;
         const debit = isDebit ? Math.abs(h.amount) : 0;
         const credit = !isDebit ? h.amount : 0;
@@ -234,9 +289,41 @@ export const Customers: React.FC = () => {
     }
 
     return rows;
-  }, [selectedCustomer, invoices]);
+  };
 
-  // Summary Metrics
+  const itemizedRows = useMemo(() => {
+    return getItemizedRowsForRange(filterStartDate, filterEndDate);
+  }, [selectedCustomer, invoices, filterStartDate, filterEndDate]);
+
+  // Invoice Mode rows with date range
+  const invoiceRows = useMemo(() => {
+    if (!selectedCustomer || !selectedCustomer.history) return [];
+    let prior = 0;
+    if (filterStartDate) {
+      selectedCustomer.history.forEach(h => {
+        if (h.date < filterStartDate) prior += h.amount;
+      });
+    }
+
+    const list: typeof selectedCustomer.history = [];
+    if (filterStartDate && prior !== 0) {
+      list.push({
+        date: filterStartDate,
+        description: 'رصيد سابق ما قبل الفترة',
+        amount: prior
+      });
+    }
+
+    selectedCustomer.history.forEach(h => {
+      if (filterStartDate && h.date < filterStartDate) return;
+      if (filterEndDate && h.date > filterEndDate) return;
+      list.push(h);
+    });
+
+    return list;
+  }, [selectedCustomer, filterStartDate, filterEndDate]);
+
+  // Summary Metrics based on currently filtered rows
   const totalEggQuantity = useMemo(() => {
     return itemizedRows.reduce((sum, r) => typeof r.quantity === 'number' ? sum + r.quantity : sum, 0);
   }, [itemizedRows]);
@@ -253,11 +340,66 @@ export const Customers: React.FC = () => {
     return itemizedRows.reduce((sum, r) => sum + r.credit, 0);
   }, [itemizedRows]);
 
+  // Handler to print statement with optional custom dates
+  const handlePrintStatement = (sDate?: string, eDate?: string) => {
+    if (!selectedCustomer) return;
+    const targetRows = getItemizedRowsForRange(sDate, eDate);
+    const deb = targetRows.reduce((sum, r) => sum + r.debit, 0);
+    const cred = targetRows.reduce((sum, r) => sum + r.credit, 0);
+    const lastRow = targetRows[targetRows.length - 1];
+    const finalBal = lastRow ? lastRow.runningBalance : selectedCustomer.balance;
+
+    const dateLabel = (sDate || eDate) ? ` للفترة (${sDate ? `من ${sDate}` : ''} ${eDate ? `إلى ${eDate}` : ''})` : '';
+
+    printLedger({
+      title: viewMode === 'ITEMS' 
+        ? `بيان كشف حساب عميل تفصيلي بالأصناف والأسعار${dateLabel}` 
+        : `كشف حساب عميل مجمع بالفواتير${dateLabel}`,
+      entityName: selectedCustomer.name,
+      entityCode: selectedCustomer.code,
+      entityPhone: selectedCustomer.phone,
+      type: 'CUSTOMER',
+      dateRange: (sDate || eDate) ? { from: sDate, to: eDate } : undefined,
+      rows: targetRows,
+      totalDebit: deb,
+      totalCredit: cred,
+      finalBalance: finalBal
+    });
+    setIsPrintModalOpen(false);
+  };
+
+  const applyDatePreset = (preset: 'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_30' | 'TODAY') => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    if (preset === 'ALL') {
+      setPrintStartDate('');
+      setPrintEndDate('');
+    } else if (preset === 'THIS_MONTH') {
+      const first = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      setPrintStartDate(first);
+      setPrintEndDate(today);
+    } else if (preset === 'LAST_MONTH') {
+      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+      const last = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
+      setPrintStartDate(first);
+      setPrintEndDate(last);
+    } else if (preset === 'LAST_30') {
+      const prior = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      setPrintStartDate(prior);
+      setPrintEndDate(today);
+    } else if (preset === 'TODAY') {
+      setPrintStartDate(today);
+      setPrintEndDate(today);
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-2.5 h-[calc(100vh-85px)]">
+    <div className="flex flex-col gap-2.5 h-[calc(100dvh-60px)] md:h-[calc(100vh-85px)] min-h-0">
       
-      {/* Sleek Compact Action Toolbar (Zero Wasted Space) */}
-      <div className="bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex flex-wrap justify-between items-center gap-2">
+      {/* Sleek Compact Action Toolbar (Hidden on mobile when viewing customer details) */}
+      <div className={`bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex-wrap justify-between items-center gap-2 ${
+        mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
+      }`}>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5">
             <span className="font-bold text-brand-900 text-base">العملاء</span>
@@ -307,11 +449,13 @@ export const Customers: React.FC = () => {
       {/* Main Grid: Customer List (col-3) + Statement Ledger (col-9) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 flex-1 min-h-0">
         
-        {/* Customer List Sidebar */}
-        <div className="lg:col-span-3 bg-white rounded-xl shadow-xs border border-brand-100 flex flex-col min-h-0 overflow-hidden">
+        {/* Customer List Sidebar (Hidden on mobile when in DETAILS view) */}
+        <div className={`lg:col-span-3 bg-white rounded-xl shadow-xs border border-brand-100 flex-col min-h-0 overflow-hidden ${
+          mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
+        }`}>
           <div className="p-2.5 bg-brand-50/60 border-b border-brand-100 flex justify-between items-center text-xs font-bold text-brand-900">
             <span>قائمة العملاء</span>
-            <span className="text-gray-500 font-normal">اضغط لاختيار العميل</span>
+            <span className="text-gray-500 font-normal">اضغط لفتح الحساب</span>
           </div>
 
           <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
@@ -328,7 +472,10 @@ export const Customers: React.FC = () => {
                 return (
                   <div 
                     key={c.code}
-                    onClick={() => setSelectedCustomerCode(c.code)}
+                    onClick={() => {
+                      setSelectedCustomerCode(c.code);
+                      setMobileView('DETAILS');
+                    }}
                     className={`p-2.5 hover:bg-brand-50/60 cursor-pointer transition-colors relative group flex items-center justify-between ${
                       isSelected ? 'bg-brand-50/90 border-r-4 border-brand-600' : ''
                     }`}
@@ -402,100 +549,250 @@ export const Customers: React.FC = () => {
           </div>
         </div>
 
-        {/* Customer Statement (بيان كشف الحساب) - Wide & Roomy */}
-        <div className="lg:col-span-9 bg-white rounded-xl shadow-xs border border-brand-100 flex flex-col min-h-0 overflow-hidden">
+        {/* Customer Statement (بيان كشف الحساب) - Wide & Roomy (Hidden on mobile when in LIST view) */}
+        <div className={`lg:col-span-9 bg-white rounded-xl shadow-xs border border-brand-100 flex-col min-h-0 overflow-hidden ${
+          mobileView === 'LIST' ? 'hidden lg:flex' : 'flex'
+        }`}>
           {selectedCustomer ? (
             <div className="flex flex-col h-full min-h-0">
               
-              {/* Top Compact Customer Banner + Inline Key Metrics */}
-              <div className="p-3 border-b border-gray-200 bg-gradient-to-r from-slate-50 via-white to-brand-50/40">
-                <div className="flex flex-wrap justify-between items-center gap-3">
-                  
-                  {/* Customer Info */}
-                  <div className="flex items-center gap-2.5">
-                    <h2 className="text-lg font-black text-brand-900 flex items-center gap-2">
-                      {selectedCustomer.name}
-                      <button 
-                        onClick={(e) => handleOpenEditModal(e, selectedCustomer)}
-                        className="text-xs font-normal text-gray-500 hover:text-brand-700 bg-white border border-gray-200 hover:border-brand-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
-                        title="تعديل بيانات العميل"
-                      >
-                        <Edit size={12}/> تعديل
-                      </button>
-                    </h2>
-                    <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-gray-200">
-                      كود: {selectedCustomer.code}
-                    </span>
-                    {selectedCustomer.phone && (
-                      <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-bold border border-blue-100 flex items-center gap-1" dir="ltr">
-                        <Phone size={11} /> {selectedCustomer.phone}
-                      </span>
-                    )}
+              {/* 1. Mobile-Only Compact Header (Minimal Vertical Space, 100% Focused on Statement Table) */}
+              <div className="lg:hidden p-2 bg-white border-b border-gray-200 flex flex-col gap-1.5 shrink-0">
+                {/* Row 1: Back + Name + Code + Compact Balance Badge */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <button 
+                      type="button"
+                      onClick={() => setMobileView('LIST')}
+                      className="flex items-center gap-1 text-[11px] font-bold text-brand-800 bg-brand-50 hover:bg-brand-100 px-2 py-1 rounded-lg border border-brand-200 transition-colors shrink-0"
+                    >
+                      <ArrowRight size={13} /> العودة
+                    </button>
+                    <div className="min-w-0">
+                      <h2 className="text-xs font-black text-brand-900 truncate flex items-center gap-1">
+                        {selectedCustomer.name}
+                        <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.2 rounded font-mono">
+                          {selectedCustomer.code}
+                        </span>
+                      </h2>
+                    </div>
                   </div>
 
-                  {/* Inline Compact Metrics Chips */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="bg-white border border-amber-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
-                      <span className="text-gray-500 font-bold">كراتين البيض:</span>
-                      <span className="font-mono font-black text-amber-800">{totalEggQuantity.toLocaleString()}</span>
+                  {/* Compact Balance Badge */}
+                  <div className={`px-2 py-0.5 rounded-lg border flex items-center gap-1 shrink-0 ${
+                    selectedCustomer.balance < 0 
+                      ? 'bg-red-50 border-red-200 text-red-700' 
+                      : selectedCustomer.balance > 0 
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                      : 'bg-gray-50 border-gray-200 text-gray-700'
+                  }`}>
+                    <span className="text-[10px] font-bold text-gray-500">الرصيد:</span>
+                    <span className="text-xs font-black font-mono" dir="ltr">
+                      {selectedCustomer.balance.toLocaleString()}
+                    </span>
+                    <span className="text-[9px] font-bold">
+                      {selectedCustomer.balance < 0 ? '(عليه)' : selectedCustomer.balance > 0 ? '(له)' : '(خالص)'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Active Date Filter Chip on Mobile (if filtered) */}
+                {(filterStartDate || filterEndDate) && (
+                  <div className="flex items-center justify-between bg-blue-50 text-blue-800 px-2 py-0.5 rounded text-[10px] border border-blue-200">
+                    <span className="font-bold flex items-center gap-1">
+                      <Calendar size={11} /> الفترة: {filterStartDate || 'البداية'} إلى {filterEndDate || 'الآن'}
+                    </span>
+                    <button 
+                      onClick={() => { setFilterStartDate(''); setFilterEndDate(''); }} 
+                      className="text-blue-600 hover:text-blue-800 font-bold"
+                    >
+                      <X size={11} /> إلغاء التصفية
+                    </button>
+                  </div>
+                )}
+
+                {/* Row 2: Controls (View Mode Toggle + Print by Date + Excel) */}
+                <div className="flex items-center justify-between gap-1 pt-1 border-t border-gray-100">
+                  <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('ITEMS')}
+                      className={`px-2 py-0.5 rounded font-bold transition-all ${
+                        viewMode === 'ITEMS' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600'
+                      }`}
+                    >
+                      بالأصناف
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('INVOICES')}
+                      className={`px-2 py-0.5 rounded font-bold transition-all ${
+                        viewMode === 'INVOICES' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600'
+                      }`}
+                    >
+                      مجمع
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={() => {
+                        setPrintStartDate(filterStartDate);
+                        setPrintEndDate(filterEndDate);
+                        setIsPrintModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-blue-700 shadow-2xs"
+                    >
+                      <Printer size={11} /> طباعة بالتاريخ
+                    </button>
+
+                    <button 
+                      onClick={() => exportLedgerToExcel(
+                        selectedCustomer.name, 
+                        selectedCustomer.code, 
+                        viewMode === 'ITEMS' ? itemizedRows : invoiceRows, 
+                        selectedCustomer.balance, 
+                        'CUSTOMER',
+                        viewMode === 'ITEMS'
+                      )}
+                      className="flex items-center gap-1 bg-green-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-green-700 shadow-2xs"
+                    >
+                      <Download size={11} /> Excel
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Desktop-Only Rich Header Banner */}
+              <div className="hidden lg:block p-3 border-b border-gray-200 bg-gradient-to-r from-slate-50 via-white to-brand-50/40 shrink-0">
+                <div className="flex flex-wrap justify-between items-center gap-3">
+                  
+                  {/* Right: Customer Info + Secondary Metric Chips */}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h2 className="text-lg md:text-xl font-black text-brand-900 flex items-center gap-2">
+                        {selectedCustomer.name}
+                        <button 
+                          onClick={(e) => handleOpenEditModal(e, selectedCustomer)}
+                          className="text-xs font-normal text-gray-500 hover:text-brand-700 bg-white border border-gray-200 hover:border-brand-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
+                          title="تعديل بيانات العميل"
+                        >
+                          <Edit size={12}/> تعديل
+                        </button>
+                      </h2>
+                      <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-gray-200">
+                        كود: {selectedCustomer.code}
+                      </span>
+                      {selectedCustomer.phone && (
+                        <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-bold border border-blue-100 flex items-center gap-1" dir="ltr">
+                          <Phone size={11} /> {selectedCustomer.phone}
+                        </span>
+                      )}
                     </div>
 
-                    <div className="bg-white border border-red-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
-                      <span className="text-gray-500 font-bold">مسحوبات (مدين):</span>
-                      <span className="font-mono font-black text-red-600">{totalItemizedDebit.toLocaleString()} ج.م</span>
-                    </div>
+                    {/* Secondary Metrics Chips */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="bg-white border border-amber-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
+                        <span className="text-gray-500 font-bold">كراتين البيض:</span>
+                        <span className="font-mono font-black text-amber-800">{totalEggQuantity.toLocaleString()}</span>
+                      </div>
 
-                    <div className="bg-white border border-green-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
-                      <span className="text-gray-500 font-bold">مدفوعات (دائن):</span>
-                      <span className="font-mono font-black text-green-600">{totalItemizedCredit.toLocaleString()} ج.م</span>
-                    </div>
+                      <div className="bg-white border border-red-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
+                        <span className="text-gray-500 font-bold">مسحوبات (مدين):</span>
+                        <span className="font-mono font-black text-red-600">{totalItemizedDebit.toLocaleString()} ج.م</span>
+                      </div>
 
-                    {/* Final Balance Badge */}
-                    <div className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 border shadow-2xs ${
+                      <div className="bg-white border border-green-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
+                        <span className="text-gray-500 font-bold">مدفوعات (دائن):</span>
+                        <span className="font-mono font-black text-green-600">{totalItemizedCredit.toLocaleString()} ج.م</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Left: Prominent Balance Box with Large Font (خانة الرصيد في شمال الصفحة بخط أكبر) */}
+                  <div className={`mr-auto px-4 py-2.5 rounded-xl border flex flex-col items-center justify-center text-center shadow-xs transition-all min-w-[150px] ${
+                    selectedCustomer.balance < 0 
+                      ? 'bg-red-50/90 border-red-300' 
+                      : selectedCustomer.balance > 0 
+                      ? 'bg-emerald-50/90 border-emerald-300' 
+                      : 'bg-gray-50 border-gray-300'
+                  }`}>
+                    <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">الرصيد الحالي</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className={`text-2xl md:text-3xl font-black font-mono tracking-tight ${
+                        selectedCustomer.balance < 0 ? 'text-red-600' : selectedCustomer.balance > 0 ? 'text-emerald-600' : 'text-gray-800'
+                      }`} dir="ltr">
+                        {selectedCustomer.balance.toLocaleString()}
+                      </span>
+                      <span className="text-xs font-bold text-gray-600">ج.م</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-1 ${
                       selectedCustomer.balance < 0 
-                        ? 'bg-red-500 text-white border-red-600' 
+                        ? 'bg-red-100 text-red-700' 
                         : selectedCustomer.balance > 0 
-                        ? 'bg-green-600 text-white border-green-700' 
-                        : 'bg-gray-800 text-white border-gray-900'
+                        ? 'bg-emerald-100 text-emerald-800' 
+                        : 'bg-gray-200 text-gray-700'
                     }`}>
-                      <span>الرصيد:</span>
-                      <span className="font-mono font-black text-sm" dir="ltr">
-                        {Math.abs(selectedCustomer.balance).toLocaleString()} ج.م
-                      </span>
-                      <span className="text-[11px] opacity-90">
-                        {selectedCustomer.balance < 0 ? '(مدين - عليه)' : selectedCustomer.balance > 0 ? '(دائن - له)' : '(خالص)'}
-                      </span>
-                    </div>
+                      {selectedCustomer.balance < 0 ? 'مدين (عليه لنا)' : selectedCustomer.balance > 0 ? 'دائن (له علينا)' : 'خالص'}
+                    </span>
                   </div>
 
                 </div>
 
                 {/* Sub-toolbar: View Switch & Actions */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mt-2 pt-2 border-t border-gray-100">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-gray-700 flex items-center gap-1">
-                      <FileText size={14} className="text-brand-600" /> شكل العرض:
-                    </span>
-                    <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200">
-                      <button
-                        type="button"
-                        onClick={() => setViewMode('ITEMS')}
-                        className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
-                          viewMode === 'ITEMS' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-brand-700'
-                        }`}
-                      >
-                        <Package size={13} /> بيان بالأصناف والأسعار (كالفاتورة)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setViewMode('INVOICES')}
-                        className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
-                          viewMode === 'INVOICES' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-brand-700'
-                        }`}
-                      >
-                        <Layers size={13} /> مجمع بالفواتير
-                      </button>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-700 flex items-center gap-1">
+                        <FileText size={14} className="text-brand-600" /> شكل العرض:
+                      </span>
+                      <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('ITEMS')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
+                            viewMode === 'ITEMS' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-brand-700'
+                          }`}
+                        >
+                          <Package size={13} /> بيان بالأصناف والأسعار (كالفاتورة)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('INVOICES')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
+                            viewMode === 'INVOICES' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-brand-700'
+                          }`}
+                        >
+                          <Layers size={13} /> مجمع بالفواتير
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Active Date Filter Chip or Filter Button on Desktop */}
+                    {(filterStartDate || filterEndDate) ? (
+                      <div className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-2.5 py-1 rounded-lg text-xs font-bold border border-blue-200 shadow-2xs">
+                        <Calendar size={13} className="text-blue-600" />
+                        <span>الفترة: {filterStartDate || 'البداية'} إلى {filterEndDate || 'الآن'}</span>
+                        <button
+                          onClick={() => { setFilterStartDate(''); setFilterEndDate(''); }}
+                          className="hover:text-red-600 mr-1"
+                          title="إلغاء التصفية وعرض الكل"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setPrintStartDate('');
+                          setPrintEndDate('');
+                          setIsPrintModalOpen(true);
+                        }}
+                        className="flex items-center gap-1 text-xs text-gray-600 hover:text-brand-700 bg-gray-50 hover:bg-brand-50 px-2.5 py-1 rounded-lg border border-gray-200 hover:border-brand-300 transition-colors"
+                      >
+                        <Filter size={13} /> تصفية بالتاريخ
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1.5">
@@ -530,39 +827,20 @@ export const Customers: React.FC = () => {
 
                     <button 
                       onClick={() => {
-                        printLedger({
-                          title: viewMode === 'ITEMS' ? 'بيان كشف حساب عميل تفصيلي بالأصناف والأسعار' : 'كشف حساب عميل مجمع بالفواتير',
-                          entityName: selectedCustomer.name,
-                          entityCode: selectedCustomer.code,
-                          entityPhone: selectedCustomer.phone,
-                          type: 'CUSTOMER',
-                          rows: viewMode === 'ITEMS' ? itemizedRows : selectedCustomer.history.map((h, i) => ({
-                            num: i + 1,
-                            date: h.date,
-                            ref: h.description.match(/#([A-Za-z0-9-]+)/)?.[1] || '-',
-                            itemName: h.description,
-                            quantity: '-',
-                            price: '-',
-                            lineTotal: '-',
-                            debit: h.amount < 0 ? Math.abs(h.amount) : 0,
-                            credit: h.amount > 0 ? h.amount : 0,
-                            runningBalance: selectedCustomer.balance
-                          })),
-                          totalDebit: totalItemizedDebit,
-                          totalCredit: totalItemizedCredit,
-                          finalBalance: selectedCustomer.balance
-                        });
+                        setPrintStartDate(filterStartDate);
+                        setPrintEndDate(filterEndDate);
+                        setIsPrintModalOpen(true);
                       }}
                       className="flex items-center gap-1 bg-blue-600 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-blue-700 transition-colors shadow-2xs"
                     >
-                      <Printer size={13} /> طباعة البيان
+                      <Printer size={13} /> طباعة كشف الحساب
                     </button>
                     
                     <button 
                       onClick={() => exportLedgerToExcel(
                         selectedCustomer.name, 
                         selectedCustomer.code, 
-                        viewMode === 'ITEMS' ? itemizedRows : selectedCustomer.history, 
+                        viewMode === 'ITEMS' ? itemizedRows : invoiceRows, 
                         selectedCustomer.balance, 
                         'CUSTOMER',
                         viewMode === 'ITEMS'
@@ -720,45 +998,49 @@ export const Customers: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {selectedCustomer.history.length === 0 ? (
-                        <tr><td colSpan={6} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
+                      {invoiceRows.length === 0 ? (
+                        <tr><td colSpan={6} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
                       ) : (
-                        selectedCustomer.history.map((h, idx) => {
-                          const isDebit = h.amount < 0;
-                          const isCredit = h.amount > 0;
-                          const invoiceIdMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-                          const hasInvoiceId = !!invoiceIdMatch;
+                        (() => {
+                          let runBal = 0;
+                          return invoiceRows.map((h, idx) => {
+                            runBal += h.amount;
+                            const isDebit = h.amount < 0;
+                            const isCredit = h.amount > 0;
+                            const invoiceIdMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+                            const hasInvoiceId = !!invoiceIdMatch;
 
-                          return (
-                            <tr key={idx} className="hover:bg-gray-50">
-                              <td className="p-2.5 text-center text-gray-500 font-mono border-l border-gray-100">{idx + 1}</td>
-                              <td className="p-2.5 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{h.date}</td>
-                              <td className="p-2.5 font-medium text-gray-800 border-l border-gray-100">
-                                <div className="flex justify-between items-center">
-                                  <span>{h.description}</span>
-                                  {hasInvoiceId && (
-                                    <button 
-                                      onClick={() => handleViewInvoiceDetails(h.description)}
-                                      className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
-                                      title="عرض تفاصيل الفاتورة"
-                                    >
-                                      عرض الفاتورة <Eye size={12} />
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-2.5 text-center font-bold font-mono text-red-600 bg-red-50/30 border-l border-gray-100">
-                                {isDebit ? Math.abs(h.amount).toLocaleString() : '-'}
-                              </td>
-                              <td className="p-2.5 text-center font-bold font-mono text-green-600 bg-green-50/30 border-l border-gray-100">
-                                {isCredit ? h.amount.toLocaleString() : '-'}
-                              </td>
-                              <td className="p-2.5 text-center font-black font-mono text-gray-900" dir="ltr">
-                                {selectedCustomer.balance.toLocaleString()}
-                              </td>
-                            </tr>
-                          );
-                        })
+                            return (
+                              <tr key={idx} className="hover:bg-gray-50">
+                                <td className="p-2.5 text-center text-gray-500 font-mono border-l border-gray-100">{idx + 1}</td>
+                                <td className="p-2.5 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{h.date}</td>
+                                <td className="p-2.5 font-medium text-gray-800 border-l border-gray-100">
+                                  <div className="flex justify-between items-center">
+                                    <span>{h.description}</span>
+                                    {hasInvoiceId && (
+                                      <button 
+                                        onClick={() => handleViewInvoiceDetails(h.description)}
+                                        className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
+                                        title="عرض تفاصيل الفاتورة"
+                                      >
+                                        عرض الفاتورة <Eye size={12} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-2.5 text-center font-bold font-mono text-red-600 bg-red-50/30 border-l border-gray-100">
+                                  {isDebit ? Math.abs(h.amount).toLocaleString() : '-'}
+                                </td>
+                                <td className="p-2.5 text-center font-bold font-mono text-green-600 bg-green-50/30 border-l border-gray-100">
+                                  {isCredit ? h.amount.toLocaleString() : '-'}
+                                </td>
+                                <td className="p-2.5 text-center font-black font-mono text-gray-900" dir="ltr">
+                                  {runBal.toLocaleString()}
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })()
                       )}
                     </tbody>
                   </table>
@@ -960,6 +1242,150 @@ export const Customers: React.FC = () => {
               >
                 إغلاق
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print / Filter Statement by Custom Date Modal */}
+      {isPrintModalOpen && selectedCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in">
+            <div className="bg-blue-600 p-4 flex justify-between items-center text-white">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                <Printer size={18} /> طباعة كشف حساب: {selectedCustomer.name}
+              </h3>
+              <button onClick={() => setIsPrintModalOpen(false)} className="hover:bg-blue-700 p-1 rounded-full transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Quick Preset Buttons */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">فترات سريعة:</label>
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-xs">
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('ALL')}
+                    className={`py-1.5 px-2 rounded-lg font-bold border transition-colors ${
+                      !printStartDate && !printEndDate ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
+                    }`}
+                  >
+                    كل التواريخ
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('THIS_MONTH')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    هذا الشهر
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('LAST_MONTH')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    الشهر الماضي
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('LAST_30')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    آخر 30 يوم
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('TODAY')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    اليوم
+                  </button>
+                </div>
+              </div>
+
+              {/* Date Inputs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">من تاريخ</label>
+                  <input 
+                    type="date"
+                    value={printStartDate}
+                    onChange={e => setPrintStartDate(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg outline-none focus:border-blue-500 text-xs font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">إلى تاريخ</label>
+                  <input 
+                    type="date"
+                    value={printEndDate}
+                    onChange={e => setPrintEndDate(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg outline-none focus:border-blue-500 text-xs font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              {/* Preview Box */}
+              {(() => {
+                const previewRows = getItemizedRowsForRange(printStartDate, printEndDate);
+                const prevDebit = previewRows.reduce((sum, r) => sum + r.debit, 0);
+                const prevCredit = previewRows.reduce((sum, r) => sum + r.credit, 0);
+                const lastRow = previewRows[previewRows.length - 1];
+                const previewBalance = lastRow ? lastRow.runningBalance : selectedCustomer.balance;
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
+                    <div className="font-bold text-gray-700 flex justify-between border-b pb-1">
+                      <span>معاينة حركات الفترة:</span>
+                      <span className="font-mono text-blue-600 font-bold">{previewRows.length} حركة مسجلة</span>
+                    </div>
+                    <div className="flex justify-between text-gray-600">
+                      <span>إجمالي المدين (عليه):</span>
+                      <span className="font-mono font-bold text-red-600">{prevDebit.toLocaleString()} ج.م</span>
+                    </div>
+                    <div className="flex justify-between text-gray-600">
+                      <span>إجمالي الدائن (سدادات/له):</span>
+                      <span className="font-mono font-bold text-green-600">{prevCredit.toLocaleString()} ج.م</span>
+                    </div>
+                    <div className="flex justify-between font-black text-gray-900 border-t pt-1">
+                      <span>الرصيد بنهاية الفترة:</span>
+                      <span className={`font-mono text-sm ${previewBalance < 0 ? 'text-red-600' : previewBalance > 0 ? 'text-emerald-600' : 'text-gray-700'}`} dir="ltr">
+                        {previewBalance.toLocaleString()} ج.م {previewBalance < 0 ? '(مدين)' : previewBalance > 0 ? '(دائن)' : '(متزن)'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handlePrintStatement(printStartDate, printEndDate)}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                >
+                  <Printer size={15} /> طباعة كشف الحساب الآن
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterStartDate(printStartDate);
+                    setFilterEndDate(printEndDate);
+                    setIsPrintModalOpen(false);
+                  }}
+                  className="bg-brand-50 hover:bg-brand-100 text-brand-900 border border-brand-200 py-2.5 px-3 rounded-lg font-bold text-xs transition-colors"
+                >
+                  تطبيق التصفية على الشاشة
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrintModalOpen(false)}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-3 rounded-lg font-bold text-xs transition-colors"
+                >
+                  إلغاء
+                </button>
+              </div>
             </div>
           </div>
         </div>
