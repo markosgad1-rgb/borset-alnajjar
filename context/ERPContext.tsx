@@ -51,8 +51,9 @@ interface ERPContextType {
   
   // CRUD
   addProduct: (product: Product) => void;
-  updateProduct: (product: Product) => void;
+  updateProduct: (product: Product, oldCode?: string) => void;
   deleteProduct: (code: string) => void;
+  clearAllProducts: () => Promise<boolean>;
   addPurchase: (purchase: Omit<Purchase, 'previousBalance' | 'currentBalance'>) => void; // Updated type
   updatePurchase: (oldPurchase: Purchase, newPurchaseData: Purchase) => Promise<void>;
   deletePurchase: (id: string) => Promise<void>;
@@ -423,10 +424,56 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const logout = () => setCurrentUser(null);
 
   const addProduct = async (product: Product) => {
-    if (isOnline) { try { await setDoc(doc(db, 'products', product.code), product); } catch (e) { handleFirebaseError(e); } } else { setProducts(prev => { const exists = prev.find(p => p.code === product.code); if (exists) return prev; return [...prev, product]; }); }
+    setProducts(prev => {
+      const exists = prev.find(p => p.code === product.code);
+      if (exists) return prev.map(p => p.code === product.code ? product : p);
+      return [...prev, product];
+    });
+    if (isOnline) {
+      try { await setDoc(doc(db, 'products', product.code), cleanDoc(product)); }
+      catch (e) { handleFirebaseError(e); }
+    }
   };
-  const updateProduct = async (updatedProduct: Product) => { if (isOnline) { try { await setDoc(doc(db, 'products', updatedProduct.code), updatedProduct); } catch (e) { handleFirebaseError(e); } } else { setProducts(prev => prev.map(p => p.code === updatedProduct.code ? updatedProduct : p)); } };
-  const deleteProduct = async (code: string) => { if (isOnline) { try { await deleteDoc(doc(db, 'products', code)); } catch (e) { handleFirebaseError(e); } } else { setProducts(prev => prev.filter(p => p.code !== code)); } };
+
+  const updateProduct = async (updatedProduct: Product, oldCode?: string) => {
+    const targetCode = oldCode || updatedProduct.code;
+    setProducts(prev => prev.map(p => p.code === targetCode ? updatedProduct : p));
+    if (isOnline) {
+      try {
+        if (oldCode && oldCode !== updatedProduct.code) {
+          await deleteDoc(doc(db, 'products', oldCode));
+          await setDoc(doc(db, 'products', updatedProduct.code), cleanDoc(updatedProduct));
+        } else {
+          await setDoc(doc(db, 'products', updatedProduct.code), cleanDoc(updatedProduct));
+        }
+      } catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const deleteProduct = async (code: string) => {
+    setProducts(prev => prev.filter(p => p.code !== code));
+    if (isOnline) {
+      try { await deleteDoc(doc(db, 'products', code)); }
+      catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const clearAllProducts = async (): Promise<boolean> => {
+    try {
+      setProducts([]);
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify([]));
+      if (isOnline) {
+        const q = query(collection(db, 'products'));
+        const snapshot = await getDocs(q);
+        const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+        await Promise.all(deletePromises);
+      }
+      return true;
+    } catch (e) {
+      handleFirebaseError(e);
+      return false;
+    }
+  };
   
   const addCustomer = async (customer: Customer) => { setCustomers(prev => [...prev.filter(c => c.code !== customer.code), customer]); if (isOnline) { try { await setDoc(doc(db, 'customers', customer.code), cleanDoc(customer)); } catch (e) { handleFirebaseError(e); } } };
   const updateCustomer = async (code: string, updatedData: Partial<Customer>) => { const customer = customers.find(c => c.code === code); if (!customer) return; const newCustomer = { ...customer, ...updatedData }; setCustomers(prev => prev.map(c => c.code === code ? (updatedData.code ? { ...newCustomer, code: updatedData.code } : newCustomer) : c)); if (isOnline) { try { if (updatedData.code && updatedData.code !== code) { await deleteDoc(doc(db, 'customers', code)); await setDoc(doc(db, 'customers', updatedData.code), cleanDoc(newCustomer)); } else { await setDoc(doc(db, 'customers', code), cleanDoc(newCustomer)); } } catch (e) { handleFirebaseError(e); } } };
@@ -2150,7 +2197,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
-      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
+      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deletePurchase,
       addPurchase, updatePurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
       seedDatabase, printInvoice, printPurchaseInvoice, printLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
       exportBackupData, restoreBackupData,
