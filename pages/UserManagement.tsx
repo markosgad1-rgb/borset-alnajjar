@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Shield, UserPlus, Trash2, Edit, Check, X, Database, Loader2, Upload, Image as ImageIcon } from 'lucide-react';
 import { User } from '../types';
+import { BackupModal } from '../components/BackupModal';
 
 export const UserManagement: React.FC = () => {
   const { users, addUser, updateUser, deleteUser, currentUser, seedDatabase, updateSystemLogo, companyLogo } = useERP();
@@ -10,6 +11,7 @@ export const UserManagement: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   
   // Inline delete confirmation state
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -152,24 +154,34 @@ export const UserManagement: React.FC = () => {
   return (
     <div className="space-y-8">
       
-      {/* Header with Seed Button */}
+      {/* Header with Backup & Seed Button */}
       <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-brand-100 gap-4">
         <h2 className="text-xl font-bold text-brand-800 flex items-center gap-2">
            <Shield className="text-brand-600" /> إدارة المستخدمين والإعدادات
         </h2>
-        {currentUser?.role === 'ADMIN' && (
-           <button 
-             onClick={handleSeedClick}
-             disabled={isSeeding}
-             className={`
-               px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors
-               ${isSeeding ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'}
-             `}
-           >
-             {isSeeding ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
-             {isSeeding ? 'جاري الاتصال بالسيرفر...' : 'إنشاء بيانات تجريبية (للبدء)'}
-           </button>
-        )}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button 
+            type="button"
+            onClick={() => setIsBackupModalOpen(true)}
+            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-brand-950 font-black rounded-lg text-sm flex items-center gap-2 transition-colors shadow-xs"
+          >
+            <Database size={16} /> النسخ الاحتياطي والاسترجاع
+          </button>
+
+          {currentUser?.role === 'ADMIN' && (
+             <button 
+               onClick={handleSeedClick}
+               disabled={isSeeding}
+               className={`
+                 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors
+                 ${isSeeding ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'}
+               `}
+             >
+               {isSeeding ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
+               {isSeeding ? 'جاري الاتصال بالسيرفر...' : 'إنشاء بيانات تجريبية (للبدء)'}
+             </button>
+          )}
+        </div>
       </div>
 
       {/* System Settings (Logo) - Only for Admins */}
@@ -441,6 +453,12 @@ export const UserManagement: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Backup & Restore Modal */}
+      <BackupModal 
+        isOpen={isBackupModalOpen} 
+        onClose={() => setIsBackupModalOpen(false)} 
+      />
     </div>
   );
 };

@@ -65,7 +65,9 @@ export const Transfers: React.FC = () => {
     setCurrentBalance(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(formData.amount);
 
@@ -78,23 +80,39 @@ export const Transfers: React.FC = () => {
       return;
     }
 
-    addTransfer({
-      entityType: entityType,
-      entityCode: formData.code,
-      amount: amount,
-      type: formData.type,
-      date: formData.date,
-      notes: formData.notes,
-      paymentMethod: formData.paymentMethod
-    });
+    try {
+      setIsSubmitting(true);
+      await addTransfer({
+        entityType: entityType,
+        entityCode: formData.code,
+        amount: amount,
+        type: formData.type,
+        date: formData.date,
+        notes: formData.notes,
+        paymentMethod: formData.paymentMethod
+      });
 
-    setFormData(prev => ({
-      ...prev,
-      amount: '',
-      notes: ''
-    }));
-    setCurrentBalance(null); 
-    alert('تم حفظ عملية التحويل بنجاح');
+      // Update current displayed balance
+      if (currentBalance !== null) {
+        let delta = 0;
+        if (entityType === 'CUSTOMER') delta = formData.type === 'IN' ? amount : -amount;
+        else if (entityType === 'SUPPLIER') delta = formData.type === 'OUT' ? -amount : amount;
+        else delta = formData.type === 'OUT' ? amount : -amount;
+        setCurrentBalance(currentBalance + delta);
+      }
+
+      setFormData(prev => ({
+        ...prev,
+        amount: '',
+        notes: ''
+      }));
+      alert('تم حفظ عملية التحويل وتحديث الخزنة والحساب بنجاح');
+    } catch (err: any) {
+      console.error("Transfer submission error:", err);
+      alert('حدث خطأ أثناء حفظ التحويل: ' + (err?.message || err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Helper text for UI
@@ -388,10 +406,11 @@ export const Transfers: React.FC = () => {
             <div className="pt-6">
               <button 
                 type="submit"
-                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all flex justify-center items-center gap-3"
+                disabled={isSubmitting}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all flex justify-center items-center gap-3 cursor-pointer disabled:cursor-not-allowed"
               >
                 <Save size={24} />
-                حفظ التحويل
+                {isSubmitting ? 'جاري الحفظ...' : 'حفظ التحويل'}
               </button>
             </div>
 

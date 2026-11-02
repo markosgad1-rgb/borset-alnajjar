@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, Truck, Briefcase, LogOut, Shield, Download, Wifi, WifiOff, History, Receipt } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, Truck, Briefcase, LogOut, Shield, Download, Wifi, WifiOff, History, Receipt, Database } from 'lucide-react';
 import { PageView } from '../types';
 import { useERP } from '../context/ERPContext';
+import { BackupModal } from './BackupModal';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,6 +13,7 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const { currentUser, logout, isOnline, permissionError } = useERP();
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
@@ -87,11 +89,21 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
       )}
 
       {/* Mobile Header */}
-      <div className="md:hidden bg-brand-600 text-white p-4 flex justify-between items-center shadow-md z-20 sticky top-0">
-        <h1 className="text-xl font-bold">بورصة النجار</h1>
-        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
-          {isSidebarOpen ? <X /> : <Menu />}
-        </button>
+      <div className="md:hidden bg-brand-600 text-white p-3 flex justify-between items-center shadow-md z-20 sticky top-0">
+        <h1 className="text-lg font-bold">بورصة النجار</h1>
+        <div className="flex items-center gap-1.5">
+          <button 
+            onClick={() => setIsBackupModalOpen(true)}
+            className="flex items-center gap-1 bg-brand-700 hover:bg-brand-800 text-amber-300 px-2 py-1 rounded-lg text-xs font-bold transition-colors border border-brand-500/40"
+            title="نسخ احتياطي واسترجاع البيانات"
+          >
+            <Database size={14} />
+            <span>نسخ احتياطي</span>
+          </button>
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1 rounded-lg hover:bg-brand-700">
+            {isSidebarOpen ? <X size={22} /> : <Menu size={22} />}
+          </button>
+        </div>
       </div>
 
       {/* Sidebar */}
@@ -137,18 +149,29 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           ))}
         </nav>
 
-        {/* Sidebar Footer (Install, User Profile & Logout) */}
-        <div className="p-4 border-t border-brand-700 bg-brand-800 space-y-3">
+        {/* Sidebar Footer (Backup, Install, User Profile & Logout) */}
+        <div className="p-4 border-t border-brand-700 bg-brand-800 space-y-2.5">
            
+           {/* Backup & Restore Button */}
+           <button 
+             onClick={() => {
+               setIsBackupModalOpen(true);
+               setIsSidebarOpen(false);
+             }}
+             className="w-full flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-brand-950 py-2 rounded-lg transition-colors text-xs font-black shadow-sm"
+           >
+             <Database size={15} /> نسخ احتياطي واسترجاع
+           </button>
+
            {/* Install Button */}
            <button 
              onClick={handleInstallClick}
-             className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg transition-colors text-sm font-bold shadow-sm"
+             className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg transition-colors text-xs font-bold shadow-sm"
            >
-             <Download size={16} /> تثبيت التطبيق
+             <Download size={15} /> تثبيت التطبيق
            </button>
 
-           <div className="flex items-center gap-3 px-2 pt-2">
+           <div className="flex items-center gap-3 px-2 pt-1">
              <div className="w-8 h-8 bg-brand-600 rounded-full flex items-center justify-center font-bold">
                 {currentUser?.fullName.charAt(0)}
              </div>
@@ -159,9 +182,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
            </div>
            <button 
              onClick={logout}
-             className="w-full flex items-center justify-center gap-2 bg-red-600/20 hover:bg-red-600 text-red-200 hover:text-white py-2 rounded-lg transition-colors text-sm font-bold"
+             className="w-full flex items-center justify-center gap-2 bg-red-600/20 hover:bg-red-600 text-red-200 hover:text-white py-1.5 rounded-lg transition-colors text-xs font-bold"
            >
-             <LogOut size={16} /> تسجيل الخروج
+             <LogOut size={15} /> تسجيل الخروج
            </button>
         </div>
       </aside>
@@ -185,8 +208,17 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                   </span>
                 )}
              </div>
-             <div className="text-brand-600 text-sm font-medium">
-               {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+             <div className="flex items-center gap-3">
+               <button
+                 onClick={() => setIsBackupModalOpen(true)}
+                 className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-2xs"
+               >
+                 <Database size={14} className="text-amber-600" />
+                 <span>النسخ الاحتياطي والاسترجاع</span>
+               </button>
+               <div className="text-brand-600 text-sm font-medium">
+                 {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+               </div>
              </div>
           </header>
         )}
@@ -194,6 +226,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           {children}
         </div>
       </main>
+
+      {/* Backup & Restore Modal */}
+      <BackupModal 
+        isOpen={isBackupModalOpen} 
+        onClose={() => setIsBackupModalOpen(false)} 
+      />
 
       {/* Overlay for mobile */}
       {isSidebarOpen && (

@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
-import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod } from '../types';
+import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup } from '../types';
 import { firebaseConfig, isFirebaseConfigured } from '../firebaseConfig';
 import { initializeApp } from 'firebase/app';
 import * as XLSX from 'xlsx';
@@ -88,7 +88,7 @@ interface ERPContextType {
     date: string;
     notes?: string;
     paymentMethod: PaymentMethod;
-  }) => void;
+  }) => Promise<void>;
   addExpense: (data: {
     name: string;
     amount: number;
@@ -148,6 +148,8 @@ interface ERPContextType {
   exportAllSuppliersToExcel: () => void;
   clearLedger: (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => Promise<boolean>;
   clearTreasury: () => Promise<boolean>;
+  exportBackupData: () => SystemBackup;
+  restoreBackupData: (backup: SystemBackup) => Promise<{ success: boolean; message: string }>;
 
   currentTreasuryBalance: number;
   balances: {
@@ -426,15 +428,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateProduct = async (updatedProduct: Product) => { if (isOnline) { try { await setDoc(doc(db, 'products', updatedProduct.code), updatedProduct); } catch (e) { handleFirebaseError(e); } } else { setProducts(prev => prev.map(p => p.code === updatedProduct.code ? updatedProduct : p)); } };
   const deleteProduct = async (code: string) => { if (isOnline) { try { await deleteDoc(doc(db, 'products', code)); } catch (e) { handleFirebaseError(e); } } else { setProducts(prev => prev.filter(p => p.code !== code)); } };
   
-  const addCustomer = async (customer: Customer) => { if (isOnline) { try { await setDoc(doc(db, 'customers', customer.code), customer); } catch (e) { handleFirebaseError(e); } } else { setCustomers(prev => [...prev, customer]); } };
-  const updateCustomer = async (code: string, updatedData: Partial<Customer>) => { const customer = customers.find(c => c.code === code); if (!customer) return; const newCustomer = { ...customer, ...updatedData }; if (isOnline) { try { if (updatedData.code && updatedData.code !== code) { await deleteDoc(doc(db, 'customers', code)); await setDoc(doc(db, 'customers', updatedData.code), newCustomer); } else { await setDoc(doc(db, 'customers', code), newCustomer); } } catch (e) { handleFirebaseError(e); } } else { setCustomers(prev => prev.map(c => c.code === code ? newCustomer : c)); } };
-  const deleteCustomer = async (code: string) => { if (isOnline) { try { await deleteDoc(doc(db, 'customers', code)); } catch (e) { handleFirebaseError(e); } } else { setCustomers(prev => prev.filter(c => c.code !== code)); } };
+  const addCustomer = async (customer: Customer) => { setCustomers(prev => [...prev.filter(c => c.code !== customer.code), customer]); if (isOnline) { try { await setDoc(doc(db, 'customers', customer.code), cleanDoc(customer)); } catch (e) { handleFirebaseError(e); } } };
+  const updateCustomer = async (code: string, updatedData: Partial<Customer>) => { const customer = customers.find(c => c.code === code); if (!customer) return; const newCustomer = { ...customer, ...updatedData }; setCustomers(prev => prev.map(c => c.code === code ? (updatedData.code ? { ...newCustomer, code: updatedData.code } : newCustomer) : c)); if (isOnline) { try { if (updatedData.code && updatedData.code !== code) { await deleteDoc(doc(db, 'customers', code)); await setDoc(doc(db, 'customers', updatedData.code), cleanDoc(newCustomer)); } else { await setDoc(doc(db, 'customers', code), cleanDoc(newCustomer)); } } catch (e) { handleFirebaseError(e); } } };
+  const deleteCustomer = async (code: string) => { setCustomers(prev => prev.filter(c => c.code !== code)); if (isOnline) { try { await deleteDoc(doc(db, 'customers', code)); } catch (e) { handleFirebaseError(e); } } };
 
-  const addSupplier = async (supplier: Supplier) => { if (isOnline) { try { await setDoc(doc(db, 'suppliers', supplier.code), supplier); } catch (e) { handleFirebaseError(e); } } else { setSuppliers(prev => [...prev, supplier]); } };
-  const updateSupplier = async (code: string, updatedData: Partial<Supplier>) => { const supplier = suppliers.find(s => s.code === code); if (!supplier) return; const newSupplier = { ...supplier, ...updatedData }; if (isOnline) { try { await setDoc(doc(db, 'suppliers', code), newSupplier); } catch (e) { handleFirebaseError(e); } } else { setSuppliers(prev => prev.map(s => s.code === code ? newSupplier : s)); } };
-  const addEmployee = async (employee: Employee) => { if (isOnline) { try { await setDoc(doc(db, 'employees', employee.code), employee); } catch (e) { handleFirebaseError(e); } } else { setEmployees(prev => [...prev, employee]); } };
-  const updateEmployee = async (code: string, updatedData: Partial<Employee>) => { const employee = employees.find(e => e.code === code); if (!employee) return; const newEmployee = { ...employee, ...updatedData }; if (isOnline) { try { await setDoc(doc(db, 'employees', code), newEmployee); } catch (e) { handleFirebaseError(e); } } else { setEmployees(prev => prev.map(e => e.code === code ? newEmployee : e)); } };
-  const deleteEmployee = async (code: string) => { if (isOnline) { try { await deleteDoc(doc(db, 'employees', code)); } catch (e) { handleFirebaseError(e); } } else { setEmployees(prev => prev.filter(e => e.code !== code)); } };
+  const addSupplier = async (supplier: Supplier) => { setSuppliers(prev => [...prev.filter(s => s.code !== supplier.code), supplier]); if (isOnline) { try { await setDoc(doc(db, 'suppliers', supplier.code), cleanDoc(supplier)); } catch (e) { handleFirebaseError(e); } } };
+  const updateSupplier = async (code: string, updatedData: Partial<Supplier>) => { const supplier = suppliers.find(s => s.code === code); if (!supplier) return; const newSupplier = { ...supplier, ...updatedData }; setSuppliers(prev => prev.map(s => s.code === code ? newSupplier : s)); if (isOnline) { try { await setDoc(doc(db, 'suppliers', code), cleanDoc(newSupplier)); } catch (e) { handleFirebaseError(e); } } };
+  const addEmployee = async (employee: Employee) => { setEmployees(prev => [...prev.filter(e => e.code !== employee.code), employee]); if (isOnline) { try { await setDoc(doc(db, 'employees', employee.code), cleanDoc(employee)); } catch (e) { handleFirebaseError(e); } } };
+  const updateEmployee = async (code: string, updatedData: Partial<Employee>) => { const employee = employees.find(e => e.code === code); if (!employee) return; const newEmployee = { ...employee, ...updatedData }; setEmployees(prev => prev.map(e => e.code === code ? newEmployee : e)); if (isOnline) { try { await setDoc(doc(db, 'employees', code), cleanDoc(newEmployee)); } catch (e) { handleFirebaseError(e); } } };
+  const deleteEmployee = async (code: string) => { setEmployees(prev => prev.filter(e => e.code !== code)); if (isOnline) { try { await deleteDoc(doc(db, 'employees', code)); } catch (e) { handleFirebaseError(e); } } };
 
   // --- Purchase Logic ---
 
@@ -701,7 +703,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       historyEntries.push({ 
         date: invoiceData.date, 
-        description: `سداد نقدي كامل فاتورة #${id} (${getPaymentMethodArabicName(paymentMethod)})`, 
+        description: 'دفعة', 
         amount: paidAmount 
       });
     } else {
@@ -712,7 +714,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       historyEntries.push({ 
         date: invoiceData.date, 
-        description: `دفعة نقدية مسددة من فاتورة #${id} (${getPaymentMethodArabicName(paymentMethod)})`, 
+        description: 'دفعة', 
         amount: paidAmount 
       });
     }
@@ -1093,9 +1095,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Update Customer Balance
     if (customer) {
         const newBalance = customer.balance + amount;
+        const customerLedgerDesc = notes && notes.trim() ? `دفعة (${notes.trim()})` : 'دفعة';
         const newHistory = [...(customer.history || []), { 
           date, 
-          description: `سداد/تحصيل نقدية: ${description}`, 
+          description: customerLedgerDesc, 
           amount 
         }];
         await updateCustomer(customerCode, { balance: newBalance, history: newHistory });
@@ -1133,32 +1136,65 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addTransfer = async (data: { entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod }) => {
       const { entityType, entityCode, amount, type, date, notes, paymentMethod } = data;
       const tId = `TR${Date.now()}`;
-      const description = `${type === 'IN' ? 'استلام من' : 'دفع لـ'} ${entityType === 'CUSTOMER' ? 'عميل' : entityType === 'SUPPLIER' ? 'مورد' : 'موظف'} (${entityCode}) ${notes ? `- ${notes}` : ''}`;
-      
+      let treasuryDesc = '';
+
       if (entityType === 'CUSTOMER') {
           const c = customers.find(x => x.code === entityCode);
+          const customerName = c?.name || entityCode;
+          const change = type === 'IN' ? amount : -amount;
+          const newBalance = (c ? c.balance : 0) + change;
+          const customerHistDesc = type === 'IN' 
+              ? (notes && notes.trim() ? `دفعة (${notes.trim()})` : 'دفعة') 
+              : (notes && notes.trim() ? `صرف لعميل (${notes.trim()})` : 'صرف لعميل');
+
           if (c) {
-              const change = type === 'IN' ? amount : -amount;
-              const newBalance = c.balance + change;
-              const newHistory = [...c.history, { date, description: description, amount: change }];
+              const newHistory = [...(c.history || []), { date, description: customerHistDesc, amount: change }];
               await updateCustomer(entityCode, { balance: newBalance, history: newHistory });
           }
+
+          treasuryDesc = type === 'IN'
+              ? `تحصيل من عميل: ${customerName} (${entityCode})${notes && notes.trim() ? ` - ${notes.trim()}` : ''}`
+              : `صرف لعميل: ${customerName} (${entityCode})${notes && notes.trim() ? ` - ${notes.trim()}` : ''}`;
+
       } else if (entityType === 'SUPPLIER') {
           const s = suppliers.find(x => x.code === entityCode);
+          const supplierName = s?.name || entityCode;
+          // OUT: paying supplier reduces our debt to them (-amount)
+          // IN: refund from supplier increases balance
+          const change = type === 'OUT' ? -amount : amount;
+          const newBalance = (s ? s.balance : 0) + change;
+          const supplierHistDesc = type === 'OUT'
+              ? (notes && notes.trim() ? `دفعة (${notes.trim()})` : 'دفعة')
+              : (notes && notes.trim() ? `استلام من مورد (${notes.trim()})` : 'استلام من مورد');
+
           if (s) {
-               const change = type === 'IN' ? amount : -amount; 
-               const newBalance = s.balance + change;
-               const newHistory = [...s.history, { date, description, amount: change }];
-               await updateSupplier(entityCode, { balance: newBalance, history: newHistory });
+              const newHistory = [...(s.history || []), { date, description: supplierHistDesc, amount: change }];
+              await updateSupplier(entityCode, { balance: newBalance, history: newHistory });
           }
+
+          treasuryDesc = type === 'OUT'
+              ? `دفع لمورد: ${supplierName} (${entityCode})${notes && notes.trim() ? ` - ${notes.trim()}` : ''}`
+              : `استلام من مورد: ${supplierName} (${entityCode})${notes && notes.trim() ? ` - ${notes.trim()}` : ''}`;
+
       } else if (entityType === 'EMPLOYEE') {
           const e = employees.find(x => x.code === entityCode);
+          const employeeName = e?.name || entityCode;
+          // OUT: paying advance or salary to employee increases employee debt to us (+amount)
+          // IN: employee returns advance (-amount)
+          const change = type === 'OUT' ? amount : -amount;
+          const newBalance = (e ? e.balance : 0) + change;
+          const empHistDesc = type === 'OUT'
+              ? (notes && notes.trim() ? `صرف (${notes.trim()})` : 'صرف راتب / سلفة')
+              : (notes && notes.trim() ? `استرداد (${notes.trim()})` : 'استرداد سلفة');
+
           if (e) {
-              const change = type === 'OUT' ? amount : -amount;
-              const newBalance = e.balance + change;
-              const newHistory = [...e.history, { date, description, amount: change }];
+              const newHistory = [...(e.history || []), { date, description: empHistDesc, amount: change }];
               await updateEmployee(entityCode, { balance: newBalance, history: newHistory });
           }
+
+          treasuryDesc = type === 'OUT'
+              ? `صرف لموظف: ${employeeName} (${entityCode})${notes && notes.trim() ? ` - ${notes.trim()}` : ''}`
+              : `استرداد من موظف: ${employeeName} (${entityCode})${notes && notes.trim() ? ` - ${notes.trim()}` : ''}`;
       }
 
       const transaction: TreasuryTransaction = {
@@ -1167,8 +1203,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           credit: type === 'IN' ? amount : 0,
           debit: type === 'OUT' ? amount : 0,
           balance: 0,
-          paymentMethod,
-          description
+          paymentMethod: paymentMethod || 'CASH',
+          description: treasuryDesc
       };
       
       // Optimistic update
@@ -1178,7 +1214,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
 
       if (isOnline) {
-          try { await setDoc(doc(db, 'treasury', tId), transaction); } catch (e) { handleFirebaseError(e); }
+          try { 
+              await setDoc(doc(db, 'treasury', tId), cleanDoc(transaction)); 
+          } catch (e) { 
+              handleFirebaseError(e); 
+          }
       }
   };
 
@@ -1234,8 +1274,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   ) => {
     let data: any[] = [];
     const isCustomer = type === 'CUSTOMER';
-    const colDebit = isCustomer ? 'مدين (عليه)' : 'لنا (سداد)';
-    const colCredit = isCustomer ? 'دائن (له/سداد)' : 'علينا (له)';
+    const colDebit = 'مدين';
+    const colCredit = 'دائن';
 
     if (isItemized) {
       data = history.map((r, idx) => ({
@@ -1391,13 +1431,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       flex-direction: column;
     }
     .header { 
-      display: flex; 
-      justify-content: space-between; 
+      display: grid; 
+      grid-template-columns: 1fr auto 1fr; 
       align-items: center; 
       border-bottom: 3px solid #000; 
       padding-bottom: 8px; 
       margin-bottom: 10px; 
     }
+    .company-info { text-align: right; }
     .company-info h1 { 
       margin: 0; 
       font-size: 38px; 
@@ -1412,6 +1453,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       font-size: 20px; 
       font-weight: 800; 
     }
+    .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
+    .invoice-title { text-align: left; }
     .invoice-title h2 { 
       margin: 0; 
       font-size: 24px; 
@@ -1811,8 +1854,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const { title, entityName, entityCode, entityPhone, type, rows, totalDebit, totalCredit, finalBalance, dateRange } = options;
     const isCustomer = type === 'CUSTOMER';
-    const colDebitTitle = isCustomer ? 'مدين (عليه)' : 'لنا (سداد)';
-    const colCreditTitle = isCustomer ? 'دائن (له/سداد)' : 'علينا (له)';
+    const colDebitTitle = 'مدين';
+    const colCreditTitle = 'دائن';
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -1827,11 +1870,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           @page { size: A4 portrait; margin: 8mm; }
           * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; margin: 0; padding: 10px; color: #000; font-size: 13px; line-height: 1.25; }
-          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 6px; margin-bottom: 8px; }
+          .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 8px; margin-bottom: 8px; }
+          .company-info { text-align: right; }
           .company-info h1 { margin: 0; font-size: 26px; font-weight: 900; line-height: 1.1; }
           .company-info p { margin: 2px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
-          .logo-box img { max-height: 65px; max-width: 200px; object-fit: contain; }
-          .statement-title h2 { margin: 0; font-size: 18px; border: 2.5px solid #000; padding: 4px 14px; font-weight: 900; border-radius: 6px; background-color: #f8fafc; }
+          .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
+          .logo-box img { max-height: 70px; max-width: 200px; object-fit: contain; }
+          .statement-title { text-align: left; }
+          .statement-title h2 { margin: 0; font-size: 22px; border: 2.5px solid #000; padding: 6px 24px; font-weight: 900; border-radius: 8px; background-color: #f8fafc; display: inline-block; letter-spacing: 0.5px; }
           .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2px solid #000; padding: 6px 12px; border-radius: 6px; background: #f8fafc; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; gap: 8px; }
           .info-item { display: flex; flex-direction: column; align-items: center; }
           .info-label { font-weight: 800; color: #475569; font-size: 11px; }
@@ -1861,7 +1907,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
           </div>
           <div class="statement-title">
-            <h2>${title}</h2>
+            <h2>كشف حساب</h2>
           </div>
         </div>
 
@@ -1884,32 +1930,30 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           <thead>
             <tr>
               <th style="width: 32px;">م</th>
-              <th style="width: 75px;">التاريخ</th>
-              <th style="width: 75px;">الفاتورة</th>
-              <th>الصنف / البيان</th>
-              <th style="width: 65px;">الكمية</th>
-              <th style="width: 65px;">السعر</th>
+              <th style="width: 105px; white-space: nowrap;">التاريخ</th>
+              <th style="width: 70px;">الفاتورة</th>
+              <th style="min-width: 180px; text-align: right; padding-right: 8px;">الصنف / البيان</th>
+              <th style="width: 60px;">الكمية</th>
+              <th style="width: 60px;">السعر</th>
               <th style="width: 75px;">الإجمالي</th>
-              <th style="width: 80px;">${colDebitTitle}</th>
-              <th style="width: 80px;">${colCreditTitle}</th>
-              <th style="width: 85px;">الرصيد</th>
-              <th style="width: 65px;">الحالة</th>
+              <th style="width: 85px;">${colDebitTitle}</th>
+              <th style="width: 85px;">${colCreditTitle}</th>
+              <th style="width: 90px; white-space: nowrap;">الرصيد</th>
             </tr>
           </thead>
           <tbody>
             ${rows.map(r => `
               <tr>
-                <td>${r.num}</td>
-                <td>${r.date}</td>
+                <td style="width: 32px;">${r.num}</td>
+                <td style="white-space: nowrap; font-family: monospace; font-size: 12px;">${r.date}</td>
                 <td style="font-family: monospace;">${r.ref || '-'}</td>
-                <td class="text-right" style="padding-right: 8px;">${r.itemName}</td>
-                <td>${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
+                <td class="text-right" style="padding-right: 8px; font-weight: 800; font-size: 12.5px;">${r.itemName}</td>
+                <td style="font-weight: 800;">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
                 <td>${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</td>
                 <td style="font-weight: 800;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</td>
                 <td style="color: #b91c1c; font-weight: 800;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
                 <td style="color: #15803d; font-weight: 800;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
-                <td style="font-weight: 900;" dir="ltr">${r.runningBalance.toLocaleString()}</td>
-                <td style="font-size: 11px; font-weight: 800;">${r.runningBalance < 0 ? (isCustomer ? 'مدين (عليه)' : 'لنا') : r.runningBalance > 0 ? (isCustomer ? 'دائن (له)' : 'علينا') : 'متزن'}</td>
+                <td style="font-weight: 900; white-space: nowrap;" dir="ltr">${r.runningBalance.toLocaleString()}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -1945,12 +1989,171 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     printWindow.document.close();
   };
 
+  const exportBackupData = (): SystemBackup => {
+    const backup: SystemBackup = {
+      version: '1.0',
+      systemName: 'بورصة النجار لتجارة البيض',
+      exportedAt: new Date().toISOString(),
+      exportedBy: currentUser?.fullName || 'مستخدم النظام',
+      stats: {
+        customersCount: customers.length,
+        suppliersCount: suppliers.length,
+        invoicesCount: invoices.length,
+        purchasesCount: purchases.length,
+        productsCount: products.length,
+        treasuryCount: treasury.length,
+        employeesCount: employees.length,
+        usersCount: users.length
+      },
+      data: {
+        customers,
+        suppliers,
+        products,
+        employees,
+        invoices,
+        purchases,
+        treasury,
+        users,
+        companyLogo
+      }
+    };
+
+    const jsonStr = JSON.stringify(backup, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const downloadAnchor = document.createElement('a');
+    const today = new Date().toISOString().split('T')[0];
+    const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
+    downloadAnchor.href = url;
+    downloadAnchor.download = `backup_naggar_${today}_${time}.json`;
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    setTimeout(() => {
+      if (document.body.contains(downloadAnchor)) {
+        document.body.removeChild(downloadAnchor);
+      }
+      URL.revokeObjectURL(url);
+    }, 200);
+
+    return backup;
+  };
+
+  const restoreBackupData = async (backup: any): Promise<{ success: boolean; message: string }> => {
+    try {
+      if (!backup) {
+        throw new Error('ملف النسخة الاحتياطية فارغ أو غير موجود.');
+      }
+
+      // Handle both structured { version, data: { ... } } and direct { customers, suppliers, ... }
+      const rawData = backup.data && typeof backup.data === 'object' ? backup.data : backup;
+
+      const bCustomers: Customer[] = Array.isArray(rawData.customers) ? rawData.customers : [];
+      const bSuppliers: Supplier[] = Array.isArray(rawData.suppliers) ? rawData.suppliers : [];
+      const bProducts: Product[] = Array.isArray(rawData.products) ? rawData.products : [];
+      const bEmployees: Employee[] = Array.isArray(rawData.employees) ? rawData.employees : [];
+      const bInvoices: SalesInvoice[] = Array.isArray(rawData.invoices) ? rawData.invoices : [];
+      const bPurchases: Purchase[] = Array.isArray(rawData.purchases) ? rawData.purchases : [];
+      const bTreasury: TreasuryTransaction[] = Array.isArray(rawData.treasury) ? rawData.treasury : [];
+      const bUsers: User[] = Array.isArray(rawData.users) ? rawData.users : [];
+      const bLogo: string | null = rawData.companyLogo || null;
+
+      // 1. Immediate local state update (works offline & online immediately)
+      setCustomers(bCustomers);
+      setSuppliers(bSuppliers);
+      setProducts(bProducts);
+      setEmployees(bEmployees);
+      setInvoices(bInvoices);
+      setPurchases(bPurchases);
+      setTreasury(bTreasury);
+      if (bUsers && bUsers.length > 0) setUsers(bUsers);
+      if (bLogo) setCompanyLogo(bLogo);
+
+      // Save to localStorage for instant persistence
+      try {
+        localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(bCustomers));
+        localStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify(bSuppliers));
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(bProducts));
+        localStorage.setItem(STORAGE_KEYS.EMPLOYEES, JSON.stringify(bEmployees));
+        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(bInvoices));
+        localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify(bPurchases));
+        localStorage.setItem(STORAGE_KEYS.TREASURY, JSON.stringify(bTreasury));
+        if (bUsers && bUsers.length > 0) localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(bUsers));
+        if (bLogo) localStorage.setItem(STORAGE_KEYS.COMPANY_LOGO, bLogo);
+      } catch (lsErr) {
+        console.warn("LocalStorage save warning during restore:", lsErr);
+      }
+
+      // 2. If Online, synchronize with Firestore
+      if (isOnline) {
+        const syncCollection = async (collectionName: string, items: any[], getId: (item: any, index: number) => string) => {
+          try {
+            const colRef = collection(db, collectionName);
+            const snap = await getDocs(colRef);
+            
+            // Delete existing docs in cloud
+            const deletePromises = snap.docs.map((d: any) => 
+              deleteDoc(d.ref).catch((e: any) => console.warn(`Delete doc ${collectionName}/${d.id} failed:`, e))
+            );
+            await Promise.all(deletePromises);
+
+            // Write restored docs with guaranteed valid non-empty IDs
+            const writePromises = items.map(async (item: any, idx: number) => {
+              const rawId = getId(item, idx);
+              const id = rawId && String(rawId).trim() 
+                ? String(rawId).trim() 
+                : `${collectionName}_${Date.now()}_${idx + 1}`;
+
+              try {
+                await setDoc(doc(db, collectionName, id), cleanDoc(item));
+              } catch (setErr) {
+                console.error(`Error saving ${collectionName}/${id}:`, setErr);
+              }
+            });
+            await Promise.all(writePromises);
+          } catch (colErr) {
+            console.error(`Error syncing collection ${collectionName}:`, colErr);
+          }
+        };
+
+        await syncCollection('customers', bCustomers, (c, idx) => c.code || c.id || `C_${idx + 1}`);
+        await syncCollection('suppliers', bSuppliers, (s, idx) => s.code || s.id || `S_${idx + 1}`);
+        await syncCollection('products', bProducts, (p, idx) => p.code || p.id || `P_${idx + 1}`);
+        await syncCollection('employees', bEmployees, (e, idx) => e.code || e.id || `E_${idx + 1}`);
+        await syncCollection('invoices', bInvoices, (inv, idx) => inv.id || inv.code || `INV_${idx + 1}`);
+        await syncCollection('purchases', bPurchases, (pur, idx) => pur.id || pur.code || `PUR_${idx + 1}`);
+        await syncCollection('treasury', bTreasury, (t, idx) => t.id || `TR_${idx + 1}`);
+        if (bUsers && bUsers.length > 0) {
+          await syncCollection('users', bUsers, (u, idx) => u.id || `U_${idx + 1}`);
+        }
+        if (bLogo) {
+          try {
+            await setDoc(doc(db, 'settings', 'general'), { logo: bLogo }, { merge: true });
+          } catch (logoErr) {
+            console.warn("Logo save failed:", logoErr);
+          }
+        }
+      }
+
+      return { 
+        success: true, 
+        message: `تم تثبيت واسترجاع النسخة الاحتياطية بنجاح! تم استعادة ${bCustomers.length} عميل، ${bSuppliers.length} مورد، ${bInvoices.length} فاتورة بيع، ${bPurchases.length} فاتورة شراء، و${bTreasury.length} حركة خزينة.` 
+      };
+    } catch (err: any) {
+      console.error("Restore error:", err);
+      return { 
+        success: false, 
+        message: `فشل استرجاع النسخة الاحتياطية: ${err.message || 'خطأ غير معروف'}` 
+      };
+    }
+  };
+
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, deletePurchase,
       addPurchase, updatePurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
       seedDatabase, printInvoice, printPurchaseInvoice, printLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
+      exportBackupData, restoreBackupData,
       currentTreasuryBalance, balances
     }}>
       {children}

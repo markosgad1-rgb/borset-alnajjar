@@ -171,6 +171,30 @@ export const Customers: React.FC = () => {
     }
   };
 
+  // Helper to format movement descriptions to a clean label like 'دفعة'
+  const formatCustomerMovementDesc = (desc: string): string => {
+    if (!desc) return '';
+    if (
+      desc.includes('سداد/تحصيل نقدية') || 
+      desc.includes('تحصيل من عميل') || 
+      desc.includes('دفعة نقدية مسددة') || 
+      desc.includes('سداد نقدي كامل') || 
+      desc.includes('استلام من عميل') ||
+      desc.startsWith('تحصيل') ||
+      desc.startsWith('سداد')
+    ) {
+      const parts = desc.split(' - ');
+      if (parts.length > 1) {
+        const last = parts[parts.length - 1].trim();
+        if (!last.includes('تحصيل من عميل') && !last.startsWith('فاتورة #') && last !== '') {
+          return `دفعة (${last})`;
+        }
+      }
+      return 'دفعة';
+    }
+    return desc;
+  };
+
   // Helper to compute itemized ledger rows by expanding sales invoices into individual egg products with optional date filter
   const getItemizedRowsForRange = (startDate?: string, endDate?: string) => {
     if (!selectedCustomer || !selectedCustomer.history) return [];
@@ -270,11 +294,13 @@ export const Customers: React.FC = () => {
         const credit = !isDebit ? h.amount : 0;
         running += h.amount;
 
+        const displayName = formatCustomerMovementDesc(h.description);
+
         rows.push({
           num: counter++,
           date: h.date,
           ref: invId || '-',
-          itemName: h.description,
+          itemName: displayName,
           quantity: '-',
           price: '-',
           lineTotal: '-',
@@ -317,7 +343,10 @@ export const Customers: React.FC = () => {
     selectedCustomer.history.forEach(h => {
       if (filterStartDate && h.date < filterStartDate) return;
       if (filterEndDate && h.date > filterEndDate) return;
-      list.push(h);
+      list.push({
+        ...h,
+        description: formatCustomerMovementDesc(h.description)
+      });
     });
 
     return list;
@@ -861,14 +890,14 @@ export const Customers: React.FC = () => {
                     <thead className="bg-gray-100 text-gray-800 font-bold sticky top-0 z-10 border-b border-gray-300 shadow-2xs">
                       <tr>
                         <th className="p-2 text-center w-8 border-l border-gray-200">م</th>
-                        <th className="p-2 text-center w-20 border-l border-gray-200">التاريخ</th>
+                        <th className="p-2 text-center w-24 whitespace-nowrap border-l border-gray-200">التاريخ</th>
                         <th className="p-2 text-center w-20 border-l border-gray-200">الفاتورة</th>
                         <th className="p-2 border-l border-gray-200">الصنف / البيان</th>
                         <th className="p-2 text-center w-16 border-l border-gray-200">الكمية</th>
                         <th className="p-2 text-center w-16 border-l border-gray-200">السعر</th>
                         <th className="p-2 text-center w-20 border-l border-gray-200 bg-amber-50/70 text-amber-900">الإجمالي</th>
-                        <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين (عليه)</th>
-                        <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن (له)</th>
+                        <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين</th>
+                        <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن</th>
                         <th className="p-2 text-center w-24 border-l border-gray-200 bg-gray-50">الرصيد</th>
                         <th className="p-2 text-center w-16">الحالة</th>
                       </tr>
@@ -992,8 +1021,8 @@ export const Customers: React.FC = () => {
                         <th className="p-2.5 text-center w-12 border-l border-gray-200">م</th>
                         <th className="p-2.5 text-center w-24 border-l border-gray-200">التاريخ</th>
                         <th className="p-2.5 border-l border-gray-200">البيان</th>
-                        <th className="p-2.5 text-center w-28 text-red-700 bg-red-50/50 border-l border-gray-200">مدين (عليه)</th>
-                        <th className="p-2.5 text-center w-28 text-green-700 bg-green-50/50 border-l border-gray-200">دائن (له)</th>
+                        <th className="p-2.5 text-center w-28 text-red-700 bg-red-50/50 border-l border-gray-200">مدين</th>
+                        <th className="p-2.5 text-center w-28 text-green-700 bg-green-50/50 border-l border-gray-200">دائن</th>
                         <th className="p-2.5 text-center w-28 border-l border-gray-200">الرصيد</th>
                       </tr>
                     </thead>

@@ -115,3 +115,31 @@ export interface User {
 }
 
 export type PageView = 'dashboard' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users';
+
+export interface SystemBackup {
+  version: string;
+  systemName: string;
+  exportedAt: string;
+  exportedBy: string;
+  stats: {
+    customersCount: number;
+    suppliersCount: number;
+    invoicesCount: number;
+    purchasesCount: number;
+    productsCount: number;
+    treasuryCount: number;
+    employeesCount: number;
+    usersCount: number;
+  };
+  data: {
+    customers: Customer[];
+    suppliers: Supplier[];
+    products: Product[];
+    employees: Employee[];
+    invoices: SalesInvoice[];
+    purchases: Purchase[];
+    treasury: TreasuryTransaction[];
+    users?: User[];
+    companyLogo?: string | null;
+  };
+}
