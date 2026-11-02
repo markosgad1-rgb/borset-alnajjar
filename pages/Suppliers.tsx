@@ -204,8 +204,9 @@ export const Suppliers: React.FC = () => {
     // 1. Calculate prior balance if startDate is specified
     if (startDate) {
       for (const h of selectedSupplier.history) {
+        if (h.description.includes('تعديل')) continue;
         if (h.date < startDate) {
-          const isPurchaseInvoice = h.description.includes('فاتورة مشتريات') && !h.description.includes('تعديل');
+          const isPurchaseInvoice = h.description.includes('فاتورة مشتريات');
           const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
           const pId = pMatch ? pMatch[1] : null;
           const purchase = pId ? purchases.find(p => p.id === pId) : null;
@@ -259,10 +260,11 @@ export const Suppliers: React.FC = () => {
     }
 
     for (const h of selectedSupplier.history) {
+      if (h.description.includes('تعديل')) continue;
       if (startDate && h.date < startDate) continue;
       if (endDate && h.date > endDate) continue;
 
-      const isPurchaseInvoice = h.description.includes('فاتورة مشتريات') && !h.description.includes('تعديل');
+      const isPurchaseInvoice = h.description.includes('فاتورة مشتريات');
       const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
       const pId = pMatch ? pMatch[1] : null;
       const purchase = pId ? purchases.find(p => p.id === pId) : null;
@@ -328,7 +330,18 @@ export const Suppliers: React.FC = () => {
     let prior = 0;
     if (filterStartDate) {
       selectedSupplier.history.forEach(h => {
-        if (h.date < filterStartDate) prior += h.amount;
+        if (h.description.includes('تعديل')) return;
+        if (h.date < filterStartDate) {
+          const isPurch = h.description.includes('فاتورة مشتريات');
+          const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+          const pId = pMatch ? pMatch[1] : null;
+          const purchase = pId ? purchases.find(p => p.id === pId) : null;
+          if (isPurch && purchase) {
+            prior += purchase.total;
+          } else {
+            prior += h.amount;
+          }
+        }
       });
     }
 
@@ -342,16 +355,24 @@ export const Suppliers: React.FC = () => {
     }
 
     selectedSupplier.history.forEach(h => {
+      if (h.description.includes('تعديل')) return;
       if (filterStartDate && h.date < filterStartDate) return;
       if (filterEndDate && h.date > filterEndDate) return;
+
+      const isPurch = h.description.includes('فاتورة مشتريات');
+      const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+      const pId = pMatch ? pMatch[1] : null;
+      const purchase = pId ? purchases.find(p => p.id === pId) : null;
+
       list.push({
         ...h,
+        amount: (isPurch && purchase) ? purchase.total : h.amount,
         description: formatSupplierMovementDesc(h.description)
       });
     });
 
     return list;
-  }, [selectedSupplier, filterStartDate, filterEndDate]);
+  }, [selectedSupplier, purchases, filterStartDate, filterEndDate]);
 
   const totalEggQuantity = useMemo(() => {
     return itemizedRows.reduce((sum, r) => typeof r.quantity === 'number' ? sum + r.quantity : sum, 0);

@@ -204,6 +204,7 @@ export const Customers: React.FC = () => {
     // 1. Calculate prior balance if startDate is specified
     if (startDate) {
       for (const h of selectedCustomer.history) {
+        if (h.description.includes('تعديل')) continue;
         if (h.date < startDate) {
           const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
           const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
@@ -259,6 +260,7 @@ export const Customers: React.FC = () => {
     }
 
     for (const h of selectedCustomer.history) {
+      if (h.description.includes('تعديل')) continue;
       if (startDate && h.date < startDate) continue;
       if (endDate && h.date > endDate) continue;
 
@@ -327,7 +329,18 @@ export const Customers: React.FC = () => {
     let prior = 0;
     if (filterStartDate) {
       selectedCustomer.history.forEach(h => {
-        if (h.date < filterStartDate) prior += h.amount;
+        if (h.description.includes('تعديل')) return;
+        if (h.date < filterStartDate) {
+          const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة');
+          const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+          const invId = invMatch ? invMatch[1] : null;
+          const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+          if (isInv && invoice) {
+            prior -= invoice.total;
+          } else {
+            prior += h.amount;
+          }
+        }
       });
     }
 
@@ -341,16 +354,24 @@ export const Customers: React.FC = () => {
     }
 
     selectedCustomer.history.forEach(h => {
+      if (h.description.includes('تعديل')) return;
       if (filterStartDate && h.date < filterStartDate) return;
       if (filterEndDate && h.date > filterEndDate) return;
+
+      const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة');
+      const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+      const invId = invMatch ? invMatch[1] : null;
+      const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+
       list.push({
         ...h,
+        amount: (isInv && invoice) ? -invoice.total : h.amount,
         description: formatCustomerMovementDesc(h.description)
       });
     });
 
     return list;
-  }, [selectedCustomer, filterStartDate, filterEndDate]);
+  }, [selectedCustomer, invoices, filterStartDate, filterEndDate]);
 
   // Summary Metrics based on currently filtered rows
   const totalEggQuantity = useMemo(() => {

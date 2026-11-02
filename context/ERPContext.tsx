@@ -587,12 +587,37 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (supplierSnap.exists()) {
           const s = supplierSnap.data() as Supplier;
           const newBalance = s.balance + balanceChange;
-          const newHistory = [...s.history, { 
-            date: newPurchaseData.date, 
-            description: `تعديل فاتورة مشتريات #${oldPurchase.id}`, 
-            amount: balanceChange 
-          }];
-          await updateDoc(supplierRef, { balance: newBalance, history: newHistory });
+          
+          const cleanHistory = (s.history || []).filter(h => 
+            !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
+            !h.description.includes(`تعديل فاتورة مشتريات #${newPurchaseData.id}`)
+          );
+          const pPattern = `#${oldPurchase.id}`;
+          const hasExisting = cleanHistory.some(h => h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات'));
+          const newDesc = `فاتورة مشتريات #${newPurchaseData.id}`;
+
+          let newHistory;
+          if (hasExisting) {
+            newHistory = cleanHistory.map(h => {
+              if (h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات')) {
+                return {
+                  ...h,
+                  date: newPurchaseData.date,
+                  description: newDesc,
+                  amount: newPurchaseData.total
+                };
+              }
+              return h;
+            });
+          } else {
+            newHistory = [...cleanHistory, {
+              date: newPurchaseData.date,
+              description: newDesc,
+              amount: newPurchaseData.total
+            }];
+          }
+
+          await updateDoc(supplierRef, cleanDoc({ balance: newBalance, history: newHistory }));
         }
 
         // Revert Old Inventory
@@ -632,10 +657,39 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       
       setSuppliers(prev => prev.map(s => {
         if(s.code === oldPurchase.supplierCode) {
+          const cleanHistory = (s.history || []).filter(h => 
+            !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
+            !h.description.includes(`تعديل فاتورة مشتريات #${newPurchaseData.id}`)
+          );
+          const pPattern = `#${oldPurchase.id}`;
+          const hasExisting = cleanHistory.some(h => h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات'));
+          const newDesc = `فاتورة مشتريات #${newPurchaseData.id}`;
+
+          let newHistory;
+          if (hasExisting) {
+            newHistory = cleanHistory.map(h => {
+              if (h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات')) {
+                return {
+                  ...h,
+                  date: newPurchaseData.date,
+                  description: newDesc,
+                  amount: newPurchaseData.total
+                };
+              }
+              return h;
+            });
+          } else {
+            newHistory = [...cleanHistory, {
+              date: newPurchaseData.date,
+              description: newDesc,
+              amount: newPurchaseData.total
+            }];
+          }
+
           return {
             ...s,
             balance: s.balance + balanceChange,
-            history: [...s.history, { date: newPurchaseData.date, description: `تعديل فاتورة مشتريات #${oldPurchase.id}`, amount: balanceChange }]
+            history: newHistory
           };
         }
         return s;
@@ -878,14 +932,41 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setInvoices(prev => prev.map(inv => inv.id === oldInvoice.id ? finalNewInvoice : inv));
     setCustomers(prev => prev.map(c => {
       if (c.code === oldInvoice.customerCode) {
+        const cleanHistory = (c.history || []).filter(h => 
+          !h.description.includes(`تعديل فاتورة #${oldInvoice.id}`) &&
+          !h.description.includes(`تعديل فاتورة #${newInvoiceData.id}`)
+        );
+        const invPattern = `#${oldInvoice.id}`;
+        const hasExisting = cleanHistory.some(h => h.description.includes(invPattern) && h.description.includes('فاتورة بيع'));
+        const newDesc = newPaid === 0 
+          ? `فاتورة بيع #${newInvoiceData.id} (آجل بالكامل)` 
+          : `فاتورة بيع #${newInvoiceData.id} (إجمالي ${newInvoiceData.total.toLocaleString()})`;
+
+        let updatedHistory;
+        if (hasExisting) {
+          updatedHistory = cleanHistory.map(h => {
+            if (h.description.includes(invPattern) && h.description.includes('فاتورة بيع')) {
+              return {
+                ...h,
+                date: newInvoiceData.date,
+                description: newDesc,
+                amount: -newInvoiceData.total
+              };
+            }
+            return h;
+          });
+        } else {
+          updatedHistory = [...cleanHistory, {
+            date: newInvoiceData.date,
+            description: newDesc,
+            amount: -newInvoiceData.total
+          }];
+        }
+
         return {
           ...c,
           balance: c.balance + debtDifference,
-          history: [...(c.history || []), { 
-            date: newInvoiceData.date, 
-            description: `تعديل فاتورة #${oldInvoice.id} (الإجمالي: ${newInvoiceData.total.toLocaleString()}، مدفوع: ${newPaid.toLocaleString()})`, 
-            amount: debtDifference 
-          }]
+          history: updatedHistory
         };
       }
       return c;
@@ -936,15 +1017,39 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (customerSnap.exists()) {
           const c = customerSnap.data() as Customer;
           const newBalance = c.balance + debtDifference;
-          const newHistory = [
-            ...(c.history || []), 
-            { 
-              date: newInvoiceData.date, 
-              description: `تعديل فاتورة #${oldInvoice.id} (الإجمالي: ${newInvoiceData.total.toLocaleString()}، مدفوع: ${newPaid.toLocaleString()})`, 
-              amount: debtDifference 
-            }
-          ];
-          await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: newHistory }));
+          
+          const cleanHistory = (c.history || []).filter(h => 
+            !h.description.includes(`تعديل فاتورة #${oldInvoice.id}`) &&
+            !h.description.includes(`تعديل فاتورة #${newInvoiceData.id}`)
+          );
+          const invPattern = `#${oldInvoice.id}`;
+          const hasExisting = cleanHistory.some(h => h.description.includes(invPattern) && h.description.includes('فاتورة بيع'));
+          const newDesc = newPaid === 0 
+            ? `فاتورة بيع #${newInvoiceData.id} (آجل بالكامل)` 
+            : `فاتورة بيع #${newInvoiceData.id} (إجمالي ${newInvoiceData.total.toLocaleString()})`;
+
+          let updatedHistory;
+          if (hasExisting) {
+            updatedHistory = cleanHistory.map(h => {
+              if (h.description.includes(invPattern) && h.description.includes('فاتورة بيع')) {
+                return {
+                  ...h,
+                  date: newInvoiceData.date,
+                  description: newDesc,
+                  amount: -newInvoiceData.total
+                };
+              }
+              return h;
+            });
+          } else {
+            updatedHistory = [...cleanHistory, {
+              date: newInvoiceData.date,
+              description: newDesc,
+              amount: -newInvoiceData.total
+            }];
+          }
+
+          await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: updatedHistory }));
         }
 
         // Handle Treasury Update/Reconciliation
