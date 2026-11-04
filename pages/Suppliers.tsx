@@ -3,23 +3,31 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, Truck, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Package, Layers, X, Search, PlusCircle, Check, ArrowRight,
-  Calendar, Filter
+  Calendar, Filter, MessageCircle
 } from 'lucide-react';
 import { Purchase } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
+import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const Suppliers: React.FC = () => {
   const { 
     suppliers, addSupplier, updateSupplier, deleteSupplier,
-    exportLedgerToExcel, exportAllSuppliersToExcel, clearLedger, 
-    currentUser, purchases, printLedger, printPurchaseInvoice 
+    clearLedger, 
+    currentUser, purchases, printLedger, printPurchaseInvoice,
+    companyLogo
   } = useERP();
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
+  const [isSharingPdf, setIsSharingPdf] = useState(false);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Consolidated Ledger Modal state
+  const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
+  const [consolidatedInitialTab, setConsolidatedInitialTab] = useState<'CUSTOMERS' | 'SUPPLIERS' | 'ALL'>('SUPPLIERS');
 
   // Supplier Add/Edit Modal state
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
@@ -418,6 +426,64 @@ export const Suppliers: React.FC = () => {
     setIsPrintModalOpen(false);
   };
 
+  // Handler to share supplier statement via WhatsApp as PDF
+  const handleShareWhatsAppStatement = async (sDate?: string, eDate?: string) => {
+    if (!selectedSupplier || isSharingPdf) return;
+    const fromDate = sDate !== undefined ? sDate : filterStartDate;
+    const toDate = eDate !== undefined ? eDate : filterEndDate;
+    const targetRows = getItemizedRowsForRange(fromDate, toDate);
+    const cred = targetRows.reduce((sum, r) => sum + r.credit, 0);
+    const deb = targetRows.reduce((sum, r) => sum + r.debit, 0);
+    const lastRow = targetRows[targetRows.length - 1];
+    const finalBal = lastRow ? lastRow.runningBalance : selectedSupplier.balance;
+
+    let syncTab: Window | null = null;
+    const isNative = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!isNative) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {}
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setIsSharingPdf(true);
+      // Failsafe timer so the button NEVER remains stuck on 'جاري التحويل'
+      safetyTimer = setTimeout(() => {
+        setIsSharingPdf(false);
+      }, 3500);
+
+      await shareSupplierStatementPdfViaWhatsApp({
+        supplierName: selectedSupplier.name,
+        supplierCode: selectedSupplier.code,
+        supplierPhone: selectedSupplier.phone,
+        dateRange: (fromDate || toDate) ? { from: fromDate, to: toDate } : undefined,
+        rows: targetRows,
+        totalDebit: deb,
+        totalCredit: cred,
+        finalBalance: finalBal
+      }, companyLogo, null, syncTab);
+    } catch (err: any) {
+      if (syncTab && !syncTab.closed) syncTab.close();
+      if (
+        err?.name !== 'AbortError' &&
+        err?.name !== 'NotAllowedError' &&
+        !err?.message?.includes?.('AbortError') &&
+        !err?.message?.includes?.('canceled') &&
+        !err?.message?.includes?.('cancelled')
+      ) {
+        console.error(err);
+      }
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsSharingPdf(false);
+      setIsPrintModalOpen(false);
+    }
+  };
+
   const applyDatePreset = (preset: 'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_30' | 'TODAY') => {
     const now = new Date();
     const today = now.toISOString().split('T')[0];
@@ -488,10 +554,14 @@ export const Suppliers: React.FC = () => {
           </button>
           
           <button 
-            onClick={exportAllSuppliersToExcel}
-            className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors shadow-xs"
+            onClick={() => {
+              setConsolidatedInitialTab('SUPPLIERS');
+              setIsConsolidatedModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 bg-orange-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-800 transition-colors shadow-xs"
+            title="عرض وطباعة كشف حساب مجمع لجميع الموردين"
           >
-            <Download size={15} /> تصدير القائمة (Excel)
+            <Layers size={15} /> كشف حساب مجمع للموردين
           </button>
         </div>
       </div>
@@ -663,21 +733,27 @@ export const Suppliers: React.FC = () => {
                       }}
                       className="flex items-center gap-1 bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-blue-700 shadow-2xs"
                     >
-                      <Printer size={11} /> طباعة بالتاريخ
+                      <Printer size={11} /> طباعة
                     </button>
 
                     <button 
-                      onClick={() => exportLedgerToExcel(
-                        selectedSupplier.name, 
-                        selectedSupplier.code, 
-                        viewMode === 'ITEMS' ? itemizedRows : invoiceRows, 
-                        selectedSupplier.balance, 
-                        'SUPPLIER',
-                        viewMode === 'ITEMS'
-                      )}
-                      className="flex items-center gap-1 bg-green-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-green-700 shadow-2xs"
+                      onClick={() => handleShareWhatsAppStatement()}
+                      disabled={isSharingPdf}
+                      className="flex items-center gap-1 bg-[#25D366] hover:bg-[#1ebc59] text-white px-2 py-0.5 rounded text-[11px] font-bold shadow-2xs disabled:opacity-50"
+                      title="إرسال كشف الحساب PDF عبر واتساب مباشرة"
                     >
-                      <Download size={11} /> Excel
+                      <MessageCircle size={11} /> {isSharingPdf ? '...' : 'PDF واتساب'}
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setConsolidatedInitialTab('SUPPLIERS');
+                        setIsConsolidatedModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-slate-700 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-slate-800 shadow-2xs"
+                      title="فتح كشف الحساب المجمع"
+                    >
+                      <Layers size={11} /> كشف مجمع
                     </button>
                   </div>
                 </div>
@@ -857,17 +933,23 @@ export const Suppliers: React.FC = () => {
                     </button>
 
                     <button 
-                      onClick={() => exportLedgerToExcel(
-                        selectedSupplier.name, 
-                        selectedSupplier.code, 
-                        viewMode === 'ITEMS' ? itemizedRows : invoiceRows, 
-                        selectedSupplier.balance, 
-                        'SUPPLIER',
-                        viewMode === 'ITEMS'
-                      )}
-                      className="flex items-center gap-1 bg-green-600 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-green-700 transition-colors shadow-2xs"
+                      onClick={() => handleShareWhatsAppStatement()}
+                      disabled={isSharingPdf}
+                      className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebc59] active:bg-[#199d4b] text-white px-3 py-1 rounded-md text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                      title="إرسال كشف الحساب كملف PDF عبر واتساب مباشرة بدون حفظه على الجهاز"
                     >
-                      <Download size={13} /> تصدير (Excel)
+                      <MessageCircle size={14} className="fill-white/20" /> {isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setConsolidatedInitialTab('SUPPLIERS');
+                        setIsConsolidatedModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-slate-700 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-slate-800 transition-colors shadow-2xs"
+                      title="فتح كشف الحساب المجمع"
+                    >
+                      <Layers size={13} /> كشف حساب مجمع
                     </button>
                   </div>
                 </div>
@@ -1240,12 +1322,19 @@ export const Suppliers: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex justify-end gap-2">
+            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
               <button 
                 onClick={() => printPurchaseInvoice(viewPurchase)} 
                 className="bg-orange-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 flex items-center gap-1.5 shadow-sm"
               >
                 <Printer size={14} /> طباعة الفاتورة
+              </button>
+              <button 
+                onClick={() => sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo, selectedSupplier.phone)} 
+                className="bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs"
+                title="مشاركة الفاتورة عبر واتساب كملف PDF"
+              >
+                <MessageCircle size={14} /> مشاركة PDF واتساب
               </button>
               <button 
                 onClick={() => setViewPurchase(null)} 
@@ -1376,7 +1465,16 @@ export const Suppliers: React.FC = () => {
                   onClick={() => handlePrintStatement(printStartDate, printEndDate)}
                   className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
                 >
-                  <Printer size={15} /> طباعة كشف الحساب الآن
+                  <Printer size={15} /> طباعة كشف الحساب
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleShareWhatsAppStatement(printStartDate, printEndDate)}
+                  disabled={isSharingPdf}
+                  className="bg-[#25D366] hover:bg-[#1ebc59] active:bg-[#199d4b] text-white py-2.5 px-4 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                  title="إرسال كشف الحساب كملف PDF عبر واتساب مباشرة بدون حفظه على الجهاز"
+                >
+                  <MessageCircle size={15} className="fill-white/20" /> {isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
                 </button>
                 <button
                   type="button"
@@ -1402,6 +1500,18 @@ export const Suppliers: React.FC = () => {
         </div>
       )}
 
+      {/* Consolidated Statement Modal */}
+      <ConsolidatedLedgerModal
+        isOpen={isConsolidatedModalOpen}
+        onClose={() => setIsConsolidatedModalOpen(false)}
+        initialTab={consolidatedInitialTab}
+        onSelectEntity={(type, code) => {
+          if (type === 'SUPPLIER') {
+            setSelectedSupplierCode(code);
+            setMobileView('DETAILS');
+          }
+        }}
+      />
     </div>
   );
 };

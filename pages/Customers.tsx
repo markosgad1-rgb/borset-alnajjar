@@ -3,23 +3,30 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle, ArrowRight,
-  Calendar, Filter
+  Calendar, Filter, MessageCircle
 } from 'lucide-react';
 import { SalesInvoice } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
+import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const Customers: React.FC = () => {
   const { 
     customers, addCustomer, updateCustomer, deleteCustomer, 
-    exportLedgerToExcel, exportAllCustomersToExcel, clearLedger, 
-    currentUser, invoices, printInvoice, printLedger 
+    clearLedger, 
+    currentUser, invoices, printInvoice, printLedger, companyLogo 
   } = useERP();
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
+  const [isSharingPdf, setIsSharingPdf] = useState(false);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Consolidated Ledger Modal state
+  const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
+  const [consolidatedInitialTab, setConsolidatedInitialTab] = useState<'CUSTOMERS' | 'SUPPLIERS' | 'ALL'>('CUSTOMERS');
 
   // Customer Add/Edit Modal state
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -212,9 +219,9 @@ export const Customers: React.FC = () => {
           const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
 
           if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
-            invoice.items.forEach((item) => {
-              priorBalance -= (item.quantity * item.price);
-            });
+            const invoiceTotal = invoice.items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+            const invoicePaid = Math.max(0, Number(invoice.paidAmount || 0));
+            priorBalance -= (invoiceTotal - invoicePaid);
           } else {
             priorBalance += h.amount;
           }
@@ -270,10 +277,17 @@ export const Customers: React.FC = () => {
       const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
 
       if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
-        // Expand into each egg item with full details
+        const rawPaid = Number(invoice.paidAmount || 0);
+        const invoicePaid = Math.max(0, isNaN(rawPaid) ? 0 : rawPaid);
+
+        // 1. Expand invoice items (all invoice item lines have debit = lineTotal and credit = 0)
         invoice.items.forEach((item) => {
           const lineTotal = item.quantity * item.price;
-          running -= lineTotal; // customer debt increases (more negative)
+          const debit = lineTotal;
+
+          // Debit increases customer debt (-)
+          running -= debit;
+
           rows.push({
             num: counter++,
             date: invoice.date || h.date,
@@ -282,7 +296,7 @@ export const Customers: React.FC = () => {
             quantity: item.quantity,
             price: item.price,
             lineTotal: lineTotal,
-            debit: lineTotal,
+            debit: debit,
             credit: 0,
             runningBalance: running,
             status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
@@ -290,6 +304,28 @@ export const Customers: React.FC = () => {
             invoiceId: invoice.id
           });
         });
+
+        // 2. Add an independent standalone row for the cash payment right below the last item of the invoice
+        if (invoicePaid > 0) {
+          // Payment credit reduces customer debt (+)
+          running += invoicePaid;
+
+          rows.push({
+            num: counter++,
+            date: invoice.date || h.date,
+            ref: invoice.id,
+            itemName: 'دفعة',
+            quantity: '-',
+            price: '-',
+            lineTotal: '-',
+            debit: 0,
+            credit: invoicePaid,
+            runningBalance: running,
+            status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
+            isInvoiceItem: false,
+            invoiceId: invoice.id
+          });
+        }
       } else {
         const isDebit = h.amount < 0;
         const debit = isDebit ? Math.abs(h.amount) : 0;
@@ -336,7 +372,8 @@ export const Customers: React.FC = () => {
           const invId = invMatch ? invMatch[1] : null;
           const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
           if (isInv && invoice) {
-            prior -= invoice.total;
+            const paid = Math.max(0, Number(invoice.paidAmount || 0));
+            prior -= (invoice.total - paid);
           } else {
             prior += h.amount;
           }
@@ -362,12 +399,21 @@ export const Customers: React.FC = () => {
       const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
       const invId = invMatch ? invMatch[1] : null;
       const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+      const invPaid = (isInv && invoice) ? Math.max(0, Number(invoice.paidAmount || 0)) : 0;
 
       list.push({
         ...h,
         amount: (isInv && invoice) ? -invoice.total : h.amount,
         description: formatCustomerMovementDesc(h.description)
       });
+
+      if (invPaid > 0 && invoice) {
+        list.push({
+          date: invoice.date || h.date,
+          description: 'دفعة',
+          amount: invPaid
+        });
+      }
     });
 
     return list;
@@ -389,6 +435,14 @@ export const Customers: React.FC = () => {
   const totalItemizedCredit = useMemo(() => {
     return itemizedRows.reduce((sum, r) => sum + r.credit, 0);
   }, [itemizedRows]);
+
+  const finalItemizedBalance = useMemo(() => {
+    if (!selectedCustomer) return 0;
+    if ((filterStartDate || filterEndDate) && itemizedRows.length > 0) {
+      return itemizedRows[itemizedRows.length - 1].runningBalance;
+    }
+    return selectedCustomer.balance;
+  }, [selectedCustomer, filterStartDate, filterEndDate, itemizedRows]);
 
   // Handler to print statement with optional custom dates
   const handlePrintStatement = (sDate?: string, eDate?: string) => {
@@ -416,6 +470,69 @@ export const Customers: React.FC = () => {
       finalBalance: finalBal
     });
     setIsPrintModalOpen(false);
+  };
+
+  // Handler to share statement via WhatsApp as PDF
+  const handleShareWhatsAppStatement = async (sDate?: string, eDate?: string) => {
+    if (!selectedCustomer || isSharingPdf) return;
+    const fromDate = sDate !== undefined ? sDate : filterStartDate;
+    const toDate = eDate !== undefined ? eDate : filterEndDate;
+    const targetRows = getItemizedRowsForRange(fromDate, toDate);
+    const deb = targetRows.reduce((sum, r) => sum + r.debit, 0);
+    const cred = targetRows.reduce((sum, r) => sum + r.credit, 0);
+    const lastRow = targetRows[targetRows.length - 1];
+    const finalBal = lastRow ? lastRow.runningBalance : selectedCustomer.balance;
+
+    const dateLabel = (fromDate || toDate) ? ` للفترة (${fromDate ? `من ${fromDate}` : ''} ${toDate ? `إلى ${toDate}` : ''})` : '';
+
+    let syncTab: Window | null = null;
+    const isNative = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!isNative) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {}
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setIsSharingPdf(true);
+      // Failsafe timer so the button NEVER remains stuck on 'جاري التحويل'
+      safetyTimer = setTimeout(() => {
+        setIsSharingPdf(false);
+      }, 3500);
+
+      await shareCustomerStatementPdfViaWhatsApp({
+        title: viewMode === 'ITEMS' 
+          ? `بيان كشف حساب عميل تفصيلي بالأصناف والأسعار${dateLabel}` 
+          : `كشف حساب عميل مجمع بالفواتير${dateLabel}`,
+        entityName: selectedCustomer.name,
+        entityCode: selectedCustomer.code,
+        entityPhone: selectedCustomer.phone,
+        dateRange: (fromDate || toDate) ? { from: fromDate, to: toDate } : undefined,
+        rows: targetRows,
+        totalDebit: deb,
+        totalCredit: cred,
+        finalBalance: finalBal
+      }, companyLogo, null, syncTab);
+    } catch (err: any) {
+      if (syncTab && !syncTab.closed) syncTab.close();
+      if (
+        err?.name !== 'AbortError' &&
+        err?.name !== 'NotAllowedError' &&
+        !err?.message?.includes?.('AbortError') &&
+        !err?.message?.includes?.('canceled') &&
+        !err?.message?.includes?.('cancelled')
+      ) {
+        console.error(err);
+      }
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsSharingPdf(false);
+      setIsPrintModalOpen(false);
+    }
   };
 
   const applyDatePreset = (preset: 'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_30' | 'TODAY') => {
@@ -488,10 +605,14 @@ export const Customers: React.FC = () => {
           </button>
           
           <button 
-            onClick={exportAllCustomersToExcel}
-            className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors shadow-xs"
+            onClick={() => {
+              setConsolidatedInitialTab('CUSTOMERS');
+              setIsConsolidatedModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 bg-brand-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-brand-800 transition-colors shadow-xs"
+            title="عرض وطباعة كشف حساب مجمع لجميع العملاء"
           >
-            <Download size={15} /> تصدير القائمة (Excel)
+            <Layers size={15} /> كشف حساب مجمع للعملاء
           </button>
         </div>
       </div>
@@ -693,21 +814,27 @@ export const Customers: React.FC = () => {
                       }}
                       className="flex items-center gap-1 bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-blue-700 shadow-2xs"
                     >
-                      <Printer size={11} /> طباعة بالتاريخ
+                      <Printer size={11} /> طباعة
                     </button>
 
                     <button 
-                      onClick={() => exportLedgerToExcel(
-                        selectedCustomer.name, 
-                        selectedCustomer.code, 
-                        viewMode === 'ITEMS' ? itemizedRows : invoiceRows, 
-                        selectedCustomer.balance, 
-                        'CUSTOMER',
-                        viewMode === 'ITEMS'
-                      )}
-                      className="flex items-center gap-1 bg-green-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-green-700 shadow-2xs"
+                      onClick={() => handleShareWhatsAppStatement()}
+                      disabled={isSharingPdf}
+                      className="flex items-center gap-1 bg-[#25D366] hover:bg-[#1ebc59] text-white px-2 py-0.5 rounded text-[11px] font-bold shadow-2xs disabled:opacity-50"
+                      title="إرسال كشف الحساب PDF عبر واتساب مباشرة"
                     >
-                      <Download size={11} /> Excel
+                      <MessageCircle size={11} /> {isSharingPdf ? '...' : 'PDF واتساب'}
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setConsolidatedInitialTab('CUSTOMERS');
+                        setIsConsolidatedModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-slate-700 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-slate-800 shadow-2xs"
+                      title="فتح كشف الحساب المجمع"
+                    >
+                      <Layers size={11} /> كشف مجمع
                     </button>
                   </div>
                 </div>
@@ -885,19 +1012,25 @@ export const Customers: React.FC = () => {
                     >
                       <Printer size={13} /> طباعة كشف الحساب
                     </button>
+
+                    <button 
+                      onClick={() => handleShareWhatsAppStatement()}
+                      disabled={isSharingPdf}
+                      className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebc59] active:bg-[#199d4b] text-white px-3 py-1 rounded-md text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                      title="إرسال كشف الحساب كملف PDF عبر واتساب مباشرة بدون حفظه على الجهاز"
+                    >
+                      <MessageCircle size={14} className="fill-white/20" /> {isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
+                    </button>
                     
                     <button 
-                      onClick={() => exportLedgerToExcel(
-                        selectedCustomer.name, 
-                        selectedCustomer.code, 
-                        viewMode === 'ITEMS' ? itemizedRows : invoiceRows, 
-                        selectedCustomer.balance, 
-                        'CUSTOMER',
-                        viewMode === 'ITEMS'
-                      )}
-                      className="flex items-center gap-1 bg-green-600 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-green-700 transition-colors shadow-2xs"
+                      onClick={() => {
+                        setConsolidatedInitialTab('CUSTOMERS');
+                        setIsConsolidatedModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-slate-700 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-slate-800 transition-colors shadow-2xs"
+                      title="فتح كشف الحساب المجمع"
                     >
-                      <Download size={13} /> تصدير (Excel)
+                      <Layers size={13} /> كشف حساب مجمع
                     </button>
                   </div>
                 </div>
@@ -1019,12 +1152,12 @@ export const Customers: React.FC = () => {
                             {totalItemizedCredit.toLocaleString()}
                           </td>
                           <td className="p-2 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
-                            {selectedCustomer.balance.toLocaleString()}
+                            {finalItemizedBalance.toLocaleString()}
                           </td>
                           <td className="p-2 text-center font-bold text-xs">
-                            {selectedCustomer.balance < 0 ? (
+                            {finalItemizedBalance < 0 ? (
                               <span className="text-red-700 font-black">مدين (عليه)</span>
-                            ) : selectedCustomer.balance > 0 ? (
+                            ) : finalItemizedBalance > 0 ? (
                               <span className="text-green-700 font-black">دائن (له)</span>
                             ) : (
                               <span className="text-gray-600 font-black">خالص</span>
@@ -1279,12 +1412,18 @@ export const Customers: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex justify-end gap-2">
+            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
               <button 
                 onClick={() => printInvoice(viewInvoice)} 
                 className="px-3.5 py-1.5 bg-gray-200 text-gray-800 rounded-lg text-xs font-bold hover:bg-gray-300 flex items-center gap-1.5"
               >
                 <Printer size={14}/> طباعة الفاتورة
+              </button>
+              <button 
+                onClick={() => shareSalesInvoicePdfViaWhatsApp(viewInvoice, companyLogo, selectedCustomer.phone)} 
+                className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs"
+              >
+                <MessageCircle size={14}/> مشاركة PDF واتساب
               </button>
               <button 
                 onClick={() => setViewInvoice(null)} 
@@ -1415,7 +1554,16 @@ export const Customers: React.FC = () => {
                   onClick={() => handlePrintStatement(printStartDate, printEndDate)}
                   className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
                 >
-                  <Printer size={15} /> طباعة كشف الحساب الآن
+                  <Printer size={15} /> طباعة كشف الحساب
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleShareWhatsAppStatement(printStartDate, printEndDate)}
+                  disabled={isSharingPdf}
+                  className="bg-[#25D366] hover:bg-[#1ebc59] active:bg-[#199d4b] text-white py-2.5 px-4 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                  title="إرسال كشف الحساب كملف PDF عبر واتساب مباشرة بدون حفظه على الجهاز"
+                >
+                  <MessageCircle size={15} className="fill-white/20" /> {isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
                 </button>
                 <button
                   type="button"
@@ -1440,6 +1588,19 @@ export const Customers: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Consolidated Statement Modal */}
+      <ConsolidatedLedgerModal
+        isOpen={isConsolidatedModalOpen}
+        onClose={() => setIsConsolidatedModalOpen(false)}
+        initialTab={consolidatedInitialTab}
+        onSelectEntity={(type, code) => {
+          if (type === 'CUSTOMER') {
+            setSelectedCustomerCode(code);
+            setMobileView('DETAILS');
+          }
+        }}
+      />
     </div>
   );
 };

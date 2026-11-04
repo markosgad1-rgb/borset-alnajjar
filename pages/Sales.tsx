@@ -1,12 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet } from 'lucide-react';
+import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet, MessageCircle, Phone, Send } from 'lucide-react';
 import { InvoiceItem, SalesInvoice, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { shareSalesInvoicePdfViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
+import { getSalesInvoiceHtml } from '../utils/printTemplates';
 
 export const Sales: React.FC = () => {
-  const { addInvoice, products, customers, invoices, printInvoice } = useERP();
+  const { addInvoice, products, customers, invoices, printInvoice, companyLogo } = useERP();
   
   // Main Invoice State
   const [invoiceId, setInvoiceId] = useState('N001');
@@ -40,6 +42,8 @@ export const Sales: React.FC = () => {
   // Post-Save State
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [lastSavedInvoice, setLastSavedInvoice] = useState<SalesInvoice | null>(null);
+  const [modalCustomerPhone, setModalCustomerPhone] = useState<string>('');
+  const [preloadedPdfFile, setPreloadedPdfFile] = useState<File | null>(null);
 
   // Auto-generate Invoice ID
   useEffect(() => {
@@ -195,12 +199,14 @@ export const Sales: React.FC = () => {
       return;
     }
 
+    const cust = customers.find(c => c.code === customerCode);
     const invoiceData: any = {
       id: invoiceId,
       date: invoiceDate,
       time: invoiceTime,
       customerCode,
       customerName,
+      customerPhone: cust?.phone || '',
       items: cartItems,
       total: cartTotal,
       paidAmount: currentPaid,
@@ -216,6 +222,7 @@ export const Sales: React.FC = () => {
       previousBalance: customerBalance,
       currentBalance: newBalance
     });
+    setModalCustomerPhone(cust?.phone || '');
     setShowSuccessModal(true);
 
     // Clear Form
@@ -228,14 +235,94 @@ export const Sales: React.FC = () => {
     setPaidAmountInput('0');
   };
 
+  // Pre-generate PDF in the background right after saving so that clicking WhatsApp shares immediately without waiting
+  useEffect(() => {
+    if (showSuccessModal && lastSavedInvoice) {
+      let isMounted = true;
+      const pregenerate = async () => {
+        try {
+          const html = getSalesInvoiceHtml(lastSavedInvoice, companyLogo);
+          const fileName = getSalesInvoicePdfFileName(lastSavedInvoice);
+          const file = await generatePdfFileFromHtml(html, fileName, 'portrait');
+          if (isMounted) {
+            setPreloadedPdfFile(file);
+          }
+        } catch (err) {
+          console.warn('PDF pre-generate err:', err);
+        }
+      };
+      pregenerate();
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      setPreloadedPdfFile(null);
+    }
+  }, [showSuccessModal, lastSavedInvoice, companyLogo]);
+
   const handleCloseModal = () => {
     setShowSuccessModal(false);
     setLastSavedInvoice(null);
+    setPreloadedPdfFile(null);
+    setModalCustomerPhone('');
   };
 
   const handlePrint = () => {
     if (lastSavedInvoice) {
       printInvoice(lastSavedInvoice);
+    }
+  };
+
+  const [isSharingPdf, setIsSharingPdf] = useState(false);
+
+  const handleShareWhatsApp = async () => {
+    if (!lastSavedInvoice || isSharingPdf) return;
+
+    // For desktop browsers, open blank tab synchronously on click to avoid any browser popup block
+    let syncTab: Window | null = null;
+    const isNativeShareSupported = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!preloadedPdfFile && !isNativeShareSupported) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {
+        // ignore popup error
+      }
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setIsSharingPdf(true);
+      // Failsafe timer so the button NEVER remains stuck on 'جاري التحويل'
+      safetyTimer = setTimeout(() => {
+        setIsSharingPdf(false);
+      }, 3500);
+
+      const targetPhone = modalCustomerPhone || lastSavedInvoice.customerPhone;
+      await shareSalesInvoicePdfViaWhatsApp(
+        { ...lastSavedInvoice, customerPhone: targetPhone },
+        companyLogo,
+        targetPhone,
+        preloadedPdfFile,
+        syncTab
+      );
+    } catch (e: any) {
+      if (syncTab && !syncTab.closed) syncTab.close();
+      if (
+        e?.name !== 'AbortError' &&
+        e?.name !== 'NotAllowedError' &&
+        !e?.message?.includes?.('AbortError') &&
+        !e?.message?.includes?.('canceled') &&
+        !e?.message?.includes?.('cancelled')
+      ) {
+        console.error(e);
+        alert('حدث خطأ أثناء التوجيه للواتساب');
+      }
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsSharingPdf(false);
     }
   };
 
@@ -681,48 +768,87 @@ export const Sales: React.FC = () => {
       {/* Success Modal */}
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6 text-center animate-fade-in">
-            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-3">
-              <CheckCircle size={32} />
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl p-6 text-center animate-fade-in border border-gray-100">
+            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <CheckCircle size={34} />
             </div>
             <h2 className="text-2xl font-bold text-gray-800 mb-1">تم حفظ الفاتورة بنجاح!</h2>
-            <div className="bg-gray-50 border rounded-xl p-3 my-4 text-sm text-right space-y-1.5">
-              <div className="flex justify-between">
+            <p className="text-xs text-gray-500 mb-4">تم تحديث المخزن والخزينة وحساب العميل بنجاح</p>
+
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 my-3 text-sm text-right space-y-2">
+              <div className="flex justify-between items-center">
                 <span className="text-gray-500">رقم الفاتورة:</span>
-                <span className="font-bold font-mono">{lastSavedInvoice?.id}</span>
+                <span className="font-bold font-mono text-brand-700 bg-brand-50 px-2 py-0.5 rounded border border-brand-200">{lastSavedInvoice?.id}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">العميل:</span>
+                <span className="font-bold text-gray-800">{lastSavedInvoice?.customerName}</span>
+              </div>
+              <div className="flex justify-between items-center">
                 <span className="text-gray-500">إجمالي الفاتورة:</span>
-                <span className="font-bold font-mono">{lastSavedInvoice?.total.toLocaleString()} ج.م</span>
+                <span className="font-bold font-mono text-gray-900">{lastSavedInvoice?.total.toLocaleString()} ج.م</span>
               </div>
-              <div className="flex justify-between text-emerald-700 font-bold">
+              <div className="flex justify-between items-center text-emerald-700 font-bold">
                 <span>المبلغ المدفوع:</span>
                 <span className="font-mono">{(lastSavedInvoice?.paidAmount || 0).toLocaleString()} ج.م</span>
               </div>
-              <div className="flex justify-between text-red-600 font-bold">
+              <div className="flex justify-between items-center text-amber-700 font-bold">
                 <span>المتبقي على الحساب (آجل):</span>
                 <span className="font-mono">{(lastSavedInvoice?.remainingAmount || 0).toLocaleString()} ج.م</span>
               </div>
-              <div className="flex justify-between border-t pt-1.5 text-xs">
-                <span className="text-gray-600">رصيد العميل النهائي:</span>
-                <span className={`font-bold font-mono ${(lastSavedInvoice?.currentBalance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
+              <div className="flex justify-between items-center border-t border-gray-200 pt-2 text-xs">
+                <span className="text-gray-600 font-bold">رصيد العميل النهائي:</span>
+                <span className={`font-bold font-mono text-sm ${(lastSavedInvoice?.currentBalance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
                   {(lastSavedInvoice?.currentBalance || 0).toLocaleString()} ج.م
                 </span>
               </div>
             </div>
+
+            {/* WhatsApp Phone Destination Input */}
+            <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 my-4 text-right">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label className="text-xs font-bold text-emerald-900 flex items-center gap-1.5 shrink-0">
+                  <MessageCircle size={16} className="text-[#25D366]" />
+                  رقم واتساب العميل للإرسال:
+                </label>
+                <input 
+                  type="tel"
+                  value={modalCustomerPhone}
+                  onChange={(e) => setModalCustomerPhone(e.target.value)}
+                  placeholder="مثال: 01012345678"
+                  className="w-48 bg-white border border-emerald-300 rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-gray-800 outline-none focus:ring-2 focus:ring-emerald-500"
+                  dir="ltr"
+                />
+              </div>
+              <div className="text-[11px] text-emerald-700">
+                ⚡ يتم التحويل لتطبيق واتساب مباشرة لإرسال الفاتورة بصيغة PDF الرسمية بدون حفظها على جهازك.
+              </div>
+            </div>
             
-            <div className="grid grid-cols-2 gap-3">
+            {/* Action Buttons: Print, WhatsApp PDF, New Invoice */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-2">
               <button 
                 onClick={handlePrint}
-                className="bg-gray-800 hover:bg-gray-900 text-white py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
+                className="bg-gray-800 hover:bg-gray-900 active:bg-black text-white py-3.5 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all text-sm shadow-md cursor-pointer"
               >
-                <Printer size={20} /> طباعة
+                <Printer size={18} /> طباعة
               </button>
+              
+              <button 
+                onClick={handleShareWhatsApp}
+                disabled={isSharingPdf}
+                className="bg-[#25D366] hover:bg-[#20ba5a] active:bg-[#1da851] text-white py-3.5 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer"
+                title="إرسال الفاتورة PDF عبر واتساب مباشرة"
+              >
+                <MessageCircle size={18} className="fill-white/20" /> 
+                <span>{isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}</span>
+              </button>
+              
               <button 
                 onClick={handleCloseModal}
-                className="bg-brand-600 hover:bg-brand-700 text-white py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
+                className="bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white py-3.5 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all text-sm shadow-md cursor-pointer"
               >
-                <RefreshCcw size={20} /> فاتورة جديدة
+                <RefreshCcw size={18} /> فاتورة جديدة
               </button>
             </div>
           </div>

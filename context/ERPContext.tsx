@@ -144,6 +144,40 @@ interface ERPContextType {
     finalBalance: number;
     dateRange?: { from?: string; to?: string };
   }) => void;
+  printConsolidatedLedger: (options: {
+    title: string;
+    reportType: 'CUSTOMERS' | 'SUPPLIERS' | 'ALL';
+    dateRange?: { from?: string; to?: string };
+    mode: 'BALANCES' | 'MOVEMENTS';
+    balanceRows?: Array<{
+      num: number;
+      code: string;
+      name: string;
+      phone?: string;
+      entityType?: 'CUSTOMER' | 'SUPPLIER';
+      priorBalance: number;
+      debit: number;
+      credit: number;
+      finalBalance: number;
+      status: 'مدين' | 'دائن' | 'متزن';
+    }>;
+    movementRows?: Array<{
+      num: number;
+      date: string;
+      entityName: string;
+      entityCode: string;
+      ref?: string;
+      itemName: string;
+      quantity?: number | string;
+      price?: number | string;
+      lineTotal?: number | string;
+      debit: number;
+      credit: number;
+    }>;
+    totalDebit: number;
+    totalCredit: number;
+    finalBalance: number;
+  }) => void;
   exportLedgerToExcel: (entityName: string, entityCode: string, history: any[], currentBalance: number, type: 'CUSTOMER' | 'SUPPLIER', isItemized?: boolean) => void;
   exportAllCustomersToExcel: () => void;
   exportAllSuppliersToExcel: () => void;
@@ -2141,6 +2175,219 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     printWindow.document.close();
   };
 
+  const printConsolidatedLedger = (options: {
+    title: string;
+    reportType: 'CUSTOMERS' | 'SUPPLIERS' | 'ALL';
+    dateRange?: { from?: string; to?: string };
+    mode: 'BALANCES' | 'MOVEMENTS';
+    balanceRows?: Array<{
+      num: number;
+      code: string;
+      name: string;
+      phone?: string;
+      entityType?: 'CUSTOMER' | 'SUPPLIER';
+      priorBalance: number;
+      debit: number;
+      credit: number;
+      finalBalance: number;
+      status: 'مدين' | 'دائن' | 'متزن';
+    }>;
+    movementRows?: Array<{
+      num: number;
+      date: string;
+      entityName: string;
+      entityCode: string;
+      ref?: string;
+      itemName: string;
+      quantity?: number | string;
+      price?: number | string;
+      lineTotal?: number | string;
+      debit: number;
+      credit: number;
+    }>;
+    totalDebit: number;
+    totalCredit: number;
+    finalBalance: number;
+  }) => {
+    const printWindow = window.open('', '_blank', 'width=1150,height=850');
+    if (!printWindow) {
+      alert("يرجى السماح بالنوافذ المنبثقة (Popups) لطباعة كشف الحساب المجمع");
+      return;
+    }
+
+    const { title, reportType, dateRange, mode, balanceRows = [], movementRows = [], totalDebit, totalCredit, finalBalance } = options;
+    const isCustomerReport = reportType === 'CUSTOMERS';
+    const isSupplierReport = reportType === 'SUPPLIERS';
+
+    const typeLabel = isCustomerReport ? 'كشف حساب مجمع للعملاء' : isSupplierReport ? 'كشف حساب مجمع للموردين' : 'كشف حساب مجمع شامل (عملاء وموردين)';
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="UTF-8">
+        <title>${title}</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
+        <style>
+          @page { size: A4 ${mode === 'MOVEMENTS' ? 'landscape' : 'portrait'}; margin: 8mm; }
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; margin: 0; padding: 10px; color: #000; font-size: 12px; line-height: 1.25; }
+          .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 8px; margin-bottom: 8px; }
+          .company-info { text-align: right; }
+          .company-info h1 { margin: 0; font-size: 24px; font-weight: 900; line-height: 1.1; }
+          .company-info p { margin: 2px 0 0 0; font-size: 14px; font-weight: 800; color: #1f2937; }
+          .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
+          .logo-box img { max-height: 65px; max-width: 180px; object-fit: contain; }
+          .statement-title { text-align: left; }
+          .statement-title h2 { margin: 0; font-size: 20px; border: 2.5px solid #000; padding: 6px 18px; font-weight: 900; border-radius: 8px; background-color: #f8fafc; display: inline-block; letter-spacing: 0.5px; }
+          .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2px solid #000; padding: 6px 12px; border-radius: 6px; background: #f8fafc; margin-bottom: 8px; font-size: 12px; flex-wrap: wrap; gap: 8px; }
+          .info-item { display: flex; flex-direction: column; align-items: center; }
+          .info-label { font-weight: 800; color: #475569; font-size: 11px; }
+          .info-value { font-weight: 900; font-size: 13px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 4px; margin-bottom: 10px; }
+          th { border: 1.5px solid #000; padding: 4px 6px; background-color: #f1f5f9; font-weight: 900; font-size: 11px; text-align: center; }
+          td { border: 1px solid #cbd5e1; padding: 4px 6px; font-size: 11px; font-weight: 700; text-align: center; }
+          tr:nth-child(even) td { background-color: #fbfcfe; }
+          .text-right { text-align: right !important; }
+          .totals-summary { display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 14px; }
+          .totals-box { width: 340px; border: 2.5px solid #000; border-radius: 6px; overflow: hidden; }
+          .total-row { display: flex; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid #cbd5e1; font-weight: 800; font-size: 12px; }
+          .total-row.final { background: #000; color: #fff; font-size: 14px; font-weight: 900; border-bottom: none; }
+          .signatures { display: flex; justify-content: space-between; padding: 0 40px; margin-top: 15px; margin-bottom: 10px; font-size: 13px; font-weight: 900; }
+          .sig-box { text-align: center; width: 150px; }
+          .sig-line { border-top: 2px solid #000; margin-top: 25px; width: 100%; }
+          .footer-bar { border-top: 2px solid #000; padding-top: 6px; display: flex; justify-content: center; font-size: 11px; font-weight: 800; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="company-info">
+            <h1>بورصة النجار</h1>
+            <p>لتجارة البيض</p>
+          </div>
+          <div class="logo-box">
+            <img src="${companyLogo || '/logo.png'}" alt="Logo" onerror="this.style.display='none'"/>
+          </div>
+          <div class="statement-title">
+            <h2>${title}</h2>
+          </div>
+        </div>
+
+        <div class="info-bar">
+          <div class="info-item"><span class="info-label">التقرير</span><span class="info-value">${typeLabel}</span></div>
+          <div class="info-item"><span class="info-label">نوع العرض</span><span class="info-value">${mode === 'BALANCES' ? 'ملخص الأرصدة' : 'سجل الحركات التفصيلية'}</span></div>
+          ${dateRange && (dateRange.from || dateRange.to) ? `
+            <div class="info-item">
+              <span class="info-label">الفترة المحددة</span>
+              <span class="info-value" style="color: #0369a1;">
+                ${dateRange.from ? `من: ${dateRange.from}` : ''} ${dateRange.to ? `إلى: ${dateRange.to}` : ''}
+              </span>
+            </div>
+          ` : '<div class="info-item"><span class="info-label">الفترة</span><span class="info-value">جميع الحركات حتى تاريخه</span></div>'}
+          <div class="info-item"><span class="info-label">العدد</span><span class="info-value">${mode === 'BALANCES' ? `${balanceRows.length} حساب` : `${movementRows.length} حركة`}</span></div>
+          <div class="info-item"><span class="info-label">تاريخ الطباعة</span><span class="info-value">${new Date().toISOString().split('T')[0]}</span></div>
+        </div>
+
+        ${mode === 'BALANCES' ? `
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px;">م</th>
+                <th style="width: 65px;">الكود</th>
+                <th style="text-align: right; padding-right: 8px;">الاسم</th>
+                <th style="width: 95px;">الهاتف</th>
+                ${reportType === 'ALL' ? '<th style="width: 60px;">النوع</th>' : ''}
+                <th style="width: 80px;">رصيد سابق</th>
+                <th style="width: 85px;">إجمالي مدين</th>
+                <th style="width: 85px;">إجمالي دائن</th>
+                <th style="width: 95px;">الرصيد النهائي</th>
+                <th style="width: 65px;">الحالة</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${balanceRows.map(r => `
+                <tr>
+                  <td>${r.num}</td>
+                  <td style="font-family: monospace; font-weight: 800;">${r.code}</td>
+                  <td class="text-right" style="padding-right: 8px; font-weight: 800;">${r.name}</td>
+                  <td dir="ltr" style="font-family: monospace;">${r.phone || '-'}</td>
+                  ${reportType === 'ALL' ? `<td>${r.entityType === 'CUSTOMER' ? 'عميل' : 'مورد'}</td>` : ''}
+                  <td dir="ltr">${r.priorBalance.toLocaleString()}</td>
+                  <td dir="ltr" style="color: #b91c1c; font-weight: 800;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
+                  <td dir="ltr" style="color: #15803d; font-weight: 800;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
+                  <td dir="ltr" style="font-weight: 900;">${r.finalBalance.toLocaleString()}</td>
+                  <td><strong>${r.status}</strong></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        ` : `
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px;">م</th>
+                <th style="width: 85px; white-space: nowrap;">التاريخ</th>
+                <th style="width: 120px; text-align: right; padding-right: 6px;">الطرف</th>
+                <th style="width: 65px;">الفاتورة</th>
+                <th style="text-align: right; padding-right: 6px;">الصنف / البيان</th>
+                <th style="width: 50px;">الكمية</th>
+                <th style="width: 50px;">السعر</th>
+                <th style="width: 70px;">الإجمالي</th>
+                <th style="width: 75px;">مدين</th>
+                <th style="width: 75px;">دائن</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${movementRows.map(r => `
+                <tr>
+                  <td>${r.num}</td>
+                  <td style="white-space: nowrap; font-family: monospace; font-size: 11px;">${r.date}</td>
+                  <td class="text-right" style="padding-right: 6px; font-weight: 800;">${r.entityName} <span style="font-size: 10px; color: #64748b;">(${r.entityCode})</span></td>
+                  <td style="font-family: monospace;">${r.ref || '-'}</td>
+                  <td class="text-right" style="padding-right: 6px; font-weight: 800;">${r.itemName}</td>
+                  <td>${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
+                  <td>${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</td>
+                  <td style="font-weight: 800;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</td>
+                  <td style="color: #b91c1c; font-weight: 800;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
+                  <td style="color: #15803d; font-weight: 800;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `}
+
+        <div class="totals-summary">
+          <div class="totals-box">
+            <div class="total-row"><span>إجمالي مدين:</span><span dir="ltr">${totalDebit.toLocaleString()} ج.م</span></div>
+            <div class="total-row"><span>إجمالي دائن:</span><span dir="ltr">${totalCredit.toLocaleString()} ج.م</span></div>
+            <div class="total-row final"><span>صافي الرصيد:</span><span dir="ltr">${finalBalance.toLocaleString()} ج.م</span></div>
+          </div>
+        </div>
+
+        <div class="signatures">
+          <div class="sig-box"><strong>المستلم / الطرف الآخر</strong><div class="sig-line"></div></div>
+          <div class="sig-box"><strong>توقيع إدارة البورصة</strong><div class="sig-line"></div></div>
+        </div>
+
+        <div class="footer-bar">
+          للمبيعات والاستفسارات: 01280808532 - 01274688088 - 01000285428
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+            window.setTimeout(function(){ window.close(); }, 1200);
+          }
+        </script>
+      </body>
+      </html>
+    `;
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
   const exportBackupData = (): SystemBackup => {
     const backup: SystemBackup = {
       version: '1.0',
@@ -2304,7 +2551,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deletePurchase,
       addPurchase, updatePurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
-      seedDatabase, printInvoice, printPurchaseInvoice, printLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
+      seedDatabase, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
       exportBackupData, restoreBackupData,
       currentTreasuryBalance, balances
     }}>

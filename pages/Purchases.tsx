@@ -1,13 +1,17 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck } from 'lucide-react';
+import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle } from 'lucide-react';
 import { InvoiceItem, Purchase } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice } = useERP();
+  const { addPurchase, updatePurchase, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice, companyLogo } = useERP();
   
+  // PDF sharing state
+  const [sharingPdfId, setSharingPdfId] = useState<string | null>(null);
+
   // Header State
   const [purchaseId, setPurchaseId] = useState('R001'); // Auto-generated ID
   const [supplierCode, setSupplierCode] = useState('');
@@ -441,6 +445,23 @@ export const Purchases: React.FC = () => {
                     >
                       <Printer size={18} />
                     </button>
+
+                    <button 
+                      onClick={async () => {
+                        const supp = suppliers.find(s => s.code === purchase.supplierCode);
+                        setSharingPdfId(purchase.id);
+                        try {
+                          await sharePurchaseInvoicePdfViaWhatsApp(purchase, companyLogo, supp?.phone);
+                        } finally {
+                          setSharingPdfId(null);
+                        }
+                      }}
+                      disabled={sharingPdfId === purchase.id}
+                      className="text-emerald-600 bg-emerald-50 hover:bg-emerald-100 p-2 rounded transition-colors disabled:opacity-50"
+                      title="مشاركة الفاتورة عبر واتساب كملف PDF"
+                    >
+                      <MessageCircle size={18} />
+                    </button>
                     
                     {currentUser?.permissions.canEditPurchases && (
                       <>
@@ -545,12 +566,44 @@ export const Purchases: React.FC = () => {
                )}
 
                <div className="mt-4 flex justify-between items-center">
-                 <button 
-                    onClick={() => printPurchaseInvoice(viewPurchase)} 
-                    className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold transition-colors"
-                 >
-                    <Printer size={18}/> طباعة
-                 </button>
+                 <div className="flex items-center gap-2">
+                   <button 
+                      onClick={() => printPurchaseInvoice(viewPurchase)} 
+                      className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold transition-colors"
+                   >
+                      <Printer size={18}/> طباعة
+                   </button>
+                   <button 
+                       onClick={async () => {
+                         const supp = suppliers.find(s => s.code === viewPurchase.supplierCode);
+                         let safetyTimer: any = null;
+                         try {
+                           setSharingPdfId(viewPurchase.id);
+                           safetyTimer = setTimeout(() => {
+                             setSharingPdfId(null);
+                           }, 3500);
+                           await sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo, supp?.phone);
+                         } catch (err: any) {
+                           if (
+                             err?.name !== 'AbortError' &&
+                             err?.name !== 'NotAllowedError' &&
+                             !err?.message?.includes?.('AbortError') &&
+                             !err?.message?.includes?.('canceled') &&
+                             !err?.message?.includes?.('cancelled')
+                           ) {
+                             console.error(err);
+                           }
+                         } finally {
+                           if (safetyTimer) clearTimeout(safetyTimer);
+                           setSharingPdfId(null);
+                         }
+                       }} 
+                       disabled={sharingPdfId === viewPurchase.id}
+                       className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold transition-colors text-sm shadow-xs disabled:opacity-50"
+                    >
+                       <MessageCircle size={18}/> {sharingPdfId === viewPurchase.id ? 'جاري تجهيز PDF...' : 'مشاركة PDF واتساب'}
+                    </button>
+                 </div>
                  <div className="text-xl font-bold bg-gray-100 px-4 py-2 rounded text-brand-800">
                    الإجمالي: {viewPurchase.total.toLocaleString()} ج.م
                  </div>

@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Calendar, Search, FileText, X, Printer, Trash2, Check, AlertTriangle, Edit, Plus, Save, Coins, CreditCard, Wallet, Banknote } from 'lucide-react';
+import { Calendar, Search, FileText, X, Printer, Trash2, Check, AlertTriangle, Edit, Plus, Save, Coins, CreditCard, Wallet, Banknote, MessageCircle } from 'lucide-react';
 import { SalesInvoice, InvoiceItem, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const SalesHistory: React.FC = () => {
-  const { invoices, products, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, currentUser } = useERP();
+  const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, currentUser, companyLogo } = useERP();
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
@@ -27,6 +28,48 @@ export const SalesHistory: React.FC = () => {
   const [newItem, setNewItem] = useState<{ code: string, quantity: number | '', price: number | '' }>({
     code: '', quantity: '', price: ''
   });
+
+  const [sharingPdfId, setSharingPdfId] = useState<string | null>(null);
+
+  const handleShareInvoicePdf = async (inv: SalesInvoice) => {
+    if (sharingPdfId) return;
+    let syncTab: Window | null = null;
+    const isNative = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!isNative) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {}
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setSharingPdfId(inv.id);
+      // Failsafe timer so the button NEVER remains stuck on 'جاري التحويل'
+      safetyTimer = setTimeout(() => {
+        setSharingPdfId(null);
+      }, 3500);
+
+      const cust = customers.find(c => c.code === inv.customerCode);
+      await shareSalesInvoicePdfViaWhatsApp(inv, companyLogo, cust?.phone, null, syncTab);
+    } catch (err: any) {
+      if (syncTab && !syncTab.closed) syncTab.close();
+      if (
+        err?.name !== 'AbortError' &&
+        err?.name !== 'NotAllowedError' &&
+        !err?.message?.includes?.('AbortError') &&
+        !err?.message?.includes?.('canceled') &&
+        !err?.message?.includes?.('cancelled')
+      ) {
+        console.error(err);
+      }
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setSharingPdfId(null);
+    }
+  };
 
   const getPaymentMethodLabel = (method?: PaymentMethod): string => {
     if (method === 'BANK_AHLY') return 'البنك الأهلي';
@@ -296,6 +339,15 @@ export const SalesHistory: React.FC = () => {
                         title="تعديل الفاتورة والسداد"
                       >
                         <Edit size={16} />
+                      </button>
+
+                      <button 
+                        onClick={() => handleShareInvoicePdf(inv)}
+                        disabled={sharingPdfId === inv.id}
+                        className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 disabled:opacity-50 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors flex items-center gap-1"
+                        title="إرسال الفاتورة PDF عبر واتساب مباشرة"
+                      >
+                        <MessageCircle size={16} />
                       </button>
 
                       {deleteConfirmId === inv.id ? (
@@ -591,12 +643,19 @@ export const SalesHistory: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-gray-50 p-4 border-t flex justify-end gap-3">
+            <div className="bg-gray-50 p-4 border-t flex flex-wrap justify-end gap-2.5">
               <button 
                 onClick={() => printInvoice(selectedInvoice)} 
-                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-bold hover:bg-gray-300 flex items-center gap-2"
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-bold hover:bg-gray-300 flex items-center gap-1.5 transition-colors text-sm"
               >
                 <Printer size={16}/> طباعة
+              </button>
+              <button 
+                onClick={() => handleShareInvoicePdf(selectedInvoice)} 
+                disabled={sharingPdfId === selectedInvoice.id}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5 transition-colors text-sm shadow-xs"
+              >
+                <MessageCircle size={16}/> {sharingPdfId === selectedInvoice.id ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
               </button>
               <button 
                 onClick={() => setSelectedInvoice(null)} 

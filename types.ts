@@ -73,6 +73,7 @@ export interface SalesInvoice {
   time: string;
   customerCode: string;
   customerName: string;
+  customerPhone?: string;
   items: InvoiceItem[];
   total: number;
   paidAmount?: number; // Amount paid immediately
