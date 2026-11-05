@@ -4,6 +4,7 @@ import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, 
 import { PageView } from '../types';
 import { useERP } from '../context/ERPContext';
 import { BackupModal } from './BackupModal';
+import { useBackHandler } from '../utils/backNavigation';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -16,6 +17,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const { currentUser, logout, isOnline, permissionError } = useERP();
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  // Back Button integration for mobile sidebar menu & backup modal
+  useBackHandler(() => setIsSidebarOpen(false), isSidebarOpen, 'layout-mobile-sidebar');
+  useBackHandler(() => setIsBackupModalOpen(false), isBackupModalOpen, 'layout-backup-modal');
 
   // Listen for the beforeinstallprompt event
   useEffect(() => {

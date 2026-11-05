@@ -9,6 +9,7 @@ import { SalesInvoice } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Customers: React.FC = () => {
   const { 
@@ -57,6 +58,15 @@ export const Customers: React.FC = () => {
 
   // View Mode for Ledger: 'ITEMS' (default, itemized statement) or 'INVOICES' (summary)
   const [viewMode, setViewMode] = useState<'ITEMS' | 'INVOICES'>('ITEMS');
+
+  // Mobile Back Button handlers for modals & sub-views
+  useBackHandler(() => setIsCustomerModalOpen(false), isCustomerModalOpen, 'customers-add-edit-modal');
+  useBackHandler(() => setIsConsolidatedModalOpen(false), isConsolidatedModalOpen, 'customers-consolidated-modal');
+  useBackHandler(() => setIsPrintModalOpen(false), isPrintModalOpen, 'customers-print-modal');
+  useBackHandler(() => setViewInvoice(null), !!viewInvoice, 'customers-view-invoice-modal');
+  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'customers-delete-confirm');
+  useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'customers-clear-ledger-confirm');
+  useBackHandler(() => setMobileView('LIST'), mobileView === 'DETAILS', 'customers-mobile-details');
 
   // Helper to generate next code
   const generateNextCode = () => {
@@ -202,15 +212,83 @@ export const Customers: React.FC = () => {
     return desc;
   };
 
+  // Helper to map and identify payment entries in customer history that correspond to invoice payments,
+  // preventing duplicate entries and double-counting in the ledger.
+  const getConsumedPaymentIndices = (history: Array<{ date: string; description: string; amount: number }>) => {
+    const consumedIndices = new Set<number>();
+
+    for (let i = 0; i < history.length; i++) {
+      const h = history[i];
+      if (h.description.includes('تعديل')) continue;
+
+      const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
+      if (!isInvoiceSale) continue;
+
+      const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
+      const invId = invMatch ? invMatch[1] : null;
+      if (!invId) continue;
+
+      const invoice = invoices.find(inv => inv.id === invId);
+      const rawPaid = Number(invoice?.paidAmount || 0);
+      const invoicePaid = Math.max(0, isNaN(rawPaid) ? 0 : rawPaid);
+
+      if (invoicePaid <= 0) continue;
+
+      // 1. Direct match by invoice number in description with matching positive amount
+      let matchedIdx = -1;
+      for (let j = 0; j < history.length; j++) {
+        if (j === i || consumedIndices.has(j)) continue;
+        const candidate = history[j];
+        if (candidate.amount > 0 && Math.abs(candidate.amount - invoicePaid) < 0.01) {
+          if (candidate.description.includes(`#${invId}`) || candidate.description.includes(invId)) {
+            matchedIdx = j;
+            break;
+          }
+        }
+      }
+
+      // 2. Direct sequence match: immediate entry following invoice (standard ERPContext.addInvoice order)
+      if (matchedIdx === -1 && i + 1 < history.length && !consumedIndices.has(i + 1)) {
+        const next = history[i + 1];
+        if (next.amount > 0 && Math.abs(next.amount - invoicePaid) < 0.01 && !next.description.includes('فاتورة بيع')) {
+          matchedIdx = i + 1;
+        }
+      }
+
+      // 3. Same-date payment entry with matching amount
+      if (matchedIdx === -1) {
+        for (let j = 0; j < history.length; j++) {
+          if (j === i || consumedIndices.has(j)) continue;
+          const candidate = history[j];
+          if (candidate.amount > 0 && Math.abs(candidate.amount - invoicePaid) < 0.01) {
+            if (candidate.date === (invoice?.date || h.date) && !candidate.description.includes('فاتورة بيع')) {
+              matchedIdx = j;
+              break;
+            }
+          }
+        }
+      }
+
+      if (matchedIdx !== -1) {
+        consumedIndices.add(matchedIdx);
+      }
+    }
+
+    return consumedIndices;
+  };
+
   // Helper to compute itemized ledger rows by expanding sales invoices into individual egg products with optional date filter
   const getItemizedRowsForRange = (startDate?: string, endDate?: string) => {
     if (!selectedCustomer || !selectedCustomer.history) return [];
 
+    const consumedPaymentIndices = getConsumedPaymentIndices(selectedCustomer.history);
     let priorBalance = 0;
 
     // 1. Calculate prior balance if startDate is specified
     if (startDate) {
-      for (const h of selectedCustomer.history) {
+      for (let i = 0; i < selectedCustomer.history.length; i++) {
+        if (consumedPaymentIndices.has(i)) continue; // Prevent double-counting in prior balance
+        const h = selectedCustomer.history[i];
         if (h.description.includes('تعديل')) continue;
         if (h.date < startDate) {
           const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
@@ -221,6 +299,7 @@ export const Customers: React.FC = () => {
           if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
             const invoiceTotal = invoice.items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
             const invoicePaid = Math.max(0, Number(invoice.paidAmount || 0));
+            // Net debt increase from invoice = total - paid
             priorBalance -= (invoiceTotal - invoicePaid);
           } else {
             priorBalance += h.amount;
@@ -266,7 +345,12 @@ export const Customers: React.FC = () => {
       });
     }
 
-    for (const h of selectedCustomer.history) {
+    for (let i = 0; i < selectedCustomer.history.length; i++) {
+      // If this history entry is the payment entry belonging to an invoice, skip it because
+      // it is displayed directly under the invoice items as a single dedicated line with the invoice ref!
+      if (consumedPaymentIndices.has(i)) continue;
+
+      const h = selectedCustomer.history[i];
       if (h.description.includes('تعديل')) continue;
       if (startDate && h.date < startDate) continue;
       if (endDate && h.date > endDate) continue;
@@ -305,7 +389,7 @@ export const Customers: React.FC = () => {
           });
         });
 
-        // 2. Add an independent standalone row for the cash payment right below the last item of the invoice
+        // 2. Add the single dedicated payment row right below the last item of the invoice
         if (invoicePaid > 0) {
           // Payment credit reduces customer debt (+)
           running += invoicePaid;
@@ -362,10 +446,13 @@ export const Customers: React.FC = () => {
   // Invoice Mode rows with date range
   const invoiceRows = useMemo(() => {
     if (!selectedCustomer || !selectedCustomer.history) return [];
+
+    const consumedPaymentIndices = getConsumedPaymentIndices(selectedCustomer.history);
     let prior = 0;
+
     if (filterStartDate) {
-      selectedCustomer.history.forEach(h => {
-        if (h.description.includes('تعديل')) return;
+      selectedCustomer.history.forEach((h, i) => {
+        if (h.description.includes('تعديل') || consumedPaymentIndices.has(i)) return;
         if (h.date < filterStartDate) {
           const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة');
           const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
@@ -390,8 +477,8 @@ export const Customers: React.FC = () => {
       });
     }
 
-    selectedCustomer.history.forEach(h => {
-      if (h.description.includes('تعديل')) return;
+    selectedCustomer.history.forEach((h, i) => {
+      if (h.description.includes('تعديل') || consumedPaymentIndices.has(i)) return;
       if (filterStartDate && h.date < filterStartDate) return;
       if (filterEndDate && h.date > filterEndDate) return;
 
@@ -1302,6 +1389,7 @@ export const Customers: React.FC = () => {
                     placeholder="0"
                     className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-brand-500 font-mono font-bold text-center text-sm"
                     value={formData.balance}
+                    onFocus={e => e.target.select()}
                     onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), true)}
                   />
                   <span className="absolute left-2.5 top-2.5 text-[11px] text-gray-400 pointer-events-none">

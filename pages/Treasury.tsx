@@ -4,6 +4,7 @@ import { useERP } from '../context/ERPContext';
 import { Wallet, Building2, Banknote, Trash2, AlertTriangle, PlusCircle, X, Save, Smartphone } from 'lucide-react';
 import { PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Treasury: React.FC = () => {
   const { treasury, currentTreasuryBalance, balances, clearTreasury, currentUser, addOpeningBalance } = useERP();
@@ -18,6 +19,10 @@ export const Treasury: React.FC = () => {
     date: new Date().toISOString().split('T')[0],
     notes: ''
   });
+
+  // Hardware Back button handlers
+  useBackHandler(() => setShowOpeningModal(false), showOpeningModal, 'treasury-opening-modal');
+  useBackHandler(() => setShowClearConfirm(false), showClearConfirm, 'treasury-clear-confirm');
 
   const sortedTransactions = [...treasury]
     .filter(t => selectedFilter === 'ALL' || t.paymentMethod === selectedFilter || (!t.paymentMethod && selectedFilter === 'CASH'))
@@ -289,6 +294,7 @@ export const Treasury: React.FC = () => {
                     placeholder="0"
                     className="w-full p-2 border rounded focus:ring-2 focus:ring-brand-500 outline-none font-bold text-lg text-center font-mono"
                     value={openingForm.amount} 
+                    onFocus={e => e.target.select()}
                     onChange={e => handleNumericChangeWithCommas(e.target.value, val => setOpeningForm({...openingForm, amount: val}))}
                   />
                   {parseNumberFromCommas(openingForm.amount) > 0 && (

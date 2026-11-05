@@ -64,22 +64,33 @@ export function getInvoicePrintStyle(): string {
       max-width: 220px; 
       object-fit: contain; 
     }
-    .invoice-title h2 { 
-      margin: 0; 
-      font-size: 22px; 
-      border: 2.5px solid #000; 
-      padding: 6px 24px; 
-      font-weight: 900; 
-      border-radius: 8px; 
-      background-color: #f8fafc; 
-      color: #000;
+    .statement-title { 
+      text-align: left; 
+    }
+    .invoice-title h2, .statement-title h2 {
+      margin: 0 !important;
+      font-size: 22px !important;
+      border: 2.5px solid #000 !important;
+      padding-top: 1px !important;
+      padding-bottom: 15px !important;
+      padding-left: 24px !important;
+      padding-right: 24px !important;
+      line-height: 1.1 !important;
+      font-weight: 900 !important;
+      border-radius: 8px !important;
+      background-color: #f8fafc !important;
+      color: #000 !important;
+      display: inline-block !important;
     }
     .info-bar { 
       display: flex; 
       justify-content: space-between; 
       align-items: center; 
       border: 2.5px solid #000; 
-      padding: 8px 16px; 
+      padding-top: 4px !important;
+      padding-bottom: 12px !important;
+      padding-left: 16px;
+      padding-right: 16px;
       border-radius: 8px; 
       background: #f8fafc; 
       margin-bottom: 12px; 
@@ -101,6 +112,8 @@ export function getInvoicePrintStyle(): string {
       font-weight: 900; 
       font-size: 16px; 
       color: #000;
+      line-height: 1.1 !important;
+      margin-top: 2px !important;
     }
     table { 
       width: 100%; 
@@ -112,42 +125,58 @@ export function getInvoicePrintStyle(): string {
       direction: rtl;
     }
     thead tr {
-      height: 40px !important;
+      height: 38px !important;
     }
     tbody tr {
+      height: 36px !important;
+    }
+    table th, table td {
+      padding: 0 !important;
+      margin: 0 !important;
+      text-align: center !important;
+      vertical-align: middle !important;
+      box-sizing: border-box !important;
       height: 38px !important;
     }
     th { 
       border: 2px solid #000; 
-      padding: 0 4px !important; 
       background-color: #e2e8f0; 
       font-weight: 900; 
-      font-size: 15px; 
-      text-align: center !important; 
-      vertical-align: middle !important;
-      height: 40px !important;
-      line-height: 40px !important;
+      font-size: 13.5px; 
       color: #000;
-      box-sizing: border-box;
       white-space: nowrap;
       overflow: hidden;
     }
     td { 
       border: 1.5px solid #000; 
-      padding: 0 4px !important; 
       font-weight: 800; 
-      font-size: 15px; 
-      text-align: center !important; 
-      vertical-align: middle !important;
-      height: 38px !important;
-      line-height: 38px !important;
+      font-size: 13.5px; 
       color: #000; 
-      box-sizing: border-box;
       white-space: nowrap;
       overflow: hidden;
     }
     tr:nth-child(even) td {
       background-color: #f8fafc;
+    }
+    .cell-content {
+      display: block !important;
+      width: 100% !important;
+      text-align: center !important;
+      margin: 0 auto !important;
+      padding-top: 2px !important;
+      padding-bottom: 7px !important;
+      line-height: 1.2 !important;
+      box-sizing: border-box !important;
+    }
+    th .cell-content {
+      padding-top: 3px !important;
+      padding-bottom: 7px !important;
+    }
+    .totals-summary { 
+      display: flex; 
+      justify-content: flex-end; 
+      margin-top: 10px; 
+      margin-bottom: 14px; 
     }
     .totals-section { 
       display: flex; 
@@ -163,27 +192,35 @@ export function getInvoicePrintStyle(): string {
       overflow: hidden; 
       background-color: #fff; 
     }
-    .total-row { 
-      display: flex; 
-      justify-content: space-between; 
-      padding: 6px 12px; 
-      border-bottom: 1.5px solid #cbd5e1; 
-      font-size: 16px; 
-      font-weight: 800; 
+    .total-row {
+      display: flex !important;
+      justify-content: space-between !important;
+      align-items: center !important;
+      padding-top: 2px !important;
+      padding-bottom: 14px !important;
+      padding-left: 12px !important;
+      padding-right: 12px !important;
+      border-bottom: 1.5px solid #cbd5e1 !important;
+      font-size: 16px !important;
+      font-weight: 800 !important;
+      line-height: 1.1 !important;
     }
-    .total-row.main { 
-      font-weight: 900; 
-      font-size: 18px; 
-      border-bottom: 2.5px solid #000; 
-      background-color: #f1f5f9; 
+    .total-row.main {
+      padding-top: 2px !important;
+      padding-bottom: 14px !important;
+      font-weight: 900 !important;
+      font-size: 18px !important;
+      border-bottom: 2.5px solid #000 !important;
+      background-color: #f1f5f9 !important;
     }
-    .total-row.final { 
-      background-color: #000; 
-      color: #fff; 
-      border-bottom: none; 
-      font-size: 20px; 
-      font-weight: 900; 
-      padding: 8px 12px; 
+    .total-row.final {
+      padding-top: 3px !important;
+      padding-bottom: 16px !important;
+      background-color: #000 !important;
+      color: #fff !important;
+      border-bottom: none !important;
+      font-size: 20px !important;
+      font-weight: 900 !important;
     }
     .invoice-bottom-pinned { 
       width: 100%; 
@@ -276,21 +313,21 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
             </colgroup>
             <thead>
               <tr>
-                <th>م</th>
-                <th>الصنف</th>
-                <th>الكمية</th>
-                <th>السعر</th>
-                <th>الإجمالي</th>
+                <th><div class="cell-content">م</div></th>
+                <th><div class="cell-content">الصنف</div></th>
+                <th><div class="cell-content">الكمية</div></th>
+                <th><div class="cell-content">السعر</div></th>
+                <th><div class="cell-content">الإجمالي</div></th>
               </tr>
             </thead>
             <tbody>
               ${(invoice.items || []).map((item, index) => `
                 <tr>
-                  <td>${index + 1}</td>
-                  <td style="font-weight: 900;">${item.itemName}</td>
-                  <td>${item.quantity.toLocaleString()}</td>
-                  <td>${item.price.toLocaleString()}</td>
-                  <td style="font-weight: 900;">${(item.quantity * item.price).toLocaleString()}</td>
+                  <td><div class="cell-content">${index + 1}</div></td>
+                  <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${item.itemName}</div></td>
+                  <td><div class="cell-content">${item.quantity.toLocaleString()}</div></td>
+                  <td><div class="cell-content">${item.price.toLocaleString()}</div></td>
+                  <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${(item.quantity * item.price).toLocaleString()}</div></td>
                 </tr>
               `).join('')}
             </tbody>
@@ -372,21 +409,21 @@ export function getPurchaseInvoiceHtml(purchase: Purchase, companyLogo?: string)
             </colgroup>
             <thead>
               <tr>
-                <th>م</th>
-                <th>الصنف</th>
-                <th>الكمية</th>
-                <th>السعر</th>
-                <th>الإجمالي</th>
+                <th><div class="cell-content">م</div></th>
+                <th><div class="cell-content">الصنف</div></th>
+                <th><div class="cell-content">الكمية</div></th>
+                <th><div class="cell-content">السعر</div></th>
+                <th><div class="cell-content">الإجمالي</div></th>
               </tr>
             </thead>
             <tbody>
               ${(purchase.items || []).map((item, index) => `
                 <tr>
-                  <td>${index + 1}</td>
-                  <td style="font-weight: 900;">${item.itemName}</td>
-                  <td>${item.quantity.toLocaleString()}</td>
-                  <td>${item.price.toLocaleString()}</td>
-                  <td style="font-weight: 900;">${(item.quantity * item.price).toLocaleString()}</td>
+                  <td><div class="cell-content">${index + 1}</div></td>
+                  <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${item.itemName}</div></td>
+                  <td><div class="cell-content">${item.quantity.toLocaleString()}</div></td>
+                  <td><div class="cell-content">${item.price.toLocaleString()}</div></td>
+                  <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${(item.quantity * item.price).toLocaleString()}</div></td>
                 </tr>
               `).join('')}
             </tbody>
@@ -459,35 +496,7 @@ export function getLedgerHtml(options: {
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
-      <style>
-        * { box-sizing: border-box !important; }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
-        .company-info { text-align: right; }
-        .company-info h1 { margin: 0; font-size: 26px; font-weight: 900; line-height: 1.1; color: #000; }
-        .company-info p { margin: 3px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
-        .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
-        .logo-box img { max-height: 70px; max-width: 190px; object-fit: contain; }
-        .statement-title { text-align: left; }
-        .statement-title h2 { margin: 0; font-size: 22px; border: 2.5px solid #000; padding: 6px 24px; font-weight: 900; border-radius: 8px; background-color: #f8fafc; display: inline-block; color: #000; }
-        .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2.5px solid #000; padding: 8px 14px; border-radius: 8px; background: #f8fafc; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; gap: 8px; }
-        .info-item { display: flex; flex-direction: column; align-items: center; }
-        .info-label { font-weight: 800; color: #475569; font-size: 12px; margin-bottom: 2px; }
-        .info-value { font-weight: 900; font-size: 15px; color: #000; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; margin-bottom: 12px; border: 2.5px solid #000; direction: rtl; }
-        thead tr { height: 40px !important; }
-        tbody tr { height: 38px !important; }
-        th { border: 2px solid #000; padding: 0 4px !important; background-color: #e2e8f0; font-weight: 900; font-size: 13.5px; text-align: center !important; vertical-align: middle !important; height: 40px !important; line-height: 40px !important; color: #000; box-sizing: border-box; white-space: nowrap; overflow: hidden; }
-        td { border: 1.5px solid #000; padding: 0 4px !important; font-size: 13.5px; font-weight: 800; text-align: center !important; vertical-align: middle !important; height: 38px !important; line-height: 38px !important; color: #000; box-sizing: border-box; white-space: nowrap; overflow: hidden; }
-        tr:nth-child(even) td { background-color: #f8fafc; }
-        .totals-summary { display: flex; justify-content: flex-end; margin-top: 10px; margin-bottom: 14px; }
-        .totals-box { width: 380px; border: 3px solid #000; border-radius: 6px; overflow: hidden; background: #fff; }
-        .total-row { display: flex; justify-content: space-between; padding: 6px 12px; border-bottom: 1.5px solid #cbd5e1; font-weight: 800; font-size: 14px; }
-        .total-row.final { background: #000; color: #fff; font-size: 16px; font-weight: 900; border-bottom: none; padding: 8px 12px; }
-        .signatures { display: flex; justify-content: space-between; padding: 0 45px; margin-top: 18px; margin-bottom: 12px; font-size: 15px; font-weight: 900; }
-        .sig-box { text-align: center; width: 170px; }
-        .sig-line { border-top: 2.5px solid #000; margin-top: 25px; width: 100%; }
-        .footer-bar { border-top: 2.5px solid #000; padding-top: 8px; display: flex; justify-content: center; font-size: 13px; font-weight: 800; color: #000; }
-      </style>
+      <style>${getInvoicePrintStyle()}</style>
 
       <div class="header">
         <div class="company-info">
@@ -532,31 +541,31 @@ export function getLedgerHtml(options: {
         </colgroup>
         <thead>
           <tr>
-            <th>م</th>
-            <th>التاريخ</th>
-            <th>الفاتورة</th>
-            <th>الصنف / البيان</th>
-            <th>الكمية</th>
-            <th>السعر</th>
-            <th>الإجمالي</th>
-            <th>${colDebitTitle}</th>
-            <th>${colCreditTitle}</th>
-            <th>الرصيد</th>
+            <th><div class="cell-content">م</div></th>
+            <th><div class="cell-content">التاريخ</div></th>
+            <th><div class="cell-content">الفاتورة</div></th>
+            <th><div class="cell-content">الصنف / البيان</div></th>
+            <th><div class="cell-content">الكمية</div></th>
+            <th><div class="cell-content">السعر</div></th>
+            <th><div class="cell-content">الإجمالي</div></th>
+            <th><div class="cell-content">${colDebitTitle}</div></th>
+            <th><div class="cell-content">${colCreditTitle}</div></th>
+            <th><div class="cell-content">الرصيد</div></th>
           </tr>
         </thead>
         <tbody>
           ${rows.map(r => `
             <tr>
-              <td>${r.num}</td>
-              <td dir="ltr">${r.date}</td>
-              <td>${r.ref || '-'}</td>
-              <td style="font-weight: 900;">${r.itemName}</td>
-              <td>${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
-              <td>${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</td>
-              <td style="font-weight: 900;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</td>
-              <td style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
-              <td style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
-              <td style="font-weight: 900;" dir="ltr">${r.runningBalance.toLocaleString()}</td>
+              <td><div class="cell-content">${r.num}</div></td>
+              <td dir="ltr"><div class="cell-content" dir="ltr">${r.date}</div></td>
+              <td><div class="cell-content">${r.ref || '-'}</div></td>
+              <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.itemName}</div></td>
+              <td><div class="cell-content">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</div></td>
+              <td><div class="cell-content">${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</div></td>
+              <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</div></td>
+              <td style="color: #b91c1c; font-weight: 900;"><div class="cell-content" style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</div></td>
+              <td style="color: #15803d; font-weight: 900;"><div class="cell-content" style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</div></td>
+              <td style="font-weight: 900;" dir="ltr"><div class="cell-content" style="font-weight: 900;" dir="ltr">${r.runningBalance.toLocaleString()}</div></td>
             </tr>
           `).join('')}
         </tbody>
@@ -626,35 +635,7 @@ export function getConsolidatedLedgerHtml(options: {
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
-      <style>
-        * { box-sizing: border-box !important; }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
-        .company-info { text-align: right; }
-        .company-info h1 { margin: 0; font-size: 26px; font-weight: 900; line-height: 1.1; color: #000; }
-        .company-info p { margin: 3px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
-        .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
-        .logo-box img { max-height: 70px; max-width: 190px; object-fit: contain; }
-        .statement-title { text-align: left; }
-        .statement-title h2 { margin: 0; font-size: 22px; border: 2.5px solid #000; padding: 6px 24px; font-weight: 900; border-radius: 8px; background-color: #f8fafc; display: inline-block; color: #000; }
-        .info-bar { display: flex; justify-content: space-between; align-items: center; border: 2.5px solid #000; padding: 8px 14px; border-radius: 8px; background: #f8fafc; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; gap: 8px; }
-        .info-item { display: flex; flex-direction: column; align-items: center; }
-        .info-label { font-weight: 800; color: #475569; font-size: 12px; margin-bottom: 2px; }
-        .info-value { font-weight: 900; font-size: 15px; color: #000; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; margin-bottom: 12px; border: 2.5px solid #000; direction: rtl; }
-        thead tr { height: 40px !important; }
-        tbody tr { height: 38px !important; }
-        th { border: 2px solid #000; padding: 0 4px !important; background-color: #e2e8f0; font-weight: 900; font-size: 13px; text-align: center !important; vertical-align: middle !important; height: 40px !important; line-height: 40px !important; color: #000; box-sizing: border-box; white-space: nowrap; overflow: hidden; }
-        td { border: 1.5px solid #000; padding: 0 4px !important; font-size: 13px; font-weight: 800; text-align: center !important; vertical-align: middle !important; height: 38px !important; line-height: 38px !important; color: #000; box-sizing: border-box; white-space: nowrap; overflow: hidden; }
-        tr:nth-child(even) td { background-color: #f8fafc; }
-        .totals-summary { display: flex; justify-content: flex-end; margin-top: 10px; margin-bottom: 14px; }
-        .totals-box { width: 380px; border: 3px solid #000; border-radius: 6px; overflow: hidden; background: #fff; }
-        .total-row { display: flex; justify-content: space-between; padding: 6px 12px; border-bottom: 1.5px solid #cbd5e1; font-weight: 800; font-size: 14px; }
-        .total-row.final { background: #000; color: #fff; font-size: 16px; font-weight: 900; border-bottom: none; padding: 8px 12px; }
-        .signatures { display: flex; justify-content: space-between; padding: 0 45px; margin-top: 18px; margin-bottom: 12px; font-size: 15px; font-weight: 900; }
-        .sig-box { text-align: center; width: 170px; }
-        .sig-line { border-top: 2.5px solid #000; margin-top: 25px; width: 100%; }
-        .footer-bar { border-top: 2.5px solid #000; padding-top: 8px; display: flex; justify-content: center; font-size: 13px; font-weight: 800; color: #000; }
-      </style>
+      <style>${getInvoicePrintStyle()}</style>
 
       <div class="header">
         <div class="company-info">
@@ -699,29 +680,29 @@ export function getConsolidatedLedgerHtml(options: {
           </colgroup>
           <thead>
             <tr>
-              <th>م</th>
-              <th>الكود</th>
-              <th>الاسم</th>
-              <th>الهاتف</th>
-              ${reportType === 'ALL' ? '<th>النوع</th>' : ''}
-              <th>رصيد سابق</th>
-              <th>إجمالي مدين</th>
-              <th>إجمالي دائن</th>
-              <th>الرصيد النهائي</th>
+              <th><div class="cell-content">م</div></th>
+              <th><div class="cell-content">الكود</div></th>
+              <th><div class="cell-content">الاسم</div></th>
+              <th><div class="cell-content">الهاتف</div></th>
+              ${reportType === 'ALL' ? '<th><div class="cell-content">النوع</div></th>' : ''}
+              <th><div class="cell-content">رصيد سابق</div></th>
+              <th><div class="cell-content">إجمالي مدين</div></th>
+              <th><div class="cell-content">إجمالي دائن</div></th>
+              <th><div class="cell-content">الرصيد النهائي</div></th>
             </tr>
           </thead>
           <tbody>
             ${balanceRows.map(r => `
               <tr>
-                <td>${r.num}</td>
-                <td style="font-weight: 800;">${r.code}</td>
-                <td style="font-weight: 800;">${r.name}</td>
-                <td dir="ltr">${r.phone || '-'}</td>
-                ${reportType === 'ALL' ? `<td>${r.entityType === 'CUSTOMER' ? 'عميل' : 'مورد'}</td>` : ''}
-                <td dir="ltr">${r.priorBalance.toLocaleString()}</td>
-                <td dir="ltr" style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
-                <td dir="ltr" style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
-                <td dir="ltr" style="font-weight: 900;">${r.finalBalance.toLocaleString()}</td>
+                <td><div class="cell-content">${r.num}</div></td>
+                <td style="font-weight: 800;"><div class="cell-content" style="font-weight: 800;">${r.code}</div></td>
+                <td style="font-weight: 800;"><div class="cell-content" style="font-weight: 800;">${r.name}</div></td>
+                <td dir="ltr"><div class="cell-content" dir="ltr">${r.phone || '-'}</div></td>
+                ${reportType === 'ALL' ? `<td><div class="cell-content">${r.entityType === 'CUSTOMER' ? 'عميل' : 'مورد'}</div></td>` : ''}
+                <td dir="ltr"><div class="cell-content" dir="ltr">${r.priorBalance.toLocaleString()}</div></td>
+                <td dir="ltr" style="color: #b91c1c; font-weight: 900;"><div class="cell-content" dir="ltr" style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</div></td>
+                <td dir="ltr" style="color: #15803d; font-weight: 900;"><div class="cell-content" dir="ltr" style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</div></td>
+                <td dir="ltr" style="font-weight: 900;"><div class="cell-content" dir="ltr" style="font-weight: 900;">${r.finalBalance.toLocaleString()}</div></td>
               </tr>
             `).join('')}
           </tbody>
@@ -742,31 +723,31 @@ export function getConsolidatedLedgerHtml(options: {
           </colgroup>
           <thead>
             <tr>
-              <th>م</th>
-              <th>التاريخ</th>
-              <th>الطرف</th>
-              <th>الفاتورة</th>
-              <th>الصنف / البيان</th>
-              <th>الكمية</th>
-              <th>السعر</th>
-              <th>الإجمالي</th>
-              <th>مدين</th>
-              <th>دائن</th>
+              <th><div class="cell-content">م</div></th>
+              <th><div class="cell-content">التاريخ</div></th>
+              <th><div class="cell-content">الطرف</div></th>
+              <th><div class="cell-content">الفاتورة</div></th>
+              <th><div class="cell-content">الصنف / البيان</div></th>
+              <th><div class="cell-content">الكمية</div></th>
+              <th><div class="cell-content">السعر</div></th>
+              <th><div class="cell-content">الإجمالي</div></th>
+              <th><div class="cell-content">مدين</div></th>
+              <th><div class="cell-content">دائن</div></th>
             </tr>
           </thead>
           <tbody>
             ${movementRows.map(r => `
               <tr>
-                <td>${r.num}</td>
-                <td dir="ltr">${r.date}</td>
-                <td style="font-weight: 800;">${r.entityName} <span style="font-size: 11px; color: #64748b;">(${r.entityCode})</span></td>
-                <td>${r.ref || '-'}</td>
-                <td style="font-weight: 900;">${r.itemName}</td>
-                <td>${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</td>
-                <td>${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</td>
-                <td style="font-weight: 900;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</td>
-                <td style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</td>
-                <td style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</td>
+                <td><div class="cell-content">${r.num}</div></td>
+                <td dir="ltr"><div class="cell-content" dir="ltr">${r.date}</div></td>
+                <td style="font-weight: 800;"><div class="cell-content" style="font-weight: 800;">${r.entityName} <span style="font-size: 11px; color: #64748b;">(${r.entityCode})</span></div></td>
+                <td><div class="cell-content">${r.ref || '-'}</div></td>
+                <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.itemName}</div></td>
+                <td><div class="cell-content">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</div></td>
+                <td><div class="cell-content">${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</div></td>
+                <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</div></td>
+                <td style="color: #b91c1c; font-weight: 900;"><div class="cell-content" dir="ltr" style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</div></td>
+                <td style="color: #15803d; font-weight: 900;"><div class="cell-content" dir="ltr" style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</div></td>
               </tr>
             `).join('')}
           </tbody>

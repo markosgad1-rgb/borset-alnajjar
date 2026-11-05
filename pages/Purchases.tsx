@@ -35,6 +35,11 @@ export const Purchases: React.FC = () => {
   const [cartItems, setCartItems] = useState<InvoiceItem[]>([]);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  const itemCodeRef = React.useRef<HTMLInputElement>(null);
+  const itemNameRef = React.useRef<HTMLInputElement>(null);
+  const quantityRef = React.useRef<HTMLInputElement>(null);
+  const priceRef = React.useRef<HTMLInputElement>(null);
+
   // View/Edit Modal States
   const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
@@ -83,25 +88,52 @@ export const Purchases: React.FC = () => {
         quantity: '',
         price: product.cost ? product.cost : ''
       }));
+      setTimeout(() => {
+        quantityRef.current?.focus();
+        quantityRef.current?.select();
+      }, 50);
     } else {
       setCurrentItem(prev => ({ ...prev, itemCode: code, quantity: '', price: '' }));
     }
   };
 
+  const handleProductNameChange = (name: string) => {
+    const product = products.find(p => p.name === name);
+    if (product) {
+      setCurrentItem(prev => ({ 
+        ...prev, 
+        itemCode: product.code, 
+        itemName: name,
+        quantity: '',
+        price: product.cost ? product.cost : ''
+      }));
+      setTimeout(() => {
+        quantityRef.current?.focus();
+        quantityRef.current?.select();
+      }, 50);
+    } else {
+      setCurrentItem(prev => ({ ...prev, itemName: name }));
+    }
+  };
+
   const addToCart = () => {
-    const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : 0;
-    const price = typeof currentItem.price === 'number' ? currentItem.price : parseNumberFromCommas(currentItem.price);
+    const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : (currentItem.quantity ? Number(currentItem.quantity) : 0);
+    const rawPrice = currentItem.price;
+    const price = typeof rawPrice === 'number' ? rawPrice : parseNumberFromCommas(rawPrice);
 
     if (!currentItem.itemCode || !currentItem.itemName) {
       alert("الرجاء اختيار صنف صحيح");
+      itemCodeRef.current?.focus();
       return;
     }
     if (qty <= 0) {
       alert("الكمية يجب أن تكون أكبر من صفر");
+      quantityRef.current?.focus();
       return;
     }
     if (price <= 0) {
       alert("الرجاء إدخال سعر الشراء");
+      priceRef.current?.focus();
       return;
     }
 
@@ -109,7 +141,8 @@ export const Purchases: React.FC = () => {
     if (existingItemIndex >= 0) {
       const updatedCart = [...cartItems];
       updatedCart[existingItemIndex].quantity += qty;
-      updatedCart[existingItemIndex].total = updatedCart[existingItemIndex].quantity * updatedCart[existingItemIndex].price;
+      updatedCart[existingItemIndex].price = price;
+      updatedCart[existingItemIndex].total = updatedCart[existingItemIndex].quantity * price;
       setCartItems(updatedCart);
     } else {
       setCartItems(prev => [...prev, {
@@ -121,7 +154,13 @@ export const Purchases: React.FC = () => {
       }]);
     }
 
+    // Reset item with empty quantity and price immediately
     setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
+    // Return focus automatically to the item selection input so the user can immediately type the next item
+    setTimeout(() => {
+      itemCodeRef.current?.focus();
+      itemCodeRef.current?.select();
+    }, 60);
   };
 
   const removeFromCart = (index: number) => {
@@ -159,7 +198,7 @@ export const Purchases: React.FC = () => {
     setCartItems([]);
     setSupplierName('');
     setSupplierCode('');
-    setCurrentItem({ itemCode: '', itemName: '', quantity: 0, price: 0 });
+    setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
     alert("تم حفظ فاتورة المشتريات وتحديث المخزن وحساب المورد");
   };
 
@@ -299,10 +338,21 @@ export const Purchases: React.FC = () => {
           <div className="md:col-span-2">
             <label className="block text-xs font-bold text-gray-500 mb-1">كود الصنف</label>
             <input 
+              ref={itemCodeRef}
               type="text" 
               list="productCodes"
               className="w-full p-2 border rounded font-mono text-sm"
+              placeholder="كود"
               value={currentItem.itemCode}
+              onFocus={e => e.target.select()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  quantityRef.current?.focus();
+                  quantityRef.current?.select();
+                }
+              }}
               onChange={e => handleProductCodeChange(e.target.value)}
             />
             <datalist id="productCodes">
@@ -312,35 +362,70 @@ export const Purchases: React.FC = () => {
           <div className="md:col-span-4">
             <label className="block text-xs font-bold text-gray-500 mb-1">اسم الصنف</label>
             <input 
+              ref={itemNameRef}
               type="text" 
-              className="w-full p-2 border rounded text-sm"
+              list="purchaseProductNames"
+              className="w-full p-2 border rounded text-sm bg-white"
+              placeholder="اسم الصنف أو اختر من القائمة"
               value={currentItem.itemName}
-              onChange={e => setCurrentItem({...currentItem, itemName: e.target.value})}
+              onFocus={e => e.target.select()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  quantityRef.current?.focus();
+                  quantityRef.current?.select();
+                }
+              }}
+              onChange={e => handleProductNameChange(e.target.value)}
             />
+            <datalist id="purchaseProductNames">
+              {products.map(p => <option key={p.code} value={p.name}>{p.code}</option>)}
+            </datalist>
           </div>
           <div className="md:col-span-2">
             <label className="block text-xs font-bold text-gray-500 mb-1">الكمية</label>
             <input 
+              ref={quantityRef}
               type="number" min="1"
-              placeholder="الكمية"
+              placeholder="0"
               className="w-full p-2 border rounded text-sm text-center font-bold text-blue-600"
               value={currentItem.quantity}
+              onFocus={e => e.target.select()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  priceRef.current?.focus();
+                  priceRef.current?.select();
+                }
+              }}
               onChange={e => setCurrentItem({...currentItem, quantity: e.target.value === '' ? '' : Number(e.target.value)})}
             />
           </div>
           <div className="md:col-span-2">
             <label className="block text-xs font-bold text-gray-500 mb-1">سعر الشراء</label>
             <input 
+              ref={priceRef}
               type="text"
               dir="ltr"
-              placeholder="السعر (مثال: 115)"
+              placeholder="0"
               className="w-full p-2 border rounded text-sm text-center font-mono font-bold"
-              value={currentItem.price === '' ? '' : formatWithCommas(currentItem.price)}
+              value={currentItem.price === '' || currentItem.price === 0 ? '' : formatWithCommas(currentItem.price)}
+              onFocus={e => e.target.select()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  addToCart();
+                }
+              }}
               onChange={e => handleNumericChangeWithCommas(e.target.value, val => setCurrentItem({...currentItem, price: val}))}
             />
           </div>
           <div className="md:col-span-2">
             <button 
+              type="button"
               onClick={addToCart}
               className="w-full bg-brand-600 text-white p-2 rounded hover:bg-brand-700 flex items-center justify-center gap-1 font-bold text-sm"
             >
@@ -388,6 +473,7 @@ export const Purchases: React.FC = () => {
              إجمالي الفاتورة: <span className="text-2xl text-brand-700 mr-2">{cartTotal.toLocaleString()} ج.م</span>
            </div>
            <button 
+             type="button"
              onClick={handleSaveInvoice}
              className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-bold shadow-md flex items-center gap-2"
            >

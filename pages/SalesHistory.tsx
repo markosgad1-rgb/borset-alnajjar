@@ -5,6 +5,7 @@ import { Calendar, Search, FileText, X, Printer, Trash2, Check, AlertTriangle, E
 import { SalesInvoice, InvoiceItem, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const SalesHistory: React.FC = () => {
   const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, currentUser, companyLogo } = useERP();
@@ -28,6 +29,12 @@ export const SalesHistory: React.FC = () => {
   const [newItem, setNewItem] = useState<{ code: string, quantity: number | '', price: number | '' }>({
     code: '', quantity: '', price: ''
   });
+
+  // Hardware Back button handlers
+  useBackHandler(() => setIsEditing(false), isEditing, 'sales-history-edit-modal');
+  useBackHandler(() => setSelectedInvoice(null), !!selectedInvoice, 'sales-history-view-modal');
+  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'sales-history-delete-confirm');
+  useBackHandler(() => setShowClearConfirm(false), showClearConfirm, 'sales-history-clear-confirm');
 
   const [sharingPdfId, setSharingPdfId] = useState<string | null>(null);
 

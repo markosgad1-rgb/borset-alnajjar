@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ERPProvider, useERP } from './context/ERPContext';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
@@ -17,6 +17,7 @@ import { Expenses } from './pages/Expenses';
 import { UserManagement } from './pages/UserManagement';
 import { SalesHistory } from './pages/SalesHistory';
 import { PageView, User } from './types';
+import { setupBackNavigation, clearAllBackHandlers } from './utils/backNavigation';
 
 const AppContent: React.FC = () => {
   const { currentUser } = useERP();
@@ -32,6 +33,47 @@ const AppContent: React.FC = () => {
   };
 
   const [activePage, setActivePage] = useState<PageView>('dashboard');
+  const homePage = currentUser ? getInitialPage(currentUser) : 'dashboard';
+  const activePageRef = useRef(activePage);
+  activePageRef.current = activePage;
+
+  // Browser History & Popstate integration for Back navigation
+  useEffect(() => {
+    // Set initial history state if not set
+    if (!window.history.state || !window.history.state.page) {
+      window.history.replaceState({ page: homePage, root: true }, '');
+    }
+
+    const cleanup = setupBackNavigation(() => {
+      const current = activePageRef.current;
+      if (current !== homePage) {
+        // Step back to Dashboard
+        setActivePage(homePage);
+        window.history.replaceState({ page: homePage, root: true }, '');
+      }
+      // If current === homePage, do not intercept; browser will naturally exit
+    });
+
+    return cleanup;
+  }, [homePage]);
+
+  const handleNavigate = (page: PageView) => {
+    if (page === activePage) return;
+    clearAllBackHandlers();
+
+    if (activePage === homePage) {
+      // Pushing first page from dashboard creates 1 step history
+      window.history.pushState({ page, type: 'page' }, '');
+    } else if (page === homePage) {
+      // Returning to dashboard keeps history at root
+      window.history.replaceState({ page: homePage, root: true }, '');
+    } else {
+      // Switching between non-dashboard pages replaces current page entry so back goes directly to dashboard
+      window.history.replaceState({ page, type: 'page' }, '');
+    }
+
+    setActivePage(page);
+  };
 
   // Security Check: Validate Page Permissions on User Change
   useEffect(() => {
@@ -87,7 +129,7 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <Layout activePage={activePage} onNavigate={setActivePage}>
+    <Layout activePage={activePage} onNavigate={handleNavigate}>
       <ErrorBoundary>
         {renderPage()}
       </ErrorBoundary>

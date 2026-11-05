@@ -4,6 +4,7 @@ import { useERP } from '../context/ERPContext';
 import { Shield, UserPlus, Trash2, Edit, Check, X, Database, Loader2, Upload, Image as ImageIcon } from 'lucide-react';
 import { User } from '../types';
 import { BackupModal } from '../components/BackupModal';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const UserManagement: React.FC = () => {
   const { users, addUser, updateUser, deleteUser, currentUser, seedDatabase, updateSystemLogo, companyLogo } = useERP();
@@ -16,6 +17,10 @@ export const UserManagement: React.FC = () => {
   // Inline delete confirmation state
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [loadingActionId, setLoadingActionId] = useState<string | null>(null);
+
+  // Hardware Back button handlers
+  useBackHandler(() => setIsBackupModalOpen(false), isBackupModalOpen, 'user-mgmt-backup-modal');
+  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'user-mgmt-delete-confirm');
   
   const [formData, setFormData] = useState({
     username: '',

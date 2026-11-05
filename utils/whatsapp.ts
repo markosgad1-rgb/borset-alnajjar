@@ -360,15 +360,22 @@ export async function generatePdfFileFromHtml(
   container.style.direction = 'rtl';
   container.style.margin = '0';
   container.style.padding = '0';
+  container.style.fontFamily = "'Cairo', 'Segoe UI', Tahoma, sans-serif";
+  container.style.webkitFontSmoothing = 'antialiased';
+  container.style.textRendering = 'optimizeLegibility';
   container.innerHTML = htmlContent;
 
   document.body.appendChild(container);
 
   try {
-    if (document.fonts) {
+    // Explicitly wait for Cairo and Arabic fonts to be fully loaded
+    if (typeof document !== 'undefined' && document.fonts) {
       await document.fonts.ready;
     }
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (typeof document !== 'undefined' && document.fonts) {
+      await document.fonts.ready;
+    }
 
     const canvas = await html2canvas(container, {
       scale: 2,
@@ -379,6 +386,7 @@ export async function generatePdfFileFromHtml(
       scrollX: 0,
       scrollY: 0,
       windowWidth: orientation === 'landscape' ? 1200 : 960,
+      imageTimeout: 15000,
     });
 
     // Best-effort: Copy rendered invoice image to system clipboard

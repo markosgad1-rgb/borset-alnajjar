@@ -9,6 +9,7 @@ import { Purchase } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Suppliers: React.FC = () => {
   const { 
@@ -58,6 +59,15 @@ export const Suppliers: React.FC = () => {
 
   // View Mode for Ledger: 'ITEMS' (default, itemized breakdown) or 'INVOICES' (summary)
   const [viewMode, setViewMode] = useState<'ITEMS' | 'INVOICES'>('ITEMS');
+
+  // Mobile Back Button handlers for modals & sub-views
+  useBackHandler(() => setIsSupplierModalOpen(false), isSupplierModalOpen, 'suppliers-add-edit-modal');
+  useBackHandler(() => setIsConsolidatedModalOpen(false), isConsolidatedModalOpen, 'suppliers-consolidated-modal');
+  useBackHandler(() => setIsPrintModalOpen(false), isPrintModalOpen, 'suppliers-print-modal');
+  useBackHandler(() => setViewPurchase(null), !!viewPurchase, 'suppliers-view-purchase-modal');
+  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'suppliers-delete-confirm');
+  useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'suppliers-clear-ledger-confirm');
+  useBackHandler(() => setMobileView('LIST'), mobileView === 'DETAILS', 'suppliers-mobile-details');
 
   const generateNextCode = () => {
     if (suppliers.length === 0) return 'S001';
@@ -1220,6 +1230,7 @@ export const Suppliers: React.FC = () => {
                     placeholder="0"
                     className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-orange-500 font-mono font-bold text-center text-sm"
                     value={formData.balance}
+                    onFocus={e => e.target.select()}
                     onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), true)}
                   />
                   <span className="absolute left-2.5 top-2.5 text-[11px] text-gray-400 pointer-events-none">

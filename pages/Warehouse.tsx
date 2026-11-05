@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Product } from '../types';
 import { parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Warehouse: React.FC = () => {
   const { products, addProduct, updateProduct, deleteProduct, clearAllProducts, currentUser } = useERP();
@@ -59,6 +60,11 @@ export const Warehouse: React.FC = () => {
   // Clear All Modal State
   const [showClearAllModal, setShowClearAllModal] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+
+  // Hardware Back button handlers
+  useBackHandler(() => setShowAddForm(false), showAddForm, 'warehouse-add-form');
+  useBackHandler(() => setShowClearAllModal(false), showClearAllModal, 'warehouse-clear-all-modal');
+  useBackHandler(() => setDeleteConfirmKey(null), !!deleteConfirmKey, 'warehouse-delete-confirm');
 
   // Detect duplicate codes to warn user and allow fixing
   const duplicateCodes = useMemo(() => {
@@ -276,6 +282,7 @@ export const Warehouse: React.FC = () => {
                 placeholder="0"
                 className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 font-bold text-blue-600 text-center text-xs"
                 value={newProduct.quantity} 
+                onFocus={e => e.target.select()}
                 onChange={e => setNewProduct({...newProduct, quantity: e.target.value === '' ? '' : Number(e.target.value)})}
               />
             </div>
@@ -287,6 +294,7 @@ export const Warehouse: React.FC = () => {
                 placeholder="0"
                 className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 font-mono font-bold text-center text-xs"
                 value={newProduct.avgCost} 
+                onFocus={e => e.target.select()}
                 onChange={e => handleNumericChangeWithCommas(e.target.value, val => setNewProduct({...newProduct, avgCost: val}))}
               />
             </div>
@@ -298,6 +306,7 @@ export const Warehouse: React.FC = () => {
                 placeholder="0"
                 className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 font-mono font-bold text-green-700 text-center text-xs"
                 value={newProduct.price} 
+                onFocus={e => e.target.select()}
                 onChange={e => handleNumericChangeWithCommas(e.target.value, val => setNewProduct({...newProduct, price: val}))}
               />
             </div>

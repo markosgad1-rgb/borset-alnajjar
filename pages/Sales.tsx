@@ -6,6 +6,7 @@ import { InvoiceItem, SalesInvoice, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { shareSalesInvoicePdfViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
 import { getSalesInvoiceHtml } from '../utils/printTemplates';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, printInvoice, companyLogo } = useERP();
@@ -28,13 +29,18 @@ export const Sales: React.FC = () => {
     itemCode: string;
     itemName: string;
     quantity: number | '';
-    price: number;
+    price: number | '';
   }>({
     itemCode: '',
     itemName: '',
     quantity: '',
-    price: 0
+    price: ''
   });
+
+  const itemCodeRef = React.useRef<HTMLInputElement>(null);
+  const itemNameRef = React.useRef<HTMLInputElement>(null);
+  const quantityRef = React.useRef<HTMLInputElement>(null);
+  const priceRef = React.useRef<HTMLInputElement>(null);
 
   const [currentStock, setCurrentStock] = useState(0);
   const [cartItems, setCartItems] = useState<InvoiceItem[]>([]);
@@ -44,6 +50,9 @@ export const Sales: React.FC = () => {
   const [lastSavedInvoice, setLastSavedInvoice] = useState<SalesInvoice | null>(null);
   const [modalCustomerPhone, setModalCustomerPhone] = useState<string>('');
   const [preloadedPdfFile, setPreloadedPdfFile] = useState<File | null>(null);
+
+  // Hardware Back button closes the success modal
+  useBackHandler(() => setShowSuccessModal(false), showSuccessModal, 'sales-success-modal');
 
   // Auto-generate Invoice ID
   useEffect(() => {
@@ -104,7 +113,7 @@ export const Sales: React.FC = () => {
     }
   };
 
-  // Handle Item Selection - Quantity starts completely empty as requested
+  // Handle Item Selection (By Code)
   const handleItemCode = (code: string) => {
     const product = products.find(p => p.code === code);
     if (product) {
@@ -113,12 +122,37 @@ export const Sales: React.FC = () => {
         itemCode: code,
         itemName: product.name,
         quantity: '', // Empty field so the user can immediately type their quantity
-        price: product.price
+        price: product.price ? product.price : ''
       }));
       setCurrentStock(product.quantity);
+      setTimeout(() => {
+        quantityRef.current?.focus();
+        quantityRef.current?.select();
+      }, 50);
     } else {
-      setCurrentItem(prev => ({ ...prev, itemCode: code, itemName: '', quantity: '', price: 0 }));
+      setCurrentItem(prev => ({ ...prev, itemCode: code, itemName: '', quantity: '', price: '' }));
       setCurrentStock(0);
+    }
+  };
+
+  // Handle Item Selection (By Name)
+  const handleItemName = (name: string) => {
+    const product = products.find(p => p.name === name);
+    if (product) {
+      setCurrentItem(prev => ({
+        ...prev,
+        itemCode: product.code,
+        itemName: name,
+        quantity: '',
+        price: product.price ? product.price : ''
+      }));
+      setCurrentStock(product.quantity);
+      setTimeout(() => {
+        quantityRef.current?.focus();
+        quantityRef.current?.select();
+      }, 50);
+    } else {
+      setCurrentItem(prev => ({ ...prev, itemName: name }));
     }
   };
 
@@ -126,25 +160,35 @@ export const Sales: React.FC = () => {
   const addToCart = () => {
     if (!currentItem.itemCode || !currentItem.itemName) {
       alert("الرجاء اختيار صنف صحيح");
+      itemCodeRef.current?.focus();
       return;
     }
-    const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : 0;
+    const qty = typeof currentItem.quantity === 'number' ? currentItem.quantity : (currentItem.quantity ? Number(currentItem.quantity) : 0);
     if (qty <= 0) {
       alert("الرجاء إدخال الكمية المطلوبة");
+      quantityRef.current?.focus();
       return;
     }
     if (qty > currentStock) {
       alert("الكمية المطلوبة غير متوفرة بالمخزن");
+      quantityRef.current?.focus();
       return;
     }
 
-    const itemPrice = typeof currentItem.price === 'number' ? currentItem.price : 0;
+    const rawPrice = currentItem.price;
+    const itemPrice = typeof rawPrice === 'number' ? rawPrice : (rawPrice ? Number(rawPrice) : 0);
+    if (itemPrice <= 0) {
+      alert("الرجاء إدخال سعر الصنف");
+      priceRef.current?.focus();
+      return;
+    }
 
     const existingItemIndex = cartItems.findIndex(i => i.itemCode === currentItem.itemCode);
     if (existingItemIndex >= 0) {
       const updatedCart = [...cartItems];
       updatedCart[existingItemIndex].quantity += qty;
-      updatedCart[existingItemIndex].total = updatedCart[existingItemIndex].quantity * updatedCart[existingItemIndex].price;
+      updatedCart[existingItemIndex].price = itemPrice;
+      updatedCart[existingItemIndex].total = updatedCart[existingItemIndex].quantity * itemPrice;
       
       if (updatedCart[existingItemIndex].quantity > currentStock) {
          alert("مجموع الكمية في الفاتورة يتعدى رصيد المخزن");
@@ -162,9 +206,14 @@ export const Sales: React.FC = () => {
       }]);
     }
 
-    // Reset item with empty quantity
-    setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: 0 });
+    // Reset item with empty quantity and price immediately
+    setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
     setCurrentStock(0);
+    // Return focus automatically to the item selection input so the user can immediately type the next item
+    setTimeout(() => {
+      itemCodeRef.current?.focus();
+      itemCodeRef.current?.select();
+    }, 60);
   };
 
   const removeFromCart = (index: number) => {
@@ -418,10 +467,21 @@ export const Sales: React.FC = () => {
             <div className="col-span-3 md:col-span-2">
                <label className="text-[10px] font-bold text-gray-500 block mb-1">كود</label>
                <input 
+                  ref={itemCodeRef}
                   type="text" 
                   list="products"
                   className="w-full p-2 border rounded text-sm font-mono"
+                  placeholder="كود"
                   value={currentItem.itemCode}
+                  onFocus={e => e.target.select()}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      quantityRef.current?.focus();
+                      quantityRef.current?.select();
+                    }
+                  }}
                   onChange={e => handleItemCode(e.target.value)}
                 />
                 <datalist id="products">
@@ -431,18 +491,48 @@ export const Sales: React.FC = () => {
             
             <div className="col-span-9 md:col-span-4">
               <label className="text-[10px] font-bold text-gray-500 block mb-1">اسم الصنف</label>
-              <input type="text" className="w-full p-2 border rounded bg-gray-50 text-sm" value={currentItem.itemName} readOnly />
+              <input 
+                ref={itemNameRef}
+                type="text" 
+                list="productNames"
+                className="w-full p-2 border rounded bg-white text-sm" 
+                value={currentItem.itemName} 
+                placeholder="اسم الصنف أو اختر من القائمة" 
+                onFocus={e => e.target.select()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    quantityRef.current?.focus();
+                    quantityRef.current?.select();
+                  }
+                }}
+                onChange={e => handleItemName(e.target.value)}
+              />
+              <datalist id="productNames">
+                {products.map(p => <option key={p.code} value={p.name}>{p.code}</option>)}
+              </datalist>
             </div>
 
             <div className="col-span-4 md:col-span-2">
               <label className="text-[10px] font-bold text-gray-500 block mb-1">الكمية ({currentStock})</label>
               <input 
+                ref={quantityRef}
                 type="number" 
                 className="w-full p-2 border rounded font-bold text-center text-sm" 
                 min="1" 
                 max={currentStock}
-                placeholder="الكمية"
+                placeholder="0"
                 value={currentItem.quantity}
+                onFocus={e => e.target.select()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    priceRef.current?.focus();
+                    priceRef.current?.select();
+                  }
+                }}
                 onChange={e => {
                   const val = e.target.value;
                   setCurrentItem({...currentItem, quantity: val === '' ? '' : Number(val)});
@@ -453,15 +543,29 @@ export const Sales: React.FC = () => {
             <div className="col-span-4 md:col-span-2">
               <label className="text-[10px] font-bold text-gray-500 block mb-1">السعر</label>
               <input 
+                ref={priceRef}
                 type="number" 
-                className="w-full p-2 border rounded text-center text-sm" 
-                value={currentItem.price}
-                onChange={e => setCurrentItem({...currentItem, price: Number(e.target.value)})}
+                className="w-full p-2 border rounded text-center text-sm font-bold font-mono" 
+                placeholder="0"
+                value={currentItem.price === 0 || currentItem.price === '' ? '' : currentItem.price}
+                onFocus={e => e.target.select()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    addToCart();
+                  }
+                }}
+                onChange={e => {
+                  const val = e.target.value;
+                  setCurrentItem({...currentItem, price: val === '' ? '' : Number(val)});
+                }}
               />
             </div>
 
             <div className="col-span-4 md:col-span-2">
               <button 
+                type="button"
                 onClick={addToCart}
                 className="w-full bg-orange-500 hover:bg-orange-600 text-white py-2 px-1 rounded flex items-center justify-center gap-1 font-bold transition-colors text-sm"
               >
@@ -607,8 +711,9 @@ export const Sales: React.FC = () => {
                     type="text"
                     dir="ltr"
                     value={paidAmountInput}
+                    onFocus={e => e.target.select()}
                     onChange={e => handleNumericChangeWithCommas(e.target.value, setPaidAmountInput)}
-                    placeholder="اكتب المبلغ (مثال: 50,000)"
+                    placeholder="0"
                     className="w-full p-2.5 pl-12 border border-amber-300 rounded-lg font-bold font-mono text-base md:text-lg text-gray-800 focus:ring-2 focus:ring-amber-500 outline-none bg-white text-center"
                   />
                   <span className="absolute left-3 top-3 text-xs text-gray-400 font-bold">ج.م</span>
@@ -710,6 +815,7 @@ export const Sales: React.FC = () => {
            </div>
 
            <button 
+            type="button"
             onClick={handleSaveInvoice}
             className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-4 rounded-lg shadow-lg transition-all transform hover:scale-[1.02] flex justify-center items-center gap-2 mt-4"
            >
@@ -757,6 +863,7 @@ export const Sales: React.FC = () => {
              </div>
           </div>
           <button 
+            type="button"
             onClick={handleSaveInvoice}
             className="flex-1 bg-brand-600 active:bg-brand-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg flex justify-center items-center gap-2"
           >

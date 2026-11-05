@@ -84,6 +84,7 @@ export const Expenses: React.FC = () => {
                     className="w-full p-3 border-2 border-red-100 rounded-lg focus:ring-2 focus:ring-red-500 outline-none font-bold text-xl text-center font-mono"
                     placeholder="0"
                     value={formData.amount}
+                    onFocus={e => e.target.select()}
                     onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, amount: val}))}
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>

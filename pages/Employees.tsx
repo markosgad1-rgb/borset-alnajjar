@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
 import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle, Check, X } from 'lucide-react';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Employees: React.FC = () => {
   const { employees, addEmployee, updateEmployee, deleteEmployee, clearLedger, currentUser } = useERP();
@@ -17,6 +18,10 @@ export const Employees: React.FC = () => {
   
   // Delete Confirmation state
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Hardware Back button handlers
+  useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'employees-clear-confirm');
+  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'employees-delete-confirm');
 
   const generateNextCode = () => {
     if (employees.length === 0) return 'E001';
