@@ -77,6 +77,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
 
   // Filter items based on permission
   const filteredNav = navItems.filter(item => {
+    // إتاحة صفحة إدارة المستخدمين للسوبر أدمن الأساسي فقط (admin)
+    if (item.id === 'users') {
+      return currentUser?.username === 'admin';
+    }
     if (currentUser?.role === 'ADMIN' || currentUser?.username === 'admin') return true;
     if (item.id === 'trash') {
       return Boolean(

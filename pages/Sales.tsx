@@ -1255,24 +1255,44 @@ export const Sales: React.FC = () => {
                 <span className="text-gray-500">العميل:</span>
                 <span className="font-bold text-gray-800">{lastSavedInvoice?.customerName}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-500">إجمالي الفاتورة:</span>
-                <span className="font-bold font-mono text-gray-900">{lastSavedInvoice?.total.toLocaleString()} ج.م</span>
+              {/* السطر الأول: إجمالي الفاتورة */}
+              <div className="flex justify-between items-center text-sm font-bold text-gray-900 border-b border-gray-200 pb-1.5">
+                <span>إجمالي الفاتورة:</span>
+                <span className="font-bold font-mono text-base">{lastSavedInvoice?.total.toLocaleString()} ج.م</span>
               </div>
+
+              {/* السطر الثاني: المديونية السابقة */}
+              <div className="flex justify-between items-center text-gray-600">
+                <span>المديونية السابقة:</span>
+                <span className="font-bold font-mono" dir="ltr">{(lastSavedInvoice?.previousBalance || 0).toLocaleString()} ج.م</span>
+              </div>
+
+              {/* السطر الثالث: دفعة مسددة */}
               <div className="flex justify-between items-center text-emerald-700 font-bold">
-                <span>المبلغ المدفوع:</span>
-                <span className="font-mono">{(lastSavedInvoice?.paidAmount || 0).toLocaleString()} ج.م</span>
+                <span>دفعة مسددة:</span>
+                <span className="font-mono">{(lastSavedInvoice?.paidAmount || 0) > 0 ? `${(lastSavedInvoice?.paidAmount || 0).toLocaleString()} ج.م` : '0 ج.م'}</span>
               </div>
-              <div className="flex justify-between items-center text-amber-700 font-bold">
-                <span>المتبقي على الحساب (آجل):</span>
-                <span className="font-mono">{(lastSavedInvoice?.remainingAmount || 0).toLocaleString()} ج.م</span>
-              </div>
+
+              {/* السطر الرابع: الإجمالي */}
               <div className="flex justify-between items-center border-t border-gray-200 pt-2 text-xs">
-                <span className="text-gray-600 font-bold">رصيد العميل النهائي:</span>
+                <span className="text-gray-900 font-bold">الإجمالي:</span>
                 <span className={`font-bold font-mono text-sm ${(lastSavedInvoice?.currentBalance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
                   {(lastSavedInvoice?.currentBalance || 0).toLocaleString()} ج.م
                 </span>
               </div>
+
+              {/* شريط سفلي مستقل: رصيد العميل الحالي في كشف الحساب */}
+              {(() => {
+                const liveCustBal = customers.find(c => c.code === lastSavedInvoice?.customerCode)?.balance ?? lastSavedInvoice?.currentBalance ?? 0;
+                return (
+                  <div className="mt-2 pt-2 border-t border-gray-200 bg-white p-2 rounded-lg text-[11px] flex justify-between items-center">
+                    <span className="text-gray-600 font-bold">رصيد العميل الحالي في كشف الحساب:</span>
+                    <span className={`font-mono font-bold ${liveCustBal < 0 ? 'text-red-600' : liveCustBal > 0 ? 'text-emerald-600' : 'text-gray-700'}`} dir="ltr">
+                      {liveCustBal.toLocaleString()} ج.م {liveCustBal < 0 ? '(مدين)' : liveCustBal > 0 ? '(له رصيد)' : '(خالص)'}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* WhatsApp Phone Destination Input */}

@@ -539,15 +539,43 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         unsubs.push(onSnapshot(collection(db, 'treasury'), (snap: any) => {
            const data = snap.docs.map((d: any) => {
              const t = d.data() as TreasuryTransaction;
+             const isCredit = (t.credit !== undefined && Number(t.credit) > 0)
+               ? Number(t.credit)
+               : ((t.type === 'INCOME' || (t as any).source === 'COLLECTION') ? Number(t.amount || (t as any).credit || 0) : 0);
+             const isDebit = (t.debit !== undefined && Number(t.debit) > 0)
+               ? Number(t.debit)
+               : (t.type === 'EXPENSE' ? Number(t.amount || (t as any).debit || 0) : 0);
+             const amount = t.amount !== undefined ? Number(t.amount) : (isCredit > 0 ? isCredit : isDebit);
+
              return {
                ...t,
                id: t.id || d.id,
                branchId: (t.branchId === 'NOZHA' ? 'NOZHA' : 'MARG') as BranchId,
-               debit: Number(t.debit) || 0,
-               credit: Number(t.credit) || 0
+               type: t.type || (isCredit > 0 ? 'INCOME' : 'EXPENSE'),
+               amount,
+               credit: isCredit,
+               debit: isDebit,
+               paymentMethod: t.paymentMethod || 'CASH',
+               date: t.date || (t as any).createdAt || (t as any).timestamp || new Date().toISOString()
              };
            });
            data.sort((a: any, b: any) => {
+             const getTimestamp = (item: any) => {
+               if (item.timestamp && typeof item.timestamp === 'number') return item.timestamp;
+               if (item.createdAt) {
+                 const parsed = Date.parse(item.createdAt);
+                 if (!isNaN(parsed)) return parsed;
+               }
+               if (item.date) {
+                 const parsed = Date.parse(item.date);
+                 if (!isNaN(parsed)) return parsed;
+               }
+               const match = (item.id || '').match(/\d{10,}/);
+               return match ? Number(match[0]) : 0;
+             };
+             const tA = getTimestamp(a);
+             const tB = getTimestamp(b);
+             if (tA && tB && tA !== tB) return tB - tA;
              const dateComp = (b.date || '').localeCompare(a.date || '');
              if (dateComp !== 0) return dateComp;
              return (b.id || '').localeCompare(a.id || '');
@@ -2208,6 +2236,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // --- Implemented Missing Functions ---
 
   const addUser = async (user: User) => {
+    if (currentUser?.username !== 'admin') {
+      alert('عفواً، لا يملك صلاحية إدارة المستخدمين سوى السوبر أدمن الأساسي (admin).');
+      return;
+    }
     if (isOnline) {
       try { await setDoc(doc(db, 'users', user.id), user); } catch (e) { handleFirebaseError(e); }
     } else {
@@ -2216,6 +2248,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateUser = async (id: string, updatedData: Partial<User>) => {
+    if (currentUser?.username !== 'admin') {
+      alert('عفواً، لا يملك صلاحية تعديل المستخدمين والرتب سوى السوبر أدمن الأساسي (admin).');
+      return;
+    }
     const targetUser = users.find(u => u.id === id);
     if (id === '1' || targetUser?.username === 'admin') {
       alert('حساب الأدمن الأساسي محمي ولا يمكن تعديل بياناته أو كلمة مروره.');
@@ -2229,6 +2265,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteUser = async (id: string) => {
+    if (currentUser?.username !== 'admin') {
+      alert('عفواً، لا يملك صلاحية حذف المستخدمين سوى السوبر أدمن الأساسي (admin).');
+      return false;
+    }
     const targetUser = users.find(u => u.id === id);
     if (id === '1' || targetUser?.username === 'admin') {
       alert('لا يمكن حذف حساب الأدمن الأساسي (admin).');
@@ -2251,52 +2291,65 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     notes?: string;
   }) => {
     const { customerCode, invoiceId, amount, date, paymentMethod, notes } = data;
-    const tId = `T_COL_${Date.now()}`;
+    const now = new Date();
+    const tId = `T_COL_${now.getTime()}`;
     
-    // Find customer for clear name display
+    // Find customer for clear name display and branch
     const customer = customers.find(c => c.code === customerCode);
     const displayName = customer?.name || data.customerName || customerCode;
+    const branchId: BranchId = customer?.branchId || 'MARG';
 
-    const descParts = [`تحصيل من عميل: ${displayName} (${customerCode})`];
+    const descParts = [`تحصيل من العميل [${customerCode}] ${displayName}`];
     if (invoiceId && invoiceId.trim()) descParts.push(`فاتورة #${invoiceId.trim()}`);
     if (notes && notes.trim()) descParts.push(notes.trim());
     const description = descParts.join(' - ');
+
+    const timeStr = now.toTimeString().split(' ')[0]; // HH:mm:ss
+    const timestampIso = now.toISOString();
+    // Build date string with timestamp for precise chronological ordering
+    const fullDate = (date && date.includes(':'))
+      ? date
+      : (date ? `${date} ${timeStr}` : timestampIso.replace('T', ' ').substring(0, 19));
     
     // Update Customer Balance
     if (customer) {
         const newBalance = customer.balance + amount;
         const customerLedgerDesc = notes && notes.trim() ? `دفعة (${notes.trim()})` : 'دفعة';
         const newHistory = [...(customer.history || []), { 
-          date, 
+          date: date || now.toISOString().split('T')[0], 
           description: customerLedgerDesc, 
           amount 
         }];
         await updateCustomer(customerCode, { balance: newBalance, history: newHistory });
     }
 
-    // Add to Treasury (Ensure no field is undefined for Firestore compatibility)
+    // Add to Treasury with all required fields
     const transaction: TreasuryTransaction = {
         id: tId,
-        date,
+        branchId,
+        type: 'INCOME',
+        amount: amount,
         credit: amount,
         debit: 0,
         balance: 0,
+        source: 'COLLECTION',
         paymentMethod: paymentMethod || 'CASH',
-        description
+        description,
+        date: fullDate,
+        createdAt: timestampIso,
+        timestamp: now.getTime(),
+        ...(invoiceId && invoiceId.trim() ? { invoiceNumber: invoiceId.trim() } : {})
     };
-    if (invoiceId && invoiceId.trim()) {
-        transaction.invoiceNumber = invoiceId.trim();
-    }
     
     // Optimistic update so UI reflects immediately both online and offline
     setTreasury(prev => {
         const withoutThis = prev.filter(t => t.id !== tId);
-        return [...withoutThis, transaction];
+        return [transaction, ...withoutThis];
     });
 
     if (isOnline) {
         try { 
-          await setDoc(doc(db, 'treasury', tId), transaction); 
+          await setDoc(doc(db, 'treasury', tId), cleanDoc(transaction)); 
         } catch (e) { 
           handleFirebaseError(e); 
         }
@@ -2793,7 +2846,19 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ? (invoice as any).liveCustomerBalance
       : (cust ? cust.balance : (invoice.currentBalance !== undefined ? invoice.currentBalance : 0));
     const paidAmount = invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0);
-    const calculatedPreviousBalance = liveCustomerBalance - (invoice.total - paidAmount);
+    const remainingAmount = invoice.remainingAmount !== undefined
+      ? invoice.remainingAmount
+      : (invoice.total - paidAmount);
+
+    // 1. حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
+    let oldDebt = invoice.previousBalance !== undefined ? invoice.previousBalance : 0;
+    if (Object.is(oldDebt, -0) || Math.abs(oldDebt) < 0.0001) oldDebt = 0;
+
+    // 2. إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
+    let totalAfterInvoice = invoice.currentBalance !== undefined
+      ? invoice.currentBalance
+      : (oldDebt - remainingAmount);
+    if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
     const printWindow = window.open('', '_blank', 'width=1000,height=800');
     if (!printWindow) {
@@ -2856,15 +2921,22 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             <div class="totals-section">
               <div style="flex: 1;"></div>
               <div class="totals-box">
-                <div class="total-row main"><span>الإجمالي:</span><strong>${invoice.total.toLocaleString()}</strong></div>
-                ${(invoice.paidAmount !== undefined && invoice.paidAmount > 0) ? `
-                  <div class="total-row" style="color: #047857; font-size: 17.5px;"><span>المدفوع (${getPaymentMethodArabicName(invoice.paymentMethod)}):</span><strong>${invoice.paidAmount.toLocaleString()}</strong></div>
-                  <div class="total-row" style="color: #b91c1c; font-size: 17.5px;"><span>المتبقي من الفاتورة:</span><strong>${((invoice.remainingAmount !== undefined) ? invoice.remainingAmount : (invoice.total - invoice.paidAmount)).toLocaleString()}</strong></div>
-                ` : `
-                  <div class="total-row" style="color: #374151; font-size: 17px;"><span>حالة السداد:</span><span>آجل بالكامل</span></div>
-                `}
-                <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span style="direction: ltr;">${calculatedPreviousBalance.toLocaleString()}</span></div>
-                <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${liveCustomerBalance.toLocaleString()}</span></div>
+                <div class="total-row main">
+                  <span>إجمالي الفاتورة:</span>
+                  <strong>${invoice.total.toLocaleString()} ج.م</strong>
+                </div>
+                <div class="total-row" style="color: #1f2937;">
+                  <span>المديونية السابقة:</span>
+                  <span style="direction: ltr;">${oldDebt.toLocaleString()} ج.م</span>
+                </div>
+                <div class="total-row" style="color: ${(invoice.paidAmount !== undefined && invoice.paidAmount > 0) ? '#047857' : '#4b5563'}; font-size: 17.5px;">
+                  <span>دفعة مسددة:</span>
+                  <strong>${(invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0)).toLocaleString()} ج.م</strong>
+                </div>
+                <div class="total-row final">
+                  <span>الإجمالي:</span>
+                  <span style="direction: ltr;">${totalAfterInvoice.toLocaleString()} ج.م</span>
+                </div>
               </div>
             </div>
           </div>

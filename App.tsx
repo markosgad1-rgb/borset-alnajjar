@@ -97,6 +97,13 @@ const AppContent: React.FC = () => {
         'users': 'admin',
       };
 
+      if (activePage === 'users') {
+        if (currentUser.username !== 'admin') {
+          setActivePage(getInitialPage(currentUser));
+          return;
+        }
+      }
+
       if (activePage === 'trash') {
         const canTrash = Boolean(
           currentUser.permissions.canDeleteInvoices ||

@@ -895,44 +895,57 @@ export const SalesHistory: React.FC = () => {
 
               <div className="flex justify-end">
                 {(() => {
-                  const curBal = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0;
                   const paid = selectedInvoice.paidAmount || 0;
-                  const netInvoice = selectedInvoice.total - paid;
-                  const calculatedPreviousBalance = curBal - netInvoice;
+                  const remaining = selectedInvoice.remainingAmount !== undefined 
+                    ? selectedInvoice.remainingAmount 
+                    : (selectedInvoice.total - paid);
+                  
+                  // حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
+                  let oldDebt = selectedInvoice.previousBalance !== undefined 
+                    ? selectedInvoice.previousBalance 
+                    : 0;
+                  if (Object.is(oldDebt, -0) || Math.abs(oldDebt) < 0.0001) oldDebt = 0;
+
+                  // إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
+                  let totalAfterInvoice = selectedInvoice.currentBalance !== undefined
+                    ? selectedInvoice.currentBalance
+                    : (oldDebt - remaining);
+                  if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
+
+                  // مديونية العميل الحالية الآن (تشمل جميع الحركات والتحصيلات اللاحقة)
+                  const liveCustomerDebt = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0;
 
                   return (
                     <div className="bg-gray-900 text-white p-4 rounded-xl w-full sm:w-2/3 space-y-2">
-                      <div className="flex justify-between items-center text-base font-bold">
+                      {/* السطر الأول: إجمالي الفاتورة */}
+                      <div className="flex justify-between items-center text-base font-bold border-b border-gray-700 pb-2">
                          <span>إجمالي الفاتورة:</span>
-                         <span className="font-mono text-lg text-white">{selectedInvoice.total.toLocaleString()} ج.م</span>
+                         <span className="font-mono text-lg text-amber-400">{selectedInvoice.total.toLocaleString()} ج.م</span>
                       </div>
                       
-                      <div className="flex justify-between items-center text-xs text-emerald-400 bg-gray-800 px-3 py-1.5 rounded">
-                         <span>المدفوع نقداً ({getPaymentMethodLabel(selectedInvoice.paymentMethod)}):</span>
-                         <span className="font-bold font-mono">{paid.toLocaleString()} ج.م</span>
-                      </div>
-
-                      <div className="flex justify-between items-center text-xs text-amber-400 bg-gray-800 px-3 py-1.5 rounded">
-                         <span>المتبقي (آجل):</span>
-                         <span className="font-bold font-mono">
-                           {((selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : netInvoice)).toLocaleString()} ج.م
-                         </span>
-                      </div>
-
+                      {/* السطر الثاني: المديونية السابقة */}
                       <div className="flex justify-between items-center text-xs text-gray-300 bg-gray-800 px-3 py-1.5 rounded">
-                         <span>رصيد سابق:</span>
-                         <span className="font-bold font-mono" dir="ltr">{calculatedPreviousBalance.toLocaleString()} ج.م</span>
+                         <span>المديونية السابقة:</span>
+                         <span className="font-bold font-mono" dir="ltr">{oldDebt.toLocaleString()} ج.م</span>
                       </div>
 
+                      {/* السطر الثالث: دفعة مسددة */}
+                      <div className="flex justify-between items-center text-xs text-emerald-400 bg-gray-800 px-3 py-1.5 rounded">
+                         <span>دفعة مسددة:</span>
+                         <span className="font-bold font-mono">{paid > 0 ? `${paid.toLocaleString()} ج.م` : '0 ج.م'}</span>
+                      </div>
+
+                      {/* السطر الرابع: الإجمالي */}
                       <div className="flex justify-between items-center text-sm font-bold text-amber-300 bg-gray-800/90 px-3 py-2 rounded-lg border border-amber-500/30">
-                         <span>الرصيد الحالي:</span>
-                         <span className="font-black font-mono text-base" dir="ltr">{curBal.toLocaleString()} ج.م</span>
+                         <span>الإجمالي:</span>
+                         <span className="font-black font-mono text-base" dir="ltr">{totalAfterInvoice.toLocaleString()} ج.م</span>
                       </div>
 
-                      <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-400 flex flex-col sm:flex-row justify-between gap-1.5">
-                         <span>رصيد الفاتورة وقت الإصدار: {selectedInvoice.currentBalance?.toLocaleString() || 0} ج.م</span>
-                         <span className="font-bold text-amber-300">
-                           إجمالي مديونية العميل الحالية: {curBal.toLocaleString()} ج.م
+                      {/* شريط سفلي مستقل: رصيد العميل الحالي في كشف الحساب */}
+                      <div className="mt-3 pt-2.5 border-t border-gray-700 bg-gray-800/60 p-2.5 rounded-lg text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1.5">
+                         <span className="text-gray-400">رصيد العميل الحالي في كشف الحساب:</span>
+                         <span className={`font-mono font-bold text-sm ${liveCustomerDebt < 0 ? 'text-red-400' : liveCustomerDebt > 0 ? 'text-emerald-400' : 'text-gray-300'}`} dir="ltr">
+                           {liveCustomerDebt.toLocaleString()} ج.م {liveCustomerDebt < 0 ? '(مدين)' : liveCustomerDebt > 0 ? '(له رصيد)' : '(خالص)'}
                          </span>
                       </div>
                     </div>

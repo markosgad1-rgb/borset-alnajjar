@@ -277,9 +277,15 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
     ? (invoice as any).liveCustomerBalance 
     : (invoice.currentBalance !== undefined ? invoice.currentBalance : 0);
 
-  // Dynamic previous balance consistent with statement:
-  // calculatedPreviousBalance = currentBalance - (invoice.total - invoice.paidAmount)
-  const calculatedPreviousBalance = displayCustomerBalance - (invoice.total - paidAmount);
+  // 1. حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
+  let oldDebt = invoice.previousBalance !== undefined ? invoice.previousBalance : 0;
+  if (Object.is(oldDebt, -0) || Math.abs(oldDebt) < 0.0001) oldDebt = 0;
+
+  // 2. إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
+  let totalAfterInvoice = invoice.currentBalance !== undefined 
+    ? invoice.currentBalance 
+    : (oldDebt - remainingAmount);
+  if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
   return `
     <div style="font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; width: 860px; padding: 20px; background: #fff; color: #000; box-sizing: border-box; margin: 0 auto;">
@@ -342,15 +348,22 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
           
           <div class="totals-section">
             <div class="totals-box">
-              <div class="total-row main"><span>إجمالي الفاتورة:</span><strong>${invoice.total.toLocaleString()} ج.م</strong></div>
-              ${paidAmount > 0 ? `
-                <div class="total-row" style="color: #047857;"><span>المدفوع (${paymentMethodLabel}):</span><strong>${paidAmount.toLocaleString()} ج.م</strong></div>
-                <div class="total-row" style="color: #b91c1c;"><span>المتبقي من الفاتورة:</span><strong>${remainingAmount.toLocaleString()} ج.م</strong></div>
-              ` : `
-                <div class="total-row" style="color: #374151;"><span>حالة السداد:</span><span>آجل بالكامل على الحساب</span></div>
-              `}
-              <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span dir="ltr">${calculatedPreviousBalance.toLocaleString()} ج.م</span></div>
-              <div class="total-row final"><span>الرصيد الحالي:</span><span dir="ltr">${displayCustomerBalance.toLocaleString()} ج.م</span></div>
+              <div class="total-row main">
+                <span>إجمالي الفاتورة:</span>
+                <strong>${invoice.total.toLocaleString()} ج.م</strong>
+              </div>
+              <div class="total-row" style="color: #1f2937;">
+                <span>المديونية السابقة:</span>
+                <span dir="ltr">${oldDebt.toLocaleString()} ج.م</span>
+              </div>
+              <div class="total-row" style="color: ${paidAmount > 0 ? '#047857' : '#4b5563'};">
+                <span>دفعة مسددة:</span>
+                <strong>${paidAmount.toLocaleString()} ج.م</strong>
+              </div>
+              <div class="total-row final">
+                <span>الإجمالي:</span>
+                <span dir="ltr">${totalAfterInvoice.toLocaleString()} ج.م</span>
+              </div>
             </div>
           </div>
         </div>
@@ -561,7 +574,7 @@ export function getLedgerHtml(options: {
             <tr>
               <td><div class="cell-content">${r.num}</div></td>
               <td dir="ltr"><div class="cell-content" dir="ltr">${r.date}</div></td>
-              <td><div class="cell-content">${r.ref || '-'}</div></td>
+              <td><div class="cell-content">${r.ref ? (r.ref.includes('تسوية') ? 'تسوية' : r.ref) : '-'}</div></td>
               <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.itemName}</div></td>
               <td><div class="cell-content">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</div></td>
               <td><div class="cell-content">${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</div></td>
@@ -744,7 +757,7 @@ export function getConsolidatedLedgerHtml(options: {
                 <td><div class="cell-content">${r.num}</div></td>
                 <td dir="ltr"><div class="cell-content" dir="ltr">${r.date}</div></td>
                 <td style="font-weight: 800;"><div class="cell-content" style="font-weight: 800;">${r.entityName} <span style="font-size: 11px; color: #64748b;">(${r.entityCode})</span></div></td>
-                <td><div class="cell-content">${r.ref || '-'}</div></td>
+                <td><div class="cell-content">${r.ref ? (r.ref.includes('تسوية') ? 'تسوية' : r.ref) : '-'}</div></td>
                 <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.itemName}</div></td>
                 <td><div class="cell-content">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</div></td>
                 <td><div class="cell-content">${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</div></td>

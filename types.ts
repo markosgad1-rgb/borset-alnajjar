@@ -63,6 +63,16 @@ export interface Product {
   price: number; // Selling price
 }
 
+export interface ManualCustomerTransaction {
+  id: string;
+  date: string;
+  type: 'DEBIT' | 'CREDIT';
+  amount: number;
+  description: string;
+  createdAt: string;
+  createdBy?: string;
+}
+
 export interface Customer {
   code: string;
   name: string;
@@ -71,6 +81,7 @@ export interface Customer {
   area: string; // Mandatory area under branch
   balance: number; // Negative = Debt (Owes us), Positive = Credit (We owe him)
   history: CustomerHistory[];
+  manualTransactions?: ManualCustomerTransaction[];
   isDeleted?: boolean;
   deletedAt?: string;
 }
@@ -158,8 +169,13 @@ export interface TreasuryTransaction {
   credit: number; // Incoming
   debit: number; // Outgoing
   balance: number; // Running balance (Global)
-  paymentMethod: PaymentMethod; // New field
+  paymentMethod: PaymentMethod; // Treasury account
   description: string;
+  type?: 'INCOME' | 'EXPENSE' | TransactionType;
+  amount?: number;
+  source?: string;
+  createdAt?: string;
+  timestamp?: number;
 }
 
 export interface UserPermissions {

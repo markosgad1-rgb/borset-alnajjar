@@ -72,20 +72,30 @@ export const Treasury: React.FC = () => {
       .filter(t => {
         const itemBranch = t.branchId || 'MARG';
         const branchMatch = selectedBranchFilter === 'ALL' || itemBranch === selectedBranchFilter;
-        const methodMatch = selectedFilter === 'ALL' || t.paymentMethod === selectedFilter || (!t.paymentMethod && selectedFilter === 'CASH');
+        const normalizedMethod = t.paymentMethod || 'CASH';
+        const methodMatch = selectedFilter === 'ALL' || normalizedMethod === selectedFilter;
         return branchMatch && methodMatch;
       })
       .sort((a, b) => {
-        const dateDiff = (b.date || '').localeCompare(a.date || '');
-        if (dateDiff !== 0) return dateDiff;
-        const getTimestamp = (id: string) => {
-          const match = id.match(/\d{10,}/);
+        const getTimestamp = (item: any) => {
+          if (item.timestamp && typeof item.timestamp === 'number') return item.timestamp;
+          if (item.createdAt) {
+            const parsed = Date.parse(item.createdAt);
+            if (!isNaN(parsed)) return parsed;
+          }
+          if (item.date) {
+            const parsed = Date.parse(item.date);
+            if (!isNaN(parsed)) return parsed;
+          }
+          const match = (item.id || '').match(/\d{10,}/);
           return match ? Number(match[0]) : 0;
         };
-        const tA = getTimestamp(a.id);
-        const tB = getTimestamp(b.id);
+        const tA = getTimestamp(a);
+        const tB = getTimestamp(b);
         if (tA && tB && tA !== tB) return tB - tA;
-        return b.id.localeCompare(a.id);
+        const dateDiff = (b.date || '').localeCompare(a.date || '');
+        if (dateDiff !== 0) return dateDiff;
+        return (b.id || '').localeCompare(a.id || '');
       });
   }, [treasury, selectedBranchFilter, selectedFilter]);
 
@@ -470,12 +480,25 @@ export const Treasury: React.FC = () => {
                             {getMethodLabel(t.paymentMethod)}
                         </span>
                       </td>
-                      <td className="p-3.5 text-gray-800 font-medium">{t.description}</td>
+                      <td className="p-3.5 text-gray-800 font-medium">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {t.source === 'COLLECTION' || t.description?.includes('تحصيل') ? (
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-1.5 py-0.5 rounded border border-emerald-200 shrink-0">
+                              تحصيل
+                            </span>
+                          ) : null}
+                          <span>{t.description}</span>
+                        </div>
+                      </td>
                       <td className="p-3.5 font-bold text-green-600 font-mono">
-                        {t.credit > 0 ? `${t.credit.toLocaleString()} ج.م` : '-'}
+                        {(t.credit > 0 || t.type === 'INCOME' || (t.amount && t.amount > 0 && t.type !== 'EXPENSE')) 
+                          ? `${(t.credit || t.amount || 0).toLocaleString()} ج.م` 
+                          : '-'}
                       </td>
                       <td className="p-3.5 font-bold text-red-500 font-mono">
-                        {t.debit > 0 ? `${t.debit.toLocaleString()} ج.م` : '-'}
+                        {(t.debit > 0 || t.type === 'EXPENSE') 
+                          ? `${(t.debit || (t.type === 'EXPENSE' ? t.amount : 0) || 0).toLocaleString()} ج.م` 
+                          : '-'}
                       </td>
                     </tr>
                   );

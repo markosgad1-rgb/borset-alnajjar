@@ -33,13 +33,13 @@ const initialPermissions: UserPermissions = {
 };
 
 export const UserManagement: React.FC = () => {
-  const { users, addUser, updateUser, deleteUser, currentUser, seedDatabase, updateSystemLogo, companyLogo } = useERP();
+  const { users, addUser, updateUser, deleteUser, currentUser, updateSystemLogo, companyLogo } = useERP();
   
-  const canManageBackup = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
+  const isSuperAdmin = currentUser?.username === 'admin';
+  const canManageBackup = isSuperAdmin || currentUser?.role === 'ADMIN' || Boolean(currentUser?.permissions?.canManageBackup);
 
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [isSeeding, setIsSeeding] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   
   // Inline delete confirmation state
@@ -70,10 +70,59 @@ export const UserManagement: React.FC = () => {
     setEditingId(null);
   };
 
+  const selectAllPermissions = () => {
+    setFormData(prev => ({
+      ...prev,
+      role: 'ADMIN',
+      permissions: {
+        canViewSales: true,
+        canViewInvoicesLog: true,
+        canViewPurchases: true,
+        canViewInventory: true,
+        canViewCustomers: true,
+        canViewSuppliers: true,
+        canViewTreasury: true,
+        canViewReports: true,
+        canDeleteInvoices: true,
+        canDeleteCustomers: true,
+        canDeleteSuppliers: true,
+        canEditPrices: true,
+        canEditInvoices: true,
+        canManageBackup: true,
+        admin: true,
+        dashboard: true,
+        sales: true,
+        warehouse: true,
+        financial: true,
+        canDeleteLedgers: true,
+        canEditWarehouse: true,
+        canManageTreasury: true,
+        canEditPurchases: true,
+      }
+    }));
+  };
+
+  const clearAllPermissions = () => {
+    setFormData(prev => ({
+      ...prev,
+      role: 'USER',
+      permissions: {
+        ...initialPermissions,
+        admin: false
+      }
+    }));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    const finalRole = formData.permissions.admin ? 'ADMIN' : formData.role;
+    if (!isSuperAdmin) {
+      alert('عفواً، لا يملك صلاحية إدارة المستخدمين والرتب سوى السوبر أدمن الأساسي (admin).');
+      return;
+    }
+    
+    // عند تفعيل خيار "مدير نظام كامل" تكون الرتبة ADMIN، وعند إلغائه تصبح الرتبة USER (تخفيض إلى مستخدم عادي)
+    const finalRole: 'ADMIN' | 'USER' = formData.permissions.admin ? 'ADMIN' : 'USER';
     
     if (isEditing && editingId) {
       const target = users.find(u => u.id === editingId);
@@ -83,6 +132,7 @@ export const UserManagement: React.FC = () => {
         return;
       }
       updateUser(editingId, { ...formData, role: finalRole });
+      alert(finalRole === 'ADMIN' ? 'تم ترقية/تحديث المستخدم كمدير نظام كامل بنجاح' : 'تم تحديث بيانات المستخدم وتعديل صلاحياته كمستخدم عادي بنجاح');
     } else {
       if (users.some(u => u.username === formData.username)) {
         alert('اسم المستخدم موجود بالفعل');
@@ -93,39 +143,45 @@ export const UserManagement: React.FC = () => {
         ...formData,
         role: finalRole
       });
+      alert('تم إضافة المستخدم بنجاح');
     }
     resetForm();
   };
 
   const handleEditClick = (user: User) => {
-    if (user.username === 'admin') {
+    if (!isSuperAdmin) {
+      alert('عفواً، لا يملك صلاحية تعديل المستخدمين سوى السوبر أدمن الأساسي (admin).');
+      return;
+    }
+    if (user.username === 'admin' || user.id === '1') {
       alert('حساب الأدمن الأساسي محمي ولا يمكن تعديل بياناته أو كلمة مروره.');
       return;
     }
     setIsEditing(true);
     setEditingId(user.id);
     const userPerms = user.permissions || {};
+    const isAdmin = Boolean(userPerms.admin || user.role === 'ADMIN');
     setFormData({
       username: user.username,
       password: user.password,
       fullName: user.fullName,
-      role: user.role,
+      role: isAdmin ? 'ADMIN' : 'USER',
       permissions: {
-        canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales),
-        canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales),
-        canViewPurchases: Boolean(userPerms.canViewPurchases ?? userPerms.warehouse),
-        canViewInventory: Boolean(userPerms.canViewInventory ?? userPerms.warehouse),
-        canViewCustomers: Boolean(userPerms.canViewCustomers ?? userPerms.sales),
-        canViewSuppliers: Boolean(userPerms.canViewSuppliers ?? userPerms.warehouse),
-        canViewTreasury: Boolean(userPerms.canViewTreasury ?? userPerms.financial),
-        canViewReports: Boolean(userPerms.canViewReports ?? (userPerms.dashboard || userPerms.financial)),
-        canDeleteInvoices: Boolean(userPerms.canDeleteInvoices ?? userPerms.admin),
-        canDeleteCustomers: Boolean(userPerms.canDeleteCustomers ?? userPerms.admin),
-        canDeleteSuppliers: Boolean(userPerms.canDeleteSuppliers ?? userPerms.admin),
-        canEditPrices: Boolean(userPerms.canEditPrices ?? userPerms.admin),
-        canEditInvoices: Boolean(userPerms.canEditInvoices ?? userPerms.admin),
-        canManageBackup: Boolean(userPerms.canManageBackup ?? userPerms.admin),
-        admin: Boolean(userPerms.admin || user.role === 'ADMIN'),
+        canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales ?? isAdmin),
+        canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales ?? isAdmin),
+        canViewPurchases: Boolean(userPerms.canViewPurchases ?? userPerms.warehouse ?? isAdmin),
+        canViewInventory: Boolean(userPerms.canViewInventory ?? userPerms.warehouse ?? isAdmin),
+        canViewCustomers: Boolean(userPerms.canViewCustomers ?? userPerms.sales ?? isAdmin),
+        canViewSuppliers: Boolean(userPerms.canViewSuppliers ?? userPerms.warehouse ?? isAdmin),
+        canViewTreasury: Boolean(userPerms.canViewTreasury ?? userPerms.financial ?? isAdmin),
+        canViewReports: Boolean(userPerms.canViewReports ?? (userPerms.dashboard || userPerms.financial) ?? isAdmin),
+        canDeleteInvoices: Boolean(userPerms.canDeleteInvoices ?? isAdmin),
+        canDeleteCustomers: Boolean(userPerms.canDeleteCustomers ?? isAdmin),
+        canDeleteSuppliers: Boolean(userPerms.canDeleteSuppliers ?? isAdmin),
+        canEditPrices: Boolean(userPerms.canEditPrices ?? isAdmin),
+        canEditInvoices: Boolean(userPerms.canEditInvoices ?? isAdmin),
+        canManageBackup: Boolean(userPerms.canManageBackup ?? isAdmin),
+        admin: isAdmin,
         dashboard: Boolean(userPerms.dashboard),
         sales: Boolean(userPerms.sales),
         warehouse: Boolean(userPerms.warehouse),
@@ -140,6 +196,10 @@ export const UserManagement: React.FC = () => {
   };
 
   const initiateDelete = (id: string) => {
+    if (!isSuperAdmin) {
+      alert('عفواً، لا يملك صلاحية حذف المستخدمين سوى السوبر أدمن الأساسي (admin).');
+      return;
+    }
     const target = users.find(u => u.id === id);
     if (id === '1' || target?.username === 'admin') {
       alert('لا يمكن حذف حساب الأدمن الأساسي (admin).');
@@ -153,6 +213,10 @@ export const UserManagement: React.FC = () => {
   };
 
   const confirmDelete = async (id: string) => {
+    if (!isSuperAdmin) {
+      alert('عفواً، لا يملك صلاحية حذف المستخدمين سوى السوبر أدمن الأساسي (admin).');
+      return;
+    }
     setLoadingActionId(id);
     const success = await deleteUser(id);
     setLoadingActionId(null);
@@ -175,22 +239,50 @@ export const UserManagement: React.FC = () => {
         [key]: nextVal
       };
 
-      if (key === 'admin' && nextVal) {
-        updated.canViewSales = true;
-        updated.canViewInvoicesLog = true;
-        updated.canViewPurchases = true;
-        updated.canViewInventory = true;
-        updated.canViewCustomers = true;
-        updated.canViewSuppliers = true;
-        updated.canViewTreasury = true;
-        updated.canViewReports = true;
-        updated.canDeleteInvoices = true;
-        updated.canDeleteCustomers = true;
-        updated.canDeleteSuppliers = true;
-        updated.canEditPrices = true;
-        updated.canEditInvoices = true;
-        updated.canManageBackup = true;
+      if (key === 'admin') {
+        if (nextVal) {
+          // ترقية إلى مدير نظام كامل: تفعيل كافة الصلاحيات
+          updated.canViewSales = true;
+          updated.canViewInvoicesLog = true;
+          updated.canViewPurchases = true;
+          updated.canViewInventory = true;
+          updated.canViewCustomers = true;
+          updated.canViewSuppliers = true;
+          updated.canViewTreasury = true;
+          updated.canViewReports = true;
+          updated.canDeleteInvoices = true;
+          updated.canDeleteCustomers = true;
+          updated.canDeleteSuppliers = true;
+          updated.canEditPrices = true;
+          updated.canEditInvoices = true;
+          updated.canManageBackup = true;
+          updated.admin = true;
+          return {
+            ...prev,
+            role: 'ADMIN',
+            permissions: updated
+          };
+        } else {
+          // إزالة علامة مدير نظام كامل: تخفيض الحساب لمستخدم عادي وإمكانية تخصيص الصلاحيات بحرية
+          updated.admin = false;
+          return {
+            ...prev,
+            role: 'USER',
+            permissions: updated
+          };
+        }
       }
+
+      // إذا تم إلغاء أي صلاحية فرعية وكانت admin مفعلة، يتم إلغاء admin تلقائياً وتغيير الدور إلى USER
+      if (!nextVal && prev.permissions.admin) {
+        updated.admin = false;
+        return {
+          ...prev,
+          role: 'USER',
+          permissions: updated
+        };
+      }
+
       return {
         ...prev,
         permissions: updated
@@ -222,14 +314,35 @@ export const UserManagement: React.FC = () => {
     }
   };
 
+  if (!isSuperAdmin) {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-red-200 p-8 md:p-12 text-center max-w-lg mx-auto my-12 animate-fade-in">
+        <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-5 shadow-inner">
+          <Lock size={36} />
+        </div>
+        <h3 className="text-2xl font-black text-gray-900 mb-2">منطقة محمية - سوبر أدمن فقط</h3>
+        <p className="text-gray-600 text-sm leading-relaxed mb-6 font-medium">
+          هذه الصفحة مخصصة حصرياً للسوبر أدمن الأساسي (<span className="font-mono font-bold text-red-600">admin</span>) للتحكم في رتب وصلاحيات المستخدمين والمديرين.
+          يُمنع أي مستخدم آخر من ترقية أو تخفيض أو تعديل الرتب.
+        </p>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-gray-500 font-bold">
+          الحساب الحالي: {currentUser?.fullName} ({currentUser?.username})
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       
-      {/* Header with Backup & Seed Button */}
+      {/* Header with Backup Button */}
       <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-brand-100 gap-4">
-        <h2 className="text-xl font-bold text-brand-800 flex items-center gap-2">
-           <Shield className="text-brand-600" /> إدارة المستخدمين والإعدادات
-        </h2>
+        <div>
+          <h2 className="text-xl font-bold text-brand-800 flex items-center gap-2">
+             <Shield className="text-brand-600" /> إدارة المستخدمين والرتب (السوبر أدمن)
+          </h2>
+          <p className="text-xs text-gray-500 mt-1">تحكم كامل في إضافة وترقية وتخفيض رتب وصلاحيات المستخدمين في النظام</p>
+        </div>
         <div className="flex items-center gap-2.5 flex-wrap">
           {canManageBackup && (
             <button 
@@ -240,8 +353,6 @@ export const UserManagement: React.FC = () => {
               <Database size={16} /> النسخ الاحتياطي والاسترجاع
             </button>
           )}
-
-
         </div>
       </div>
 
@@ -272,11 +383,36 @@ export const UserManagement: React.FC = () => {
 
       {/* Add/Edit Form */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 p-6">
-        <div className="flex items-center gap-3 mb-6 border-b pb-4">
-          <UserPlus className="text-brand-600" size={24} />
-          <h3 className="text-xl font-bold text-brand-800">
-            {isEditing ? 'تعديل بيانات المستخدم' : 'إضافة مستخدم جديد'}
-          </h3>
+        <div className="flex items-center justify-between gap-3 mb-6 border-b pb-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <UserPlus className="text-brand-600" size={24} />
+            <div>
+              <h3 className="text-xl font-bold text-brand-800">
+                {isEditing ? `تعديل بيانات ورتبة: ${formData.fullName || formData.username}` : 'إضافة مستخدم جديد'}
+              </h3>
+              {isEditing && (
+                <span className="text-xs text-gray-500">
+                  الرتبة الحالية في النموذج: {formData.permissions.admin ? 'مدير نظام كامل' : 'مستخدم عادي'}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={selectAllPermissions}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-bold transition-colors"
+            >
+              تحديد كافة الصلاحيات
+            </button>
+            <button
+              type="button"
+              onClick={clearAllPermissions}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-bold transition-colors"
+            >
+              إلغاء تحديد الكل
+            </button>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -477,17 +613,32 @@ export const UserManagement: React.FC = () => {
             </div>
 
             {/* مدير نظام كامل */}
-            <div className="bg-amber-50 p-4 rounded-xl border border-amber-300">
+            <div className={`p-4 rounded-xl border transition-all ${formData.permissions.admin ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-200' : 'bg-slate-50 border-slate-200'}`}>
               <label className="flex items-center gap-3 cursor-pointer">
                 <input 
                   type="checkbox" 
                   checked={formData.permissions.admin}
                   onChange={() => handlePermissionChange('admin')}
-                  className="w-6 h-6 text-brand-700 rounded focus:ring-brand-500"
+                  className="w-6 h-6 text-brand-700 rounded focus:ring-brand-500 cursor-pointer"
                 />
-                <div>
-                  <span className="font-bold text-brand-900 block">مدير نظام كامل (Full Admin)</span>
-                  <span className="text-xs text-gray-600">يمنح جميع صلاحيات الوصول والإجراءات الحساسة بدون أي قيود</span>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-brand-900 block text-base">مدير نظام (كامل)</span>
+                    {formData.permissions.admin ? (
+                      <span className="bg-red-600 text-white text-xs px-2.5 py-0.5 rounded-full font-black shadow-xs">
+                        رتبة مدير نظام
+                      </span>
+                    ) : (
+                      <span className="bg-blue-600 text-white text-xs px-2.5 py-0.5 rounded-full font-bold shadow-xs">
+                        رتبة مستخدم عادي
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-600 block mt-1 leading-relaxed">
+                    {formData.permissions.admin
+                      ? 'عند تفعيل هذا الخيار: يتم ترقية المستخدم لرتبة "مدير نظام" مع منحه كامل الصلاحيات دون استثناء.'
+                      : 'عند إزالة هذا الخيار: يتم تخفيض المستخدم لرتبة "مستخدم عادي" وتستطيع تعديل كافة صلاحياته بحرية تامة من القوائم أعلاه.'}
+                  </span>
                 </div>
               </label>
             </div>
@@ -500,7 +651,7 @@ export const UserManagement: React.FC = () => {
                 ${isEditing ? 'bg-blue-600 hover:bg-blue-700' : 'bg-brand-600 hover:bg-brand-700'}
               `}
             >
-              {isEditing ? <><Edit size={20}/> حفظ التعديلات</> : <><UserPlus size={20}/> إضافة المستخدم</>}
+              {isEditing ? <><Edit size={20}/> حفظ التعديلات والرتبة</> : <><UserPlus size={20}/> إضافة المستخدم</>}
             </button>
             
             {isEditing && (
@@ -518,8 +669,14 @@ export const UserManagement: React.FC = () => {
 
       {/* Users List */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
-        <div className="p-6 border-b border-brand-50">
-          <h3 className="text-lg font-bold text-brand-800">المستخدمين المسجلين</h3>
+        <div className="p-6 border-b border-brand-50 flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-brand-800">سجل المستخدمين والرتب</h3>
+            <p className="text-xs text-gray-500 mt-0.5">يمكن للسوبر أدمن تعديل رتبة أي مستخدم أو مدير سابق بحرية تامة</p>
+          </div>
+          <span className="text-xs font-bold bg-brand-50 text-brand-800 px-3 py-1 rounded-full border border-brand-200">
+            إجمالي الحسابات: {users.length}
+          </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-right">
@@ -527,9 +684,9 @@ export const UserManagement: React.FC = () => {
               <tr>
                 <th className="p-4">الاسم الكامل</th>
                 <th className="p-4">اسم المستخدم</th>
-                <th className="p-4">الدور</th>
+                <th className="p-4">الرتبة والدور</th>
                 <th className="p-4">الصلاحيات</th>
-                <th className="p-4">إجراءات</th>
+                <th className="p-4 text-center">الإجراءات (سوبر أدمن)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -538,50 +695,62 @@ export const UserManagement: React.FC = () => {
                 .map(user => (
                 <tr key={user.id} className="hover:bg-gray-50">
                   <td className="p-4 font-bold text-gray-800">{user.fullName}</td>
-                  <td className="p-4 text-gray-600">{user.username}</td>
+                  <td className="p-4 text-gray-600 font-mono text-sm">{user.username}</td>
                   <td className="p-4">
-                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${user.role === 'ADMIN' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                      {user.role === 'ADMIN' ? 'مسؤول' : 'مستخدم'}
-                    </span>
+                    {user.username === 'admin' ? (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-black bg-purple-100 text-purple-800 border border-purple-200">
+                        سوبر أدمن (أساسي)
+                      </span>
+                    ) : user.role === 'ADMIN' || user.permissions?.admin ? (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-black bg-red-100 text-red-700 border border-red-200">
+                        مدير نظام
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                        مستخدم عادي
+                      </span>
+                    )}
                   </td>
                   <td className="p-4 text-sm text-gray-500">
                     <div className="flex gap-1 flex-wrap max-w-md">
-                       {(user.role === 'ADMIN' || user.permissions.admin) ? (
-                         <span className="bg-red-50 text-red-700 font-bold px-2.5 py-1 rounded border border-red-200 text-xs">صلاحيات كاملة (Admin)</span>
+                       {(user.role === 'ADMIN' || user.permissions?.admin) ? (
+                         <span className="bg-red-50 text-red-700 font-black px-2.5 py-1 rounded border border-red-200 text-xs">
+                           صلاحيات كاملة (Admin)
+                         </span>
                        ) : (
                          <>
-                           {user.permissions.canViewSales && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">فواتير البيع</span>}
-                           {user.permissions.canViewInvoicesLog && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">سجل الفواتير</span>}
-                           {user.permissions.canViewPurchases && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">المشتريات</span>}
-                           {user.permissions.canViewInventory && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">المخزن والجرد</span>}
-                           {user.permissions.canViewCustomers && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">العملاء</span>}
-                           {user.permissions.canViewSuppliers && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">الموردين</span>}
-                           {user.permissions.canViewTreasury && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">الخزينة</span>}
-                           {user.permissions.canViewReports && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">التقارير</span>}
-                           {user.permissions.canDeleteInvoices && <span className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 text-xs">حذف فواتير</span>}
-                           {user.permissions.canDeleteCustomers && <span className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 text-xs">حذف عملاء</span>}
-                           {user.permissions.canDeleteSuppliers && <span className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 text-xs">حذف موردين</span>}
-                           {user.permissions.canEditPrices && <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 text-xs">تعديل أسعار</span>}
-                           {user.permissions.canEditInvoices && <span className="bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 text-xs">تعديل فواتير</span>}
-                           {user.permissions.canManageBackup && <span className="bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded border border-amber-300 text-xs font-bold">نسخ احتياطي</span>}
+                           {user.permissions?.canViewSales && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">فواتير البيع</span>}
+                           {user.permissions?.canViewInvoicesLog && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">سجل الفواتير</span>}
+                           {user.permissions?.canViewPurchases && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">المشتريات</span>}
+                           {user.permissions?.canViewInventory && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">المخزن والجرد</span>}
+                           {user.permissions?.canViewCustomers && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">العملاء</span>}
+                           {user.permissions?.canViewSuppliers && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">الموردين</span>}
+                           {user.permissions?.canViewTreasury && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">الخزينة</span>}
+                           {user.permissions?.canViewReports && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 text-xs">التقارير</span>}
+                           {user.permissions?.canDeleteInvoices && <span className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 text-xs">حذف فواتير</span>}
+                           {user.permissions?.canDeleteCustomers && <span className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 text-xs">حذف عملاء</span>}
+                           {user.permissions?.canDeleteSuppliers && <span className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 text-xs">حذف موردين</span>}
+                           {user.permissions?.canEditPrices && <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 text-xs">تعديل أسعار</span>}
+                           {user.permissions?.canEditInvoices && <span className="bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 text-xs">تعديل فواتير</span>}
+                           {user.permissions?.canManageBackup && <span className="bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded border border-amber-300 text-xs font-bold">نسخ احتياطي</span>}
                          </>
                        )}
                     </div>
                   </td>
-                  <td className="p-4">
-                    {user.username === 'admin' ? (
-                      <span className="inline-block text-xs bg-amber-50 text-amber-800 border border-amber-200 font-bold px-2.5 py-1 rounded-md">
-                        حساب نظام محمي
+                  <td className="p-4 text-center">
+                    {user.username === 'admin' || user.id === '1' ? (
+                      <span className="inline-block text-xs bg-amber-50 text-amber-800 border border-amber-300 font-bold px-3 py-1 rounded-lg">
+                        حساب محمي
                       </span>
                     ) : deleteConfirmId === user.id ? (
-                       <div className="flex items-center gap-2 bg-red-50 p-2 rounded animate-fade-in">
+                       <div className="flex items-center justify-center gap-2 bg-red-50 p-2 rounded animate-fade-in">
                          {loadingActionId === user.id ? (
                             <span className="text-red-600 text-xs font-bold flex items-center gap-1">
                               <Loader2 size={14} className="animate-spin" /> جاري الحذف...
                             </span>
                          ) : (
                            <>
-                             <span className="text-xs text-red-600 font-bold">حذف؟</span>
+                             <span className="text-xs text-red-600 font-bold">تأكيد الحذف؟</span>
                              <button onClick={() => confirmDelete(user.id)} className="bg-red-600 text-white p-1.5 rounded hover:bg-red-700 transition-colors" title="تأكيد">
                                <Check size={16} />
                              </button>
@@ -592,20 +761,20 @@ export const UserManagement: React.FC = () => {
                          )}
                        </div>
                     ) : (
-                      <div className="flex gap-2">
+                      <div className="flex items-center justify-center gap-2">
                         <button 
                           onClick={() => handleEditClick(user)} 
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="تعديل"
+                          className="px-3 py-1.5 text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-bold"
+                          title="تعديل الرتبة والصلاحيات"
                         >
-                          <Edit size={18} />
+                          <Edit size={15} /> تعديل الرتبة والصلاحيات
                         </button>
                         <button 
                           onClick={() => initiateDelete(user.id)} 
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="حذف"
+                          className="px-3 py-1.5 text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-bold"
+                          title="حذف المستخدم"
                         >
-                          <Trash2 size={18} />
+                          <Trash2 size={15} /> حذف
                         </button>
                       </div>
                     )}

@@ -3,9 +3,9 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle, ArrowRight,
-  Calendar, Filter, MessageCircle, MapPin, Building
+  Calendar, Filter, MessageCircle, MapPin, Building, Sliders, ArrowUpCircle, ArrowDownCircle
 } from 'lucide-react';
-import { SalesInvoice, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas } from '../types';
+import { SalesInvoice, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas, ManualCustomerTransaction, CustomerHistory } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
@@ -80,6 +80,14 @@ export const Customers: React.FC = () => {
   // View Mode for Ledger: 'ITEMS' (default, itemized statement) or 'INVOICES' (summary)
   const [viewMode, setViewMode] = useState<'ITEMS' | 'INVOICES'>('ITEMS');
 
+  // Manual Transaction / Adjustment Modal State
+  const [isManualTxModalOpen, setIsManualTxModalOpen] = useState(false);
+  const [manualTxType, setManualTxType] = useState<'DEBIT' | 'CREDIT'>('DEBIT');
+  const [manualTxAmount, setManualTxAmount] = useState('');
+  const [manualTxDescription, setManualTxDescription] = useState('');
+  const [manualTxDate, setManualTxDate] = useState(new Date().toISOString().split('T')[0]);
+  const [isSavingManualTx, setIsSavingManualTx] = useState(false);
+
   // Mobile Back Button handlers for modals & sub-views
   useBackHandler(() => setIsCustomerModalOpen(false), isCustomerModalOpen, 'customers-add-edit-modal');
   useBackHandler(() => setIsConsolidatedModalOpen(false), isConsolidatedModalOpen, 'customers-consolidated-modal');
@@ -87,6 +95,7 @@ export const Customers: React.FC = () => {
   useBackHandler(() => setViewInvoice(null), !!viewInvoice, 'customers-view-invoice-modal');
   useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'customers-delete-confirm');
   useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'customers-clear-ledger-confirm');
+  useBackHandler(() => setIsManualTxModalOpen(false), isManualTxModalOpen, 'customers-manual-tx-modal');
   useBackHandler(() => setMobileView('LIST'), mobileView === 'DETAILS', 'customers-mobile-details');
 
   // Helper to generate next code
@@ -282,6 +291,85 @@ export const Customers: React.FC = () => {
     if (success) {
        setShowClearLedgerConfirm(false);
        alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
+  };
+
+  const handleOpenManualTxModal = () => {
+    setManualTxType('DEBIT');
+    setManualTxAmount('');
+    setManualTxDescription('');
+    setManualTxDate(new Date().toISOString().split('T')[0]);
+    setIsManualTxModalOpen(true);
+  };
+
+  const handleCloseManualTxModal = () => {
+    setIsManualTxModalOpen(false);
+    setManualTxAmount('');
+    setManualTxDescription('');
+    setIsSavingManualTx(false);
+  };
+
+  const handleSaveManualTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCustomer) {
+      alert('يرجى اختيار عميل أولاً');
+      return;
+    }
+
+    const amt = parseNumberFromCommas(manualTxAmount);
+    if (isNaN(amt) || amt <= 0) {
+      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      return;
+    }
+
+    const desc = manualTxDescription.trim();
+    if (!desc) {
+      alert('يرجى كتابة البيان / سبب الحركة (مثال: بضاعة بدون فاتورة، خصم خاص، سداد خارجي، تسوية قديمة)');
+      return;
+    }
+
+    setIsSavingManualTx(true);
+    try {
+      // Balance convention in customer ledger:
+      // Negative (< 0) = Debt (مدين / عليه)
+      // Positive (> 0) = Credit (دائن / له)
+      // DEBIT (مدين / مسحوبات عليه): increases customer debt, so balance decreases (change is negative: -amt)
+      // CREDIT (دائن / دفعة له / سداد): decreases debt or credits customer, so balance increases (change is positive: +amt)
+      const balanceChange = manualTxType === 'DEBIT' ? -amt : amt;
+      const currentBal = Number(selectedCustomer.balance || 0);
+      const newBal = currentBal + balanceChange;
+
+      const historyMovement: CustomerHistory = {
+        date: manualTxDate || new Date().toISOString().split('T')[0],
+        description: desc,
+        amount: balanceChange
+      };
+
+      const manualTxRecord: ManualCustomerTransaction = {
+        id: `MTX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        date: manualTxDate || new Date().toISOString().split('T')[0],
+        type: manualTxType,
+        amount: amt,
+        description: desc,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.name || currentUser?.username || 'مستخدم'
+      };
+
+      const updatedHistory = [...(selectedCustomer.history || []), historyMovement];
+      const updatedManualTxs = [...(selectedCustomer.manualTransactions || []), manualTxRecord];
+
+      await updateCustomer(selectedCustomer.code, {
+        balance: newBal,
+        history: updatedHistory,
+        manualTransactions: updatedManualTxs
+      } as any);
+
+      handleCloseManualTxModal();
+    } catch (error) {
+      console.error('Error saving manual transaction:', error);
+      alert('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
+    } finally {
+      setIsSavingManualTx(false);
     }
   };
 
@@ -529,7 +617,18 @@ export const Customers: React.FC = () => {
         const displayName = formatCustomerMovementDesc(h.description);
         let refCol = invId || '-';
         if (h.description.includes('افتتاحي')) refCol = 'افتتاحي';
-        else if (h.description.includes('تسوية') || h.description.includes('خصم') || h.description.includes('تعديل')) refCol = 'تسوية';
+        else if (
+          h.description.includes('تسوية') || 
+          h.description.includes('خصم') || 
+          h.description.includes('تعديل') || 
+          h.description.includes('يدوي') || 
+          h.description.includes('حركة') ||
+          h.description.includes('سداد خارجي') ||
+          h.description.includes('بدون فاتورة') ||
+          !invId
+        ) {
+          refCol = 'تسوية';
+        }
 
         rows.push({
           num: counter++,
@@ -1065,6 +1164,14 @@ export const Customers: React.FC = () => {
 
                   <div className="flex items-center gap-1">
                     <button 
+                      onClick={handleOpenManualTxModal}
+                      className="flex items-center gap-1 bg-emerald-700 hover:bg-emerald-800 text-white px-2 py-0.5 rounded text-[11px] font-bold shadow-2xs"
+                      title="إضافة حركة / تسوية يدوية مباشرة للعميل بدون فاتورة"
+                    >
+                      <PlusCircle size={11} /> + تسوية
+                    </button>
+
+                    <button 
                       onClick={() => {
                         setPrintStartDate(filterStartDate);
                         setPrintEndDate(filterEndDate);
@@ -1273,6 +1380,14 @@ export const Customers: React.FC = () => {
                     )}
 
                     <button 
+                      onClick={handleOpenManualTxModal}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white px-3 py-1 rounded-md text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      title="إضافة معاملة أو تسوية يدوية مباشرة في كشف حساب العميل بدون فاتورة"
+                    >
+                      <PlusCircle size={14} className="stroke-[2.5]" /> + إضافة حركة / تسوية يدوية
+                    </button>
+
+                    <button 
                       onClick={() => {
                         setPrintStartDate(filterStartDate);
                         setPrintEndDate(filterEndDate);
@@ -1353,6 +1468,10 @@ export const Customers: React.FC = () => {
                                   #{r.invoiceId}
                                   <Eye size={11} />
                                 </button>
+                              ) : r.ref && r.ref !== '-' ? (
+                                <span className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                                  {r.ref}
+                                </span>
                               ) : (
                                 <span className="text-gray-300">-</span>
                               )}
@@ -1809,44 +1928,58 @@ export const Customers: React.FC = () => {
                    <span>إجمالي الفاتورة:</span>
                    <span className="text-base text-amber-400 font-mono">{viewInvoice.total.toLocaleString()} ج.م</span>
                 </div>
-                {(viewInvoice.paidAmount !== undefined && viewInvoice.paidAmount > 0) ? (
-                  <>
-                    <div className="flex justify-between items-center text-xs text-emerald-300 bg-gray-800 px-2.5 py-1.5 rounded">
-                       <span>المسدد نقداً ({viewInvoice.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' : viewInvoice.paymentMethod === 'BANK_MISR' ? 'بنك مصر' : viewInvoice.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون كاش أيمن' : viewInvoice.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كاش كيرلس' : 'خزنة (كاش)'}):</span>
-                       <span className="font-bold font-mono">{viewInvoice.paidAmount.toLocaleString()} ج.م</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs text-amber-300 bg-gray-800 px-2.5 py-1.5 rounded">
-                       <span>المتبقي على الحساب (آجل):</span>
-                       <span className="font-bold font-mono">
-                         {((viewInvoice.remainingAmount !== undefined ? viewInvoice.remainingAmount : (viewInvoice.total - viewInvoice.paidAmount))).toLocaleString()} ج.م
-                       </span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-[11px] text-red-300 bg-gray-800 px-2.5 py-1 rounded">
-                    حالة السداد: آجل بالكامل على الحساب
-                  </div>
-                )}
                 {(() => {
-                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance ?? 0;
                   const paid = viewInvoice.paidAmount || 0;
-                  const netInvoice = viewInvoice.total - paid;
-                  const calculatedPreviousBalance = curBal - netInvoice;
+                  const remaining = viewInvoice.remainingAmount !== undefined 
+                    ? viewInvoice.remainingAmount 
+                    : (viewInvoice.total - paid);
+
+                  // حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
+                  let oldDebt = viewInvoice.previousBalance !== undefined 
+                    ? viewInvoice.previousBalance 
+                    : 0;
+                  if (Object.is(oldDebt, -0) || Math.abs(oldDebt) < 0.0001) oldDebt = 0;
+
+                  // إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
+                  let totalAfterInvoice = viewInvoice.currentBalance !== undefined
+                    ? viewInvoice.currentBalance
+                    : (oldDebt - remaining);
+                  if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
+
+                  // مديونية العميل الحالية الآن (تشمل جميع الحركات والتحصيلات اللاحقة)
+                  const liveCustomerDebt = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance ?? 0;
+
+                  const paymentMethodLabel = viewInvoice.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' 
+                    : viewInvoice.paymentMethod === 'BANK_MISR' ? 'بنك مصر' 
+                    : viewInvoice.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون كاش أيمن' 
+                    : viewInvoice.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كاش كيرلس' 
+                    : 'خزنة (كاش)';
 
                   return (
                     <>
+                      {/* السطر الثاني: المديونية السابقة */}
                       <div className="flex justify-between items-center text-xs text-gray-300 bg-gray-800 px-2.5 py-1.5 rounded">
-                        <span>رصيد سابق:</span>
-                        <span className="font-bold font-mono" dir="ltr">{calculatedPreviousBalance.toLocaleString()} ج.م</span>
+                        <span>المديونية السابقة:</span>
+                        <span className="font-bold font-mono" dir="ltr">{oldDebt.toLocaleString()} ج.م</span>
                       </div>
-                      <div className="flex justify-between items-center text-xs font-bold text-amber-300 bg-gray-800 px-2.5 py-1.5 rounded">
-                        <span>الرصيد الحالي:</span>
-                        <span className="font-black font-mono text-sm" dir="ltr">{curBal.toLocaleString()} ج.م</span>
+
+                      {/* السطر الثالث: دفعة مسددة */}
+                      <div className="flex justify-between items-center text-xs text-emerald-300 bg-gray-800 px-2.5 py-1.5 rounded">
+                         <span>دفعة مسددة:</span>
+                         <span className="font-bold font-mono">{paid > 0 ? `${paid.toLocaleString()} ج.م` : '0 ج.م'}</span>
                       </div>
-                      <div className="mt-2 pt-2 border-t border-gray-700 text-[11px] text-gray-400 flex flex-col sm:flex-row justify-between gap-1.5">
-                        <span>رصيد الفاتورة وقت الإصدار: {viewInvoice.currentBalance?.toLocaleString()} ج.م</span>
-                        <span className="font-bold text-amber-300">
-                          إجمالي مديونية العميل الحالية: {curBal.toLocaleString()} ج.م
+
+                      {/* السطر الرابع: الإجمالي */}
+                      <div className="flex justify-between items-center text-xs font-bold text-amber-300 bg-gray-800 px-2.5 py-1.5 rounded border border-amber-500/30">
+                        <span>الإجمالي:</span>
+                        <span className="font-black font-mono text-sm" dir="ltr">{totalAfterInvoice.toLocaleString()} ج.م</span>
+                      </div>
+
+                      {/* شريط سفلي مستقل: رصيد العميل الحالي في كشف الحساب */}
+                      <div className="mt-2 pt-2 border-t border-gray-700 bg-gray-800/60 p-2 rounded-lg text-[11px] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1.5">
+                        <span className="text-gray-400">رصيد العميل الحالي في كشف الحساب:</span>
+                        <span className={`font-mono font-bold ${liveCustomerDebt < 0 ? 'text-red-400' : liveCustomerDebt > 0 ? 'text-emerald-400' : 'text-gray-300'}`} dir="ltr">
+                          {liveCustomerDebt.toLocaleString()} ج.م {liveCustomerDebt < 0 ? '(مدين)' : liveCustomerDebt > 0 ? '(له رصيد)' : '(خالص)'}
                         </span>
                       </div>
                     </>
@@ -2042,6 +2175,193 @@ export const Customers: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Customer Transaction / Adjustment Modal */}
+      {isManualTxModalOpen && selectedCustomer && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-gray-150 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-brand-900 to-slate-900 text-white p-4 flex justify-between items-center">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center border border-emerald-400/30">
+                  <Sliders size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">إضافة حركة / تسوية يدوية</h3>
+                  <p className="text-xs text-brand-200 mt-0.5">
+                    العميل: <span className="text-white font-bold">{selectedCustomer.name}</span> ({selectedCustomer.code})
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={handleCloseManualTxModal} 
+                className="text-gray-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveManualTransaction} className="p-4 sm:p-5 space-y-4 text-xs">
+              
+              {/* 1. Transaction Type Toggle */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">نوع الحركة / المعاملة</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setManualTxType('DEBIT')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      manualTxType === 'DEBIT'
+                        ? 'bg-red-50 text-red-700 border-red-400 ring-2 ring-red-500/20 shadow-xs'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ArrowDownCircle size={16} className={manualTxType === 'DEBIT' ? 'text-red-600' : 'text-gray-400'} />
+                    <span>مدين (مسحوبات عليه / بضاعة)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setManualTxType('CREDIT')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      manualTxType === 'CREDIT'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-400 ring-2 ring-emerald-500/20 shadow-xs'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ArrowUpCircle size={16} className={manualTxType === 'CREDIT' ? 'text-emerald-600' : 'text-gray-400'} />
+                    <span>دائن (دفعة له / سداد خارجي)</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  {manualTxType === 'DEBIT' 
+                    ? '⚠️ حركة مدين تزيد من مديونية العميل (مسحوبات بدون فاتورة، فروق أسعار عليه، إلخ).' 
+                    : '✅ حركة دائن تخفض من مديونية العميل (دفعة خارجية، خصم إضافي، تسوية سداد، إلخ).'}
+                </p>
+              </div>
+
+              {/* 2. Amount and Date in Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">المبلغ (ج.م) *</label>
+                  <input
+                    type="text"
+                    required
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={manualTxAmount}
+                    onChange={(e) => handleNumericChangeWithCommas(e.target.value, setManualTxAmount)}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-mono font-bold text-sm bg-gray-50 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">التاريخ *</label>
+                  <input
+                    type="date"
+                    required
+                    value={manualTxDate}
+                    onChange={(e) => setManualTxDate(e.target.value)}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-mono font-bold text-xs bg-gray-50 focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* 3. Description & Quick Chips */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">البيان / سبب المعاملة *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="اكتب بيان الحركة (مثال: بضاعة بدون فاتورة، خصم خاص، سداد خارجي)..."
+                  value={manualTxDescription}
+                  onChange={(e) => setManualTxDescription(e.target.value)}
+                  className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-bold text-xs bg-gray-50 focus:bg-white"
+                />
+
+                {/* Quick Suggestion Chips */}
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {[
+                    'بضاعة بدون فاتورة',
+                    'خصم خاص',
+                    'سداد خارجي',
+                    'تسوية قديمة',
+                    'فرق سعر',
+                    'مصاريف نقل',
+                    'مرتجع بضاعة',
+                    'تسوية رصيد'
+                  ].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => setManualTxDescription(chip)}
+                      className="px-2 py-1 rounded-lg bg-gray-100 hover:bg-brand-100 text-gray-700 hover:text-brand-900 border border-gray-200 text-[11px] font-bold transition-colors cursor-pointer"
+                    >
+                      + {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 4. Live Balance Impact Preview */}
+              {(() => {
+                const parsed = parseNumberFromCommas(manualTxAmount) || 0;
+                const change = manualTxType === 'DEBIT' ? -parsed : parsed;
+                const currentBal = selectedCustomer.balance || 0;
+                const projectedBal = currentBal + change;
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
+                    <div className="flex justify-between items-center text-gray-600">
+                      <span>الرصيد الحالي قبل الحركة:</span>
+                      <span className={`font-mono font-bold ${currentBal < 0 ? 'text-red-600' : currentBal > 0 ? 'text-emerald-600' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(currentBal).toLocaleString()} ج.م {currentBal < 0 ? '(مدين / عليه)' : currentBal > 0 ? '(دائن / له)' : '(خالص)'}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-gray-600">
+                      <span>قيمة الحركة ({manualTxType === 'DEBIT' ? 'مدين / زيادة دين' : 'دائن / تخفيض دين'}):</span>
+                      <span className={`font-mono font-bold ${manualTxType === 'DEBIT' ? 'text-red-600' : 'text-emerald-600'}`} dir="ltr">
+                        {manualTxType === 'DEBIT' ? '-' : '+'}{parsed.toLocaleString()} ج.م
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center font-black text-gray-900 border-t border-slate-200 pt-1.5">
+                      <span>الرصيد الجديد بعد الحفظ:</span>
+                      <span className={`font-mono text-sm ${projectedBal < 0 ? 'text-red-600 font-black' : projectedBal > 0 ? 'text-emerald-600 font-black' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(projectedBal).toLocaleString()} ج.م {projectedBal < 0 ? '(مدين / عليه)' : projectedBal > 0 ? '(دائن / له)' : '(خالص)'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingManualTx}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Check size={16} />
+                  <span>{isSavingManualTx ? 'جاري الحفظ...' : 'حفظ وإدراج في كشف الحساب'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloseManualTxModal}
+                  disabled={isSavingManualTx}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+
+            </form>
           </div>
         </div>
       )}

@@ -26,12 +26,16 @@ export const parseNumberFromCommas = (value: string | number | undefined | null)
 };
 
 export const handleNumericChangeWithCommas = (
-  rawInput: string,
+  rawInput: string | React.ChangeEvent<HTMLInputElement> | any,
   setter: (formatted: string) => void,
   allowNegative = false
 ) => {
-  const isNegative = allowNegative && rawInput.trim().startsWith('-');
-  const clean = rawInput.replace(/[^0-9.]/g, '');
+  const strValue = (typeof rawInput === 'object' && rawInput !== null && 'target' in rawInput)
+    ? String(rawInput.target.value ?? '')
+    : String(rawInput ?? '');
+
+  const isNegative = allowNegative && strValue.trim().startsWith('-');
+  const clean = strValue.replace(/[^0-9.]/g, '');
   if (clean === '') {
     setter(isNegative ? '-' : '');
     return;
