@@ -1,16 +1,22 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
-import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet, MessageCircle, Phone, Send } from 'lucide-react';
-import { InvoiceItem, SalesInvoice, PaymentMethod } from '../types';
+import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet, MessageCircle, Phone, Send, MapPin, Building, Check, Search } from 'lucide-react';
+import { InvoiceItem, SalesInvoice, PaymentMethod, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas, Customer } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { shareSalesInvoicePdfViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
 import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
 
 export const Sales: React.FC = () => {
-  const { addInvoice, products, customers, invoices, printInvoice, companyLogo } = useERP();
+  const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
   
+  const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
+
+  // Cascading Branch & Area State
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedArea, setSelectedArea] = useState<string>('ALL');
+
   // Main Invoice State
   const [invoiceId, setInvoiceId] = useState('N001');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
@@ -18,6 +24,22 @@ export const Sales: React.FC = () => {
   const [customerCode, setCustomerCode] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerBalance, setCustomerBalance] = useState(0);
+  const [customerSearchText, setCustomerSearchText] = useState('');
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close customer suggestions dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(event.target as Node)) {
+        setIsCustomerDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
   
   // Payment State
   const [paymentType, setPaymentType] = useState<'CREDIT' | 'CASH_FULL' | 'PARTIAL'>('CREDIT');
@@ -83,48 +105,182 @@ export const Sales: React.FC = () => {
     ? 0 
     : paymentType === 'CASH_FULL' 
       ? cartTotal 
-      : Math.min(Math.max(0, parsedPaid), cartTotal);
+      : Math.max(0, parsedPaid);
 
   const remainingAmount = Math.max(0, cartTotal - currentPaid);
+  const excessPaid = Math.max(0, currentPaid - cartTotal);
   // Negative customer balance = owes us debt
-  // Net balance after invoice: previousBalance - remainingAmount
-  const newBalance = customerBalance - remainingAmount;
+  // Net balance after invoice: previousBalance - cartTotal + currentPaid
+  // إذا كان المدفوع أكبر من الفاتورة يخصم الفائض من المديونية السابقة
+  const newBalance = customerBalance - cartTotal + currentPaid;
+
+  // Exclude deleted customers completely
+  const activeCustomers = useMemo(() => {
+    return customers.filter(c => !c.isDeleted);
+  }, [customers]);
+
+  // Dynamic list of areas for selected branch (default + any custom entered areas)
+  const availableBranchAreas = useMemo(() => {
+    return getBranchAreas(selectedBranch, activeCustomers);
+  }, [selectedBranch, activeCustomers]);
+
+  // Cascading Available Customers based on Step 1 (Branch) and Step 2 (Area) - Strictly active
+  const availableCustomers = useMemo(() => {
+    let list = activeCustomers.filter(c => (c.branchId || 'MARG') === selectedBranch);
+    if (selectedArea && selectedArea !== 'ALL') {
+      list = list.filter(c => (c.area || '') === selectedArea);
+    }
+    return list;
+  }, [activeCustomers, selectedBranch, selectedArea]);
+
+  // Format customer option label: [Code] Name - Area (example: [C079] مرقص - عين شمس)
+  const formatCustomerLabel = (c: Customer): string => {
+    return `[${c.code}] ${c.name}${c.area ? ` - ${c.area}` : ''}`;
+  };
+
+  const handleBranchChange = (newBranch: BranchId) => {
+    setSelectedBranch(newBranch);
+    setSelectedArea('ALL');
+    setCustomerCode('');
+    setCustomerName('');
+    setCustomerSearchText('');
+    setCustomerBalance(0);
+    setIsCustomerDropdownOpen(false);
+    if (currentItem.itemCode) {
+      const prod = products.find(p => p.code === currentItem.itemCode);
+      if (prod) {
+        const stock = newBranch === 'NOZHA'
+          ? (prod.quantityNozha !== undefined ? prod.quantityNozha : 0)
+          : (prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity);
+        setCurrentStock(stock);
+      }
+    }
+  };
+
+  // Helper to apply customer selection strictly by Customer entity / code
+  const selectCustomer = (customer: Customer | null) => {
+    if (customer && !customer.isDeleted) {
+      setCustomerCode(customer.code);
+      setCustomerName(customer.name);
+      setCustomerBalance(customer.balance);
+      setCustomerSearchText(formatCustomerLabel(customer));
+      if (customer.branchId && customer.branchId !== selectedBranch) {
+        setSelectedBranch(customer.branchId);
+      }
+      if (customer.area && customer.area !== selectedArea) {
+        setSelectedArea(customer.area);
+      }
+    } else {
+      setCustomerCode('');
+      setCustomerName('');
+      setCustomerBalance(0);
+      setCustomerSearchText('');
+    }
+    setIsCustomerDropdownOpen(false);
+  };
 
   // Handle Customer Selection (By Code)
   const handleCustomerCode = (code: string) => {
     setCustomerCode(code);
-    const customer = customers.find(c => c.code === code);
+    const trimmed = code.trim().toLowerCase();
+    if (!trimmed) {
+      setCustomerName('');
+      setCustomerBalance(0);
+      setCustomerSearchText('');
+      return;
+    }
+    // Only search active (non-deleted) customers
+    const customer = activeCustomers.find(c => c.code.toLowerCase() === trimmed);
     if (customer) {
       setCustomerName(customer.name);
       setCustomerBalance(customer.balance);
+      setCustomerSearchText(formatCustomerLabel(customer));
+      if (customer.branchId && customer.branchId !== selectedBranch) {
+        setSelectedBranch(customer.branchId);
+      }
+      if (customer.area && customer.area !== selectedArea) {
+        setSelectedArea(customer.area);
+      }
     } else {
       setCustomerName('');
       setCustomerBalance(0);
     }
   };
 
-  // Handle Customer Selection (By Name)
-  const handleCustomerNameChange = (name: string) => {
-    setCustomerName(name);
-    const customer = customers.find(c => c.name === name);
-    if (customer) {
-      setCustomerCode(customer.code);
-      setCustomerBalance(customer.balance);
+  // Handle Customer Search / Dropdown Input (supports code, name, or formatted label)
+  const handleCustomerSearchChange = (val: string) => {
+    setCustomerSearchText(val);
+    setIsCustomerDropdownOpen(true);
+    const trimmed = val.trim();
+
+    if (!trimmed) {
+      setCustomerCode('');
+      setCustomerName('');
+      setCustomerBalance(0);
+      return;
+    }
+
+    // 1. Check if string starts with [CODE] e.g. [C079] مرقص - عين شمس
+    const bracketMatch = trimmed.match(/^\[([A-Za-z0-9_-]+)\]/);
+    if (bracketMatch) {
+      const extractedCode = bracketMatch[1].toLowerCase();
+      const customer = activeCustomers.find(c => c.code.toLowerCase() === extractedCode);
+      if (customer) {
+        selectCustomer(customer);
+        return;
+      }
+    }
+
+    // 2. Check if string directly matches an active customer code
+    const byCode = activeCustomers.find(c => c.code.toLowerCase() === trimmed.toLowerCase());
+    if (byCode) {
+      selectCustomer(byCode);
+      return;
+    }
+
+    // 3. Check if exact unique match by name among active customers
+    const matchesByName = availableCustomers.filter(c => c.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (matchesByName.length === 1) {
+      selectCustomer(matchesByName[0]);
+    } else if (matchesByName.length === 0) {
+      const allActiveByName = activeCustomers.filter(c => c.name.trim().toLowerCase() === trimmed.toLowerCase());
+      if (allActiveByName.length === 1) {
+        selectCustomer(allActiveByName[0]);
+      }
     }
   };
+
+  // Filter suggestions for dropdown based on search query (code or name or area)
+  const filteredCustomerSuggestions = useMemo(() => {
+    const q = customerSearchText.trim().toLowerCase();
+    const cleanQ = q.replace(/^\[[a-z0-9_-]+\]\s*/i, '');
+    if (!cleanQ) return availableCustomers.slice(0, 30);
+
+    return availableCustomers.filter(c => {
+      const codeMatch = c.code.toLowerCase().includes(cleanQ);
+      const nameMatch = c.name.toLowerCase().includes(cleanQ);
+      const areaMatch = (c.area || '').toLowerCase().includes(cleanQ);
+      const phoneMatch = (c.phone || '').includes(cleanQ);
+      return codeMatch || nameMatch || areaMatch || phoneMatch;
+    }).slice(0, 35);
+  }, [availableCustomers, customerSearchText]);
 
   // Handle Item Selection (By Code)
   const handleItemCode = (code: string) => {
     const product = products.find(p => p.code === code);
     if (product) {
+      const stock = selectedBranch === 'NOZHA'
+        ? (product.quantityNozha !== undefined ? product.quantityNozha : 0)
+        : (product.quantityMarg !== undefined ? product.quantityMarg : product.quantity);
+
       setCurrentItem(prev => ({
         ...prev,
         itemCode: code,
         itemName: product.name,
-        quantity: '', // Empty field so the user can immediately type their quantity
+        quantity: '',
         price: product.price ? product.price : ''
       }));
-      setCurrentStock(product.quantity);
+      setCurrentStock(stock);
       setTimeout(() => {
         quantityRef.current?.focus();
         quantityRef.current?.select();
@@ -139,6 +295,10 @@ export const Sales: React.FC = () => {
   const handleItemName = (name: string) => {
     const product = products.find(p => p.name === name);
     if (product) {
+      const stock = selectedBranch === 'NOZHA'
+        ? (product.quantityNozha !== undefined ? product.quantityNozha : 0)
+        : (product.quantityMarg !== undefined ? product.quantityMarg : product.quantity);
+
       setCurrentItem(prev => ({
         ...prev,
         itemCode: product.code,
@@ -146,7 +306,7 @@ export const Sales: React.FC = () => {
         quantity: '',
         price: product.price ? product.price : ''
       }));
-      setCurrentStock(product.quantity);
+      setCurrentStock(stock);
       setTimeout(() => {
         quantityRef.current?.focus();
         quantityRef.current?.select();
@@ -230,8 +390,8 @@ export const Sales: React.FC = () => {
       alert("الفاتورة فارغة! أضف أصناف أولاً.");
       return;
     }
-    if (!customerName) {
-      alert("الرجاء اختيار عميل.");
+    if (!customerCode || !customerName) {
+      alert("الرجاء اختيار عميل نشط عبر كود العميل أو البحث.");
       return;
     }
     if (!invoiceId) {
@@ -243,16 +403,14 @@ export const Sales: React.FC = () => {
       return;
     }
 
-    if (paymentType === 'PARTIAL' && parsedPaid > cartTotal) {
-      alert("المبلغ المدفوع لا يمكن أن يتجاوز إجمالي الفاتورة!");
-      return;
-    }
-
-    const cust = customers.find(c => c.code === customerCode);
+    const cust = activeCustomers.find(c => c.code === customerCode) || customers.find(c => c.code === customerCode);
+    const resolvedArea = selectedArea !== 'ALL' ? selectedArea : (cust?.area || '');
     const invoiceData: any = {
       id: invoiceId,
       date: invoiceDate,
       time: invoiceTime,
+      branchId: selectedBranch,
+      area: resolvedArea,
       customerCode,
       customerName,
       customerPhone: cust?.phone || '',
@@ -278,7 +436,9 @@ export const Sales: React.FC = () => {
     setCartItems([]);
     setCustomerCode('');
     setCustomerName('');
+    setCustomerSearchText('');
     setCustomerBalance(0);
+    setIsCustomerDropdownOpen(false);
     setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: 0 });
     setPaymentType('CREDIT');
     setPaidAmountInput('0');
@@ -383,78 +543,246 @@ export const Sales: React.FC = () => {
         
         {/* 1. Customer & Invoice Info */}
         <div className="bg-white p-4 rounded-xl shadow-sm border border-brand-100">
-          <div className="flex justify-between items-center mb-4 border-b pb-2">
+          <div className="flex flex-wrap justify-between items-center mb-3 border-b pb-2 gap-2">
             <h3 className="font-bold text-brand-800 flex items-center gap-2 text-sm md:text-base">
-              <FileText size={18} /> بيانات الفاتورة
+              <FileText size={18} /> بيانات الفاتورة والعميل
             </h3>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+               <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded text-xs font-bold">
+                 {selectedBranch === 'NOZHA' ? 'فرع النزهة' : 'فرع المرج'}
+               </span>
                <span className="bg-gray-100 px-2 py-1 rounded text-xs font-mono">{invoiceId}</span>
                <span className="bg-gray-100 px-2 py-1 rounded text-xs">{invoiceDate}</span>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-             {/* Mobile: Compact ID/Date inputs */}
-             <div className="grid grid-cols-2 gap-2 lg:hidden">
-               <div>
-                  <label className="text-[10px] font-bold text-gray-500 block mb-1">رقم الفاتورة</label>
-                  <input type="text" className="w-full p-2 border rounded bg-gray-50 text-sm font-mono" value={invoiceId} onChange={e => setInvoiceId(e.target.value)} />
-               </div>
-               <div>
-                  <label className="text-[10px] font-bold text-gray-500 block mb-1">التاريخ</label>
-                  <input type="date" className="w-full p-2 border rounded bg-gray-50 text-sm" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} />
-               </div>
-             </div>
-
-             {/* Desktop: ID/Date/Time */}
-             <div className="hidden lg:block">
-                <label className="text-[10px] font-bold text-gray-500 block mb-1">رقم الفاتورة</label>
-                <input type="text" className="w-full p-2 border rounded bg-gray-50 text-sm font-mono" value={invoiceId} onChange={e => setInvoiceId(e.target.value)} />
-             </div>
-             <div className="hidden lg:block">
-                <label className="text-[10px] font-bold text-gray-500 block mb-1">التاريخ</label>
-                <input type="date" className="w-full p-2 border rounded bg-gray-50 text-sm" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} />
-             </div>
-             
-             {/* Customer Selection */}
-             <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-blue-50 p-2 rounded border border-blue-100">
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-bold text-blue-700 block mb-1 flex items-center gap-1"><User size={12}/> العميل</label>
-                    <input 
-                        type="text"
-                        list="customerNamesList" 
-                        className="w-full p-2 border rounded text-sm" 
-                        value={customerName} 
-                        onChange={e => handleCustomerNameChange(e.target.value)} 
-                        placeholder="ابحث بالاسم"
-                    />
-                    <datalist id="customerNamesList">
-                      {customers.map(c => <option key={c.code} value={c.name}>{c.code}</option>)}
-                    </datalist>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-blue-700 block mb-1">كود</label>
-                    <input 
-                        type="text" 
-                        list="customers"
-                        className="w-full p-2 border rounded text-sm font-mono"
-                        value={customerCode}
-                        onChange={e => handleCustomerCode(e.target.value)}
-                        placeholder="كود"
-                      />
-                      <datalist id="customers">
-                        {customers.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
-                      </datalist>
-                  </div>
+          {/* 3-Step Cascading Flow Header */}
+          <div className="mb-3 p-3 bg-gradient-to-r from-blue-50/70 to-indigo-50/70 border border-blue-200/60 rounded-xl space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+              
+              {/* Step 1: Branch Selection */}
+              <div className="md:col-span-5">
+                <label className="text-xs font-bold text-blue-900 flex items-center gap-1.5 mb-1.5">
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
+                  اختيار الإدارة / الفرع
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {BRANCHES.map(b => {
+                    const isSelected = selectedBranch === b.id;
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => handleBranchChange(b.id)}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm ${
+                          isSelected
+                            ? 'bg-blue-600 text-white ring-2 ring-blue-300 shadow-blue-200'
+                            : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <Building size={14} />
+                        <span>{b.name}</span>
+                        {isSelected && <Check size={14} className="mr-auto" />}
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="mt-2 flex justify-between items-center text-xs">
-                  <span className="text-blue-600">الرصيد:</span>
-                  <span className={`font-bold ${customerBalance < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
-                    {customerBalance.toLocaleString()}
+              </div>
+
+              {/* Step 2: Dynamic Area Selection */}
+              <div className="md:col-span-7">
+                <label className="text-xs font-bold text-blue-900 flex items-center gap-1.5 mb-1.5">
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">2</span>
+                  تحديد المنطقة ({selectedBranch === 'NOZHA' ? 'النزهة' : 'المرج'})
+                </label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <MapPin size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <select
+                      className="w-full pr-8 pl-3 py-2 border border-blue-200 rounded-lg text-xs font-medium bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      value={selectedArea}
+                      onChange={e => {
+                        setSelectedArea(e.target.value);
+                        setCustomerCode('');
+                        setCustomerName('');
+                        setCustomerSearchText('');
+                        setCustomerBalance(0);
+                        setIsCustomerDropdownOpen(false);
+                      }}
+                    >
+                      <option value="ALL">جميع مناطق {selectedBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'} ({availableCustomers.length} عميل)</option>
+                      {availableBranchAreas.map(area => (
+                        <option key={area} value={area}>{area}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {selectedArea !== 'ALL' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedArea('ALL');
+                        setCustomerCode('');
+                        setCustomerName('');
+                        setCustomerSearchText('');
+                        setCustomerBalance(0);
+                        setIsCustomerDropdownOpen(false);
+                      }}
+                      className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-bold cursor-pointer"
+                      title="عرض جميع مناطق الإدارة"
+                    >
+                      إلغاء الفلتر
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Step 3: Cascading Customer Selection */}
+            <div className="pt-2 border-t border-blue-200/50">
+              <label className="text-xs font-bold text-blue-900 flex items-center justify-between mb-1.5">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">3</span>
+                  اختيار العميل (مفلتر حسب {selectedBranch === 'NOZHA' ? 'النزهة' : 'المرج'} {selectedArea !== 'ALL' ? `- ${selectedArea}` : ''})
+                </span>
+                <span className="text-[11px] text-blue-600 font-medium">
+                  ({availableCustomers.length} عميل نشط)
+                </span>
+              </label>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start" ref={customerDropdownRef}>
+                {/* Search Box / Dropdown */}
+                <div className="md:col-span-7 relative">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      list="customerNamesList"
+                      className="w-full p-2 pr-8 pl-8 border border-blue-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      value={customerSearchText}
+                      onChange={e => handleCustomerSearchChange(e.target.value)}
+                      onFocus={() => setIsCustomerDropdownOpen(true)}
+                      placeholder="ابحث بكود أو اسم العميل: [C079] مرقص - عين شمس..."
+                    />
+                    <Search size={15} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    {customerCode && (
+                      <button
+                        type="button"
+                        onClick={() => selectCustomer(null)}
+                        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 p-0.5 rounded cursor-pointer transition-colors"
+                        title="إلغاء اختيار العميل"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  <datalist id="customerNamesList">
+                    {availableCustomers.map(c => (
+                      <option key={`cust_name_${c.code}`} value={formatCustomerLabel(c)}>
+                        رصيد سابق: {c.balance.toLocaleString()} ج.م
+                      </option>
+                    ))}
+                  </datalist>
+
+                  {/* Interactive Suggestions Popup */}
+                  {isCustomerDropdownOpen && filteredCustomerSuggestions.length > 0 && (
+                    <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-blue-200 rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100">
+                      {filteredCustomerSuggestions.map(c => {
+                        const isSelected = customerCode === c.code;
+                        return (
+                          <button
+                            key={`suggest_${c.code}`}
+                            type="button"
+                            onClick={() => selectCustomer(c)}
+                            className={`w-full text-right p-2.5 hover:bg-blue-50 flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                              isSelected ? 'bg-blue-50 font-bold border-r-4 border-blue-600' : ''
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 font-mono font-bold rounded text-[11px]">
+                                {c.code}
+                              </span>
+                              <span className="font-bold text-gray-800 text-sm">
+                                {c.name}
+                              </span>
+                              {c.area && (
+                                <span className="text-gray-500 text-[11px]">
+                                  - {c.area}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-left shrink-0">
+                              <span className={`font-mono text-xs font-bold ${
+                                c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                              }`} dir="ltr">
+                                {c.balance.toLocaleString()} ج.م
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Customer Code Input */}
+                <div className="md:col-span-2 relative">
+                  <input
+                    type="text"
+                    list="customers"
+                    className="w-full p-2 border border-blue-200 rounded-lg text-sm font-mono font-bold bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    value={customerCode}
+                    onChange={e => handleCustomerCode(e.target.value)}
+                    placeholder="كود العميل"
+                  />
+                  <datalist id="customers">
+                    {availableCustomers.map(c => (
+                      <option key={`cust_code_${c.code}`} value={c.code}>
+                        {formatCustomerLabel(c)}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+
+                {/* Customer Balance Card */}
+                <div className="md:col-span-3 bg-white p-2 rounded-lg border border-blue-200 flex justify-between items-center text-xs h-[38px]">
+                  <span className="text-gray-600 font-medium">الرصيد السابق:</span>
+                  <span className={`font-bold font-mono text-sm ${customerBalance < 0 ? 'text-red-600' : 'text-emerald-700'}`} dir="ltr">
+                    {customerBalance.toLocaleString()} ج.م
                   </span>
                 </div>
-             </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Invoice Details (Invoice ID, Date, Time) */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] font-bold text-gray-500 block mb-1">رقم الفاتورة</label>
+              <input
+                type="text"
+                className="w-full p-1.5 border rounded bg-gray-50 text-xs font-mono"
+                value={invoiceId}
+                onChange={e => setInvoiceId(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-500 block mb-1">تاريخ الفاتورة</label>
+              <input
+                type="date"
+                className="w-full p-1.5 border rounded bg-gray-50 text-xs"
+                value={invoiceDate}
+                onChange={e => setInvoiceDate(e.target.value)}
+              />
+            </div>
+            <div className="col-span-2 md:col-span-1">
+              <label className="text-[10px] font-bold text-gray-500 block mb-1">وقت الفاتورة</label>
+              <input
+                type="text"
+                className="w-full p-1.5 border rounded bg-gray-50 text-xs font-mono"
+                value={invoiceTime}
+                onChange={e => setInvoiceTime(e.target.value)}
+              />
+            </div>
           </div>
         </div>
 
@@ -485,7 +813,7 @@ export const Sales: React.FC = () => {
                   onChange={e => handleItemCode(e.target.value)}
                 />
                 <datalist id="products">
-                  {products.map(p => <option key={p.code} value={p.code}>{p.name}</option>)}
+                  {products.map((p, idx) => <option key={`prod_code_${p.code || idx}_${idx}`} value={p.code}>{p.name}</option>)}
                 </datalist>
             </div>
             
@@ -510,12 +838,14 @@ export const Sales: React.FC = () => {
                 onChange={e => handleItemName(e.target.value)}
               />
               <datalist id="productNames">
-                {products.map(p => <option key={p.code} value={p.name}>{p.code}</option>)}
+                {products.map((p, idx) => <option key={`prod_name_${p.code || idx}_${idx}`} value={p.name}>{p.code}</option>)}
               </datalist>
             </div>
 
             <div className="col-span-4 md:col-span-2">
-              <label className="text-[10px] font-bold text-gray-500 block mb-1">الكمية ({currentStock})</label>
+              <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                الكمية بمخزن {selectedBranch === 'NOZHA' ? 'النزهة' : 'المرج'} ({currentStock})
+              </label>
               <input 
                 ref={quantityRef}
                 type="number" 
@@ -541,14 +871,20 @@ export const Sales: React.FC = () => {
             </div>
             
             <div className="col-span-4 md:col-span-2">
-              <label className="text-[10px] font-bold text-gray-500 block mb-1">السعر</label>
+              <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                السعر {!canEditPrices && <span className="text-[9px] text-amber-600 font-normal">(ثابت)</span>}
+              </label>
               <input 
                 ref={priceRef}
                 type="number" 
-                className="w-full p-2 border rounded text-center text-sm font-bold font-mono" 
+                readOnly={!canEditPrices}
+                className={`w-full p-2 border rounded text-center text-sm font-bold font-mono ${
+                  !canEditPrices ? 'bg-gray-100 text-gray-600 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'
+                }`}
                 placeholder="0"
+                title={!canEditPrices ? "ليس لديك صلاحية تعديل السعر يدوياً" : undefined}
                 value={currentItem.price === 0 || currentItem.price === '' ? '' : currentItem.price}
-                onFocus={e => e.target.select()}
+                onFocus={e => canEditPrices && e.target.select()}
                 onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -557,6 +893,7 @@ export const Sales: React.FC = () => {
                   }
                 }}
                 onChange={e => {
+                  if (!canEditPrices) return;
                   const val = e.target.value;
                   setCurrentItem({...currentItem, price: val === '' ? '' : Number(val)});
                 }}
@@ -576,14 +913,14 @@ export const Sales: React.FC = () => {
         </div>
 
         {/* 3. Cart Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-brand-100 flex-1 flex flex-col min-h-[180px]">
+        <div className="bg-white rounded-xl shadow-sm border border-brand-100 flex flex-col min-h-[260px] max-h-[480px]">
           <div className="p-3 bg-brand-50 border-b border-brand-100 font-bold text-brand-800 flex justify-between items-center text-sm">
             <span className="flex items-center gap-2"><ShoppingCart size={18}/> الأصناف</span>
             <span className="bg-white px-2 py-0.5 rounded-full text-xs border">{cartItems.length}</span>
           </div>
-          <div className="overflow-x-auto flex-1">
+          <div className="overflow-x-auto overflow-y-auto max-h-[420px] flex-1">
             <table className="w-full text-right text-sm">
-              <thead className="bg-gray-50 text-gray-600 sticky top-0">
+              <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="p-2 whitespace-nowrap">الصنف</th>
                   <th className="p-2 w-16 text-center">الكمية</th>
@@ -698,10 +1035,18 @@ export const Sales: React.FC = () => {
                   <Coins size={14} /> حدد المبلغ المدفوع نقداً:
                 </label>
                 <div className="flex items-center gap-1 text-xs">
-                  <span className="text-gray-500">المتبقي على الحساب:</span>
-                  <span className="font-bold font-mono text-red-600 text-sm">
-                    {remainingAmount.toLocaleString()} ج.م
-                  </span>
+                  {excessPaid > 0 ? (
+                    <span className="font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300">
+                      فائض يخصم من المديونية: +{excessPaid.toLocaleString()} ج.م
+                    </span>
+                  ) : (
+                    <>
+                      <span className="text-gray-500">المتبقي على الحساب:</span>
+                      <span className="font-bold font-mono text-red-600 text-sm">
+                        {remainingAmount.toLocaleString()} ج.م
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -740,6 +1085,13 @@ export const Sales: React.FC = () => {
                     className="px-2.5 py-2 text-xs font-bold bg-white border border-amber-200 text-amber-800 rounded-lg hover:bg-amber-100 transition-colors"
                   >
                     75%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickPercent(100)}
+                    className="px-2.5 py-2 text-xs font-bold bg-white border border-amber-200 text-amber-800 rounded-lg hover:bg-amber-100 transition-colors"
+                  >
+                    100%
                   </button>
                 </div>
               </div>
@@ -794,10 +1146,18 @@ export const Sales: React.FC = () => {
              </span>
            </div>
 
-           <div className="flex justify-between items-center text-amber-400 bg-gray-800/80 px-3 py-2 rounded-lg border border-amber-900/50">
-             <span className="text-sm font-bold">المتبقي من الفاتورة:</span>
-             <span className="font-mono font-bold text-lg text-amber-300">
-               {remainingAmount.toLocaleString()} ج.م
+           <div className={`flex justify-between items-center px-3 py-2 rounded-lg border ${
+             excessPaid > 0 
+               ? 'text-emerald-400 bg-gray-800/80 border-emerald-900/50' 
+               : 'text-amber-400 bg-gray-800/80 border-amber-900/50'
+           }`}>
+             <span className="text-sm font-bold">
+               {excessPaid > 0 ? 'فائض لحساب العميل:' : 'المتبقي من الفاتورة:'}
+             </span>
+             <span className={`font-mono font-bold text-lg ${excessPaid > 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
+               {excessPaid > 0 
+                 ? `+${excessPaid.toLocaleString()} ج.م` 
+                 : `${remainingAmount.toLocaleString()} ج.م`}
              </span>
            </div>
 
@@ -859,7 +1219,11 @@ export const Sales: React.FC = () => {
              </div>
              <div className="flex items-center gap-2 text-xs">
                <span className="text-emerald-400">مدفوع: {currentPaid.toLocaleString()}</span>
-               <span className="text-red-400">| متبقي: {remainingAmount.toLocaleString()}</span>
+               {excessPaid > 0 ? (
+                 <span className="text-emerald-300 font-bold">| فائض: +{excessPaid.toLocaleString()}</span>
+               ) : (
+                 <span className="text-red-400">| متبقي: {remainingAmount.toLocaleString()}</span>
+               )}
              </div>
           </div>
           <button 

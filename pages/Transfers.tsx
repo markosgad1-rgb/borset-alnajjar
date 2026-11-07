@@ -313,7 +313,7 @@ export const Transfers: React.FC = () => {
                   />
                   <Search className="absolute left-3 top-3.5 text-gray-400" size={18}/>
                   <datalist id="namesList">
-                    {activeList.map(e => <option key={e.code} value={e.name} />)}
+                    {activeList.map((e, idx) => <option key={`tr_name_${e.code || idx}_${idx}`} value={e.name} />)}
                   </datalist>
                 </div>
               </div>
@@ -330,7 +330,7 @@ export const Transfers: React.FC = () => {
                   onChange={e => handleCodeChange(e.target.value)}
                 />
                 <datalist id="codesList">
-                   {activeList.map(e => <option key={e.code} value={e.code} />)}
+                   {activeList.map((e, idx) => <option key={`tr_code_${e.code || idx}_${idx}`} value={e.code} />)}
                 </datalist>
               </div>
             </div>

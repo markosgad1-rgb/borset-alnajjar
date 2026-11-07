@@ -5,7 +5,9 @@ import {
   getSalesInvoiceHtml,
   getPurchaseInvoiceHtml,
   getLedgerHtml,
-  getConsolidatedLedgerHtml
+  getConsolidatedLedgerHtml,
+  getGeneralReportHtml,
+  GeneralReportPrintOptions
 } from './printTemplates';
 
 /**
@@ -871,3 +873,103 @@ export async function shareConsolidatedStatementPdfViaWhatsApp(
     openWhatsAppTabSync
   });
 }
+
+/**
+ * Returns safe Latin filename for general reports
+ * Example: Taqreer_AlMabeeat_2026-11-06.pdf
+ */
+export function getReportPdfFileName(reportType: 'SALES' | 'PURCHASES' | 'CUSTOMERS'): string {
+  const dateStr = new Date().toISOString().split('T')[0];
+  if (reportType === 'SALES') return `Taqreer_AlMabeeat_${dateStr}.pdf`;
+  if (reportType === 'PURCHASES') return `Taqreer_AlMoshtrayat_${dateStr}.pdf`;
+  return `Taqreer_AlOmaala_${dateStr}.pdf`;
+}
+
+/**
+ * Share General Report directly as PDF via WhatsApp
+ * Exactly identical to invoices and customer statements
+ */
+export async function shareReportPdfViaWhatsApp(
+  options: GeneralReportPrintOptions,
+  companyLogo?: string,
+  cachedFile?: File | null,
+  openWhatsAppTabSync?: Window | null
+): Promise<void> {
+  const html = getGeneralReportHtml(options, companyLogo);
+  const fileName = getReportPdfFileName(options.reportType);
+  const textMessage = options.reportType === 'SALES'
+    ? 'تقرير المبيعات والأصناف الأكثر طلباً - بورصة النجار'
+    : options.reportType === 'PURCHASES'
+      ? 'تقرير المشتريات والتوريد - بورصة النجار'
+      : 'تقرير العملاء والمديونيات - بورصة النجار';
+
+  await sharePdfViaWhatsApp({
+    htmlContent: html,
+    fileName,
+    title: options.title,
+    text: textMessage,
+    orientation: 'portrait',
+    cachedFile,
+    openWhatsAppTabSync
+  });
+}
+
+/**
+ * Robust document printer:
+ * Uses an invisible iframe to print the exact HTML content without getting blocked by popup blockers.
+ * Falls back to popup window or window.print() if needed.
+ */
+export function printHtmlDocument(htmlContent: string): void {
+  try {
+    const existingIframe = document.getElementById('report-print-iframe');
+    if (existingIframe) existingIframe.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'report-print-iframe';
+    iframe.style.position = 'fixed';
+    iframe.style.top = '-9999px';
+    iframe.style.left = '-9999px';
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
+    iframe.style.border = 'none';
+    iframe.style.opacity = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } catch {
+          window.print();
+        }
+        setTimeout(() => {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        }, 4000);
+      }, 400);
+      return;
+    }
+  } catch (err) {
+    console.warn('Iframe print error, falling back:', err);
+  }
+
+  // Fallback to window.open
+  try {
+    const printWindow = window.open('', '_blank', 'width=1100,height=850');
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      return;
+    }
+  } catch {}
+
+  // Last resort
+  window.print();
+}
+

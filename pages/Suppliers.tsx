@@ -18,6 +18,8 @@ export const Suppliers: React.FC = () => {
     currentUser, purchases, printLedger, printPurchaseInvoice,
     companyLogo
   } = useERP();
+
+  const canDeleteSuppliers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteSuppliers);
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
@@ -48,8 +50,10 @@ export const Suppliers: React.FC = () => {
   const [printStartDate, setPrintStartDate] = useState<string>('');
   const [printEndDate, setPrintEndDate] = useState<string>('');
 
-  // Delete confirmation
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  // Delete supplier modal state
+  const [supplierToDelete, setSupplierToDelete] = useState<any | null>(null);
+  const [deleteWarningReason, setDeleteWarningReason] = useState<string | null>(null);
+  const [isDeletingSupplier, setIsDeletingSupplier] = useState(false);
 
   // Clear Ledger confirmation state
   const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
@@ -65,7 +69,7 @@ export const Suppliers: React.FC = () => {
   useBackHandler(() => setIsConsolidatedModalOpen(false), isConsolidatedModalOpen, 'suppliers-consolidated-modal');
   useBackHandler(() => setIsPrintModalOpen(false), isPrintModalOpen, 'suppliers-print-modal');
   useBackHandler(() => setViewPurchase(null), !!viewPurchase, 'suppliers-view-purchase-modal');
-  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'suppliers-delete-confirm');
+  useBackHandler(() => { setSupplierToDelete(null); setDeleteWarningReason(null); }, !!supplierToDelete, 'suppliers-delete-modal');
   useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'suppliers-clear-ledger-confirm');
   useBackHandler(() => setMobileView('LIST'), mobileView === 'DETAILS', 'suppliers-mobile-details');
 
@@ -78,27 +82,30 @@ export const Suppliers: React.FC = () => {
     return `S${(maxId + 1).toString().padStart(3, '0')}`;
   };
 
+  // Active (non-deleted) suppliers
+  const activeSuppliers = useMemo(() => suppliers.filter(s => !s.isDeleted), [suppliers]);
+
   // Auto-select first supplier if none selected
   useEffect(() => {
-    if (!selectedSupplierCode && suppliers.length > 0) {
-      setSelectedSupplierCode(suppliers[0].code);
+    if ((!selectedSupplierCode || !activeSuppliers.some(s => s.code === selectedSupplierCode)) && activeSuppliers.length > 0) {
+      setSelectedSupplierCode(activeSuppliers[0].code);
     }
-  }, [suppliers, selectedSupplierCode]);
+  }, [activeSuppliers, selectedSupplierCode]);
 
   // Filtered supplier list
   const filteredSuppliers = useMemo(() => {
-    if (!searchTerm.trim()) return suppliers;
+    if (!searchTerm.trim()) return activeSuppliers;
     const q = searchTerm.toLowerCase().trim();
-    return suppliers.filter(s => 
+    return activeSuppliers.filter(s => 
       s.name.toLowerCase().includes(q) || 
       s.code.toLowerCase().includes(q) || 
       (s.phone && s.phone.includes(q))
     );
-  }, [suppliers, searchTerm]);
+  }, [activeSuppliers, searchTerm]);
 
   const selectedSupplier = useMemo(() => {
-    return suppliers.find(s => s.code === selectedSupplierCode) || (suppliers.length > 0 ? suppliers[0] : null);
-  }, [suppliers, selectedSupplierCode]);
+    return activeSuppliers.find(s => s.code === selectedSupplierCode) || (activeSuppliers.length > 0 ? activeSuppliers[0] : null);
+  }, [activeSuppliers, selectedSupplierCode]);
 
   const handleOpenAddModal = () => {
     setIsEditing(false);
@@ -156,15 +163,49 @@ export const Suppliers: React.FC = () => {
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent, code: string) => {
+  const handleInitiateDelete = (e: React.MouseEvent, supplier: any) => {
     e.stopPropagation();
-    if (deleteSupplier) {
-      // If deleteSupplier is in context or fallback
+    if (!supplier) return;
+    if (!canDeleteSuppliers) {
+      alert('ليس لديك صلاحية حذف الموردين');
+      return;
     }
-    setDeleteConfirmId(null);
-    if (selectedSupplierCode === code) {
-      const remaining = suppliers.filter(s => s.code !== code);
-      setSelectedSupplierCode(remaining.length > 0 ? remaining[0].code : null);
+
+    // Safety check: check if supplier has any purchases, non-zero balance, or history
+    const cleanCode = (supplier.code || '').trim().toLowerCase();
+    const hasPurchases = purchases.some(p => (p.supplierCode || '').trim().toLowerCase() === cleanCode);
+    const hasBalance = Number(supplier.balance || 0) !== 0;
+    const hasHistory = Array.isArray(supplier.history) && supplier.history.length > 0;
+
+    if (hasPurchases || hasBalance || hasHistory) {
+      setDeleteWarningReason(`لا يمكن حذف المورد لوجود حركات مالية وفواتير مرتبطة به، يمكنك تعديل بياناته فقط.`);
+      setSupplierToDelete(supplier);
+      return;
+    }
+
+    setDeleteWarningReason(null);
+    setSupplierToDelete(supplier);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!supplierToDelete || isDeletingSupplier) return;
+
+    setIsDeletingSupplier(true);
+    try {
+      const res = await deleteSupplier(supplierToDelete.code);
+      if (res.success) {
+        if (selectedSupplierCode === supplierToDelete.code) {
+          const remaining = suppliers.filter(s => s.code !== supplierToDelete.code);
+          setSelectedSupplierCode(remaining.length > 0 ? remaining[0].code : null);
+        }
+        setSupplierToDelete(null);
+        setDeleteWarningReason(null);
+        alert(`تم حذف المورد (${supplierToDelete.name}) بنجاح.`);
+      } else {
+        alert(res.message || 'حدث خطأ أثناء محاولة حذف المورد.');
+      }
+    } finally {
+      setIsDeletingSupplier(false);
     }
   };
 
@@ -594,14 +635,14 @@ export const Suppliers: React.FC = () => {
                 {searchTerm ? 'لا توجد نتائج مطابقة للبحث' : 'لا يوجد موردين مسجلين'}
               </div>
             ) : (
-              filteredSuppliers.map(s => {
+              filteredSuppliers.map((s, idx) => {
                 const isSelected = selectedSupplier?.code === s.code;
                 const isDebtWeOwe = s.balance > 0;
                 const isCreditWeAreOwed = s.balance < 0;
 
                 return (
                   <div 
-                    key={s.code}
+                    key={`${s.code}_${idx}`}
                     onClick={() => {
                       setSelectedSupplierCode(s.code);
                       setMobileView('DETAILS');
@@ -641,6 +682,15 @@ export const Suppliers: React.FC = () => {
                       >
                         <Edit size={13} />
                       </button>
+                      {canDeleteSuppliers && (
+                        <button 
+                          onClick={(e) => handleInitiateDelete(e, s)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all"
+                          title="حذف المورد"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -668,13 +718,29 @@ export const Suppliers: React.FC = () => {
                     >
                       <ArrowRight size={13} /> العودة
                     </button>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex items-center gap-1">
                       <h2 className="text-xs font-black text-brand-900 truncate flex items-center gap-1">
                         {selectedSupplier.name}
                         <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.2 rounded font-mono">
                           {selectedSupplier.code}
                         </span>
                       </h2>
+                      <button 
+                        onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
+                        className="p-1 text-gray-500 hover:text-orange-700 bg-gray-50 hover:bg-orange-50 border border-gray-200 rounded transition-colors shrink-0"
+                        title="تعديل بيانات المورد"
+                      >
+                        <Edit size={11} />
+                      </button>
+                      {canDeleteSuppliers && (
+                        <button 
+                          onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
+                          className="p-1 text-red-500 hover:text-red-700 bg-red-50/50 hover:bg-red-50 border border-red-200 rounded transition-colors shrink-0"
+                          title="حذف المورد"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -785,6 +851,15 @@ export const Suppliers: React.FC = () => {
                         >
                           <Edit size={12}/> تعديل
                         </button>
+                        {canDeleteSuppliers && (
+                          <button 
+                            onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
+                            className="text-xs font-normal text-red-600 hover:text-red-800 bg-white border border-red-200 hover:border-red-300 hover:bg-red-50 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
+                            title="حذف المورد"
+                          >
+                            <Trash2 size={12}/> حذف
+                          </button>
+                        )}
                       </h2>
                       <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-gray-200">
                         كود: {selectedSupplier.code}
@@ -1523,6 +1598,135 @@ export const Suppliers: React.FC = () => {
           }
         }}
       />
+
+      {/* Supplier Delete Confirmation / Safety Check Modal */}
+      {supplierToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 text-right transform transition-all">
+            {deleteWarningReason ? (
+              // Safety Warning (Cannot Delete)
+              <div>
+                <div className="flex items-center gap-3 text-amber-600 mb-3 border-b border-amber-100 pb-3">
+                  <div className="p-2.5 bg-amber-50 rounded-xl">
+                    <AlertTriangle size={24} className="text-amber-600 shrink-0" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-gray-900">تعذر حذف المورد</h3>
+                    <p className="text-xs text-gray-500">تم إيقاف عملية الحذف لوجود قيود مالية</p>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3.5 mb-4 text-xs text-amber-950 leading-relaxed font-bold">
+                  {deleteWarningReason}
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 mb-4 text-xs space-y-1.5">
+                  <div className="flex justify-between text-gray-600">
+                    <span>اسم المورد:</span>
+                    <span className="font-bold text-gray-900">{supplierToDelete.name}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>كود المورد:</span>
+                    <span className="font-mono font-bold text-gray-900">{supplierToDelete.code}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>الرصيد الحالي:</span>
+                    <span className="font-mono font-bold text-gray-900" dir="ltr">
+                      {(supplierToDelete.balance || 0).toLocaleString()} ج.م
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const sup = supplierToDelete;
+                      setSupplierToDelete(null);
+                      setDeleteWarningReason(null);
+                      handleOpenEditModal(e, sup);
+                    }}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                  >
+                    <Edit size={14} /> تعديل بيانات المورد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSupplierToDelete(null);
+                      setDeleteWarningReason(null);
+                    }}
+                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Confirmation Modal (Safe to Delete)
+              <div>
+                <div className="flex items-center gap-3 text-red-600 mb-3 border-b border-red-100 pb-3">
+                  <div className="p-2.5 bg-red-50 rounded-xl">
+                    <Trash2 size={24} className="text-red-600 shrink-0" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-gray-900">تأكيد حذف المورد</h3>
+                    <p className="text-xs text-gray-500">لا يمكن التراجع عن هذا الإجراء</p>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <p className="text-sm font-bold text-gray-800 leading-relaxed mb-2">
+                    هل أنت متأكد من حذف المورد ({supplierToDelete.name})؟ لا يمكن التراجع عن هذا الإجراء.
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    تم التحقق من عدم وجود أي فواتير مشتريات أو رصيد مالي قائم أو حركات مسجلة بحساب المورد.
+                  </p>
+                </div>
+
+                <div className="bg-red-50/50 rounded-xl p-3 border border-red-100 mb-4 text-xs space-y-1.5">
+                  <div className="flex justify-between text-gray-600">
+                    <span>اسم المورد:</span>
+                    <span className="font-bold text-gray-900">{supplierToDelete.name}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>كود المورد:</span>
+                    <span className="font-mono font-bold text-gray-900">{supplierToDelete.code}</span>
+                  </div>
+                  {supplierToDelete.phone && (
+                    <div className="flex justify-between text-gray-600">
+                      <span>رقم الهاتف:</span>
+                      <span className="font-mono text-gray-900" dir="ltr">{supplierToDelete.phone}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    disabled={isDeletingSupplier}
+                    className="flex-1 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 size={14} /> {isDeletingSupplier ? 'جاري الحذف...' : 'تأكيد الحذف'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSupplierToDelete(null);
+                      setDeleteWarningReason(null);
+                    }}
+                    disabled={isDeletingSupplier}
+                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

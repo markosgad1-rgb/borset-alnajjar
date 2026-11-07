@@ -37,8 +37,11 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
     treasury, 
     employees, 
     exportBackupData, 
-    restoreBackupData 
+    restoreBackupData,
+    currentUser
   } = useERP();
+
+  const canManageBackup = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
 
   const [activeTab, setActiveTab] = useState<'EXPORT' | 'RESTORE'>('RESTORE');
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -51,9 +54,13 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  if (!isOpen) return null;
+  if (!isOpen || !canManageBackup) return null;
 
   const handleExport = () => {
+    if (!canManageBackup) {
+      alert('ليس لديك صلاحية تصدير النسخ الاحتياطي.');
+      return;
+    }
     try {
       exportBackupData();
       setDownloadSuccess(true);
@@ -151,6 +158,10 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
 
   const executeRestore = async () => {
     if (!parsedBackup) return;
+    if (!canManageBackup) {
+      alert('ليس لديك صلاحية استرجاع البيانات والنسخ الاحتياطي.');
+      return;
+    }
 
     setIsRestoring(true);
     setRestoreResult(null);

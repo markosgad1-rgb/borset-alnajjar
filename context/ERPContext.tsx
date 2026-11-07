@@ -1,8 +1,7 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
-import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup } from '../types';
-import { firebaseConfig, isFirebaseConfigured } from '../firebaseConfig';
-import { initializeApp } from 'firebase/app';
+import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId } from '../types';
+import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
 import { 
   getFirestore, 
@@ -10,26 +9,13 @@ import {
   doc, 
   setDoc, 
   getDoc, 
-  getDocs,
+  getDocs, 
   updateDoc, 
   deleteDoc, 
   onSnapshot, 
   query, 
   orderBy 
 } from 'firebase/firestore';
-
-// --- Firebase Init ---
-let db: any = null;
-
-if (isFirebaseConfigured()) {
-  try {
-    const app = initializeApp(firebaseConfig);
-    db = getFirestore(app);
-    console.log("Firebase initialized successfully");
-  } catch (e) {
-    console.error("Firebase initialization error:", e);
-  }
-}
 
 interface ERPContextType {
   products: Product[];
@@ -50,15 +36,34 @@ interface ERPContextType {
   logout: () => void;
   
   // CRUD
-  addProduct: (product: Product) => void;
-  updateProduct: (product: Product, oldCode?: string) => void;
-  deleteProduct: (code: string) => void;
+  addProduct: (product: Product) => Promise<boolean>;
+  updateProduct: (product: Product, oldCode?: string) => Promise<boolean>;
+  deleteProduct: (code: string) => Promise<boolean>;
   clearAllProducts: () => Promise<boolean>;
-  addPurchase: (purchase: Omit<Purchase, 'previousBalance' | 'currentBalance'>) => void; // Updated type
+  deduplicateProducts: () => Promise<{ duplicatesRemoved: number }>;
+  transferStockBetweenBranches: (params: {
+    itemCode: string;
+    fromBranch: BranchId;
+    toBranch: BranchId;
+    quantity: number;
+    notes?: string;
+  }) => Promise<boolean>;
+  transferCashBetweenBranches: (params: {
+    fromBranch: BranchId;
+    toBranch: BranchId;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date: string;
+    notes?: string;
+  }) => Promise<boolean>;
+  addPurchase: (purchase: Omit<Purchase, 'previousBalance' | 'currentBalance'>) => void;
   updatePurchase: (oldPurchase: Purchase, newPurchaseData: Purchase) => Promise<void>;
+  finalizePurchasePrice: (purchaseId: string, updatedItems: InvoiceItem[], newTotal: number) => Promise<boolean>;
   deletePurchase: (id: string) => Promise<void>;
   addInvoice: (invoiceData: {
     id: string;
+    branchId?: BranchId;
+    area?: string;
     date: string;
     time: string;
     customerCode: string;
@@ -82,21 +87,24 @@ interface ERPContextType {
     notes?: string;
   }) => Promise<void>;
   addTransfer: (data: {
+    branchId?: BranchId;
     entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE';
     entityCode: string;
     amount: number;
-    type: 'IN' | 'OUT'; // IN = Deposit/Collection, OUT = Withdrawal/Payment
+    type: 'IN' | 'OUT';
     date: string;
     notes?: string;
     paymentMethod: PaymentMethod;
   }) => Promise<void>;
   addExpense: (data: {
+    branchId?: BranchId;
     name: string;
     amount: number;
     date: string;
     notes?: string;
   }) => Promise<void>;
   addOpeningBalance: (data: {
+    branchId?: BranchId;
     amount: number;
     date: string;
     paymentMethod: PaymentMethod;
@@ -108,9 +116,14 @@ interface ERPContextType {
   deleteCustomer: (code: string) => Promise<void>;
   addSupplier: (supplier: Supplier) => void;
   updateSupplier: (code: string, updatedData: Partial<Supplier>) => void;
+  deleteSupplier: (code: string) => Promise<{ success: boolean; message?: string }>;
   addEmployee: (employee: Employee) => void;
   updateEmployee: (code: string, updatedData: Partial<Employee>) => void;
   deleteEmployee: (code: string) => Promise<void>;
+  
+  // Trash and Soft Delete operations
+  restoreEntity: (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string) => Promise<{ success: boolean; message?: string }>;
+  permanentDeleteEntity: (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string) => Promise<{ success: boolean; message?: string }>;
   
   // User Management
   addUser: (user: User) => void;
@@ -187,6 +200,8 @@ interface ERPContextType {
   restoreBackupData: (backup: SystemBackup) => Promise<{ success: boolean; message: string }>;
 
   currentTreasuryBalance: number;
+  currentTreasuryBalanceMarg: number;
+  currentTreasuryBalanceNozha: number;
   balances: {
     cash: number;
     bankMisr: number;
@@ -228,39 +243,70 @@ export const cleanDoc = <T = any>(obj: T): T => {
   return obj;
 };
 
-// Helper to patch old user objects with new permissions
+// Helper to patch user objects with granular permissions
 const sanitizeUser = (user: any): User => {
   if (!user) return user;
   
-  const defaults = {
-    dashboard: false,
-    sales: false,
-    warehouse: false,
-    financial: false,
-    admin: false,
-    canDeleteLedgers: false,
-    canEditWarehouse: false,
-    canManageTreasury: false,
-    canEditPurchases: false
-  };
-
-  // If admin, ensure they have full access by default if keys are missing
-  if (user.role === 'ADMIN') {
+  // If admin or role === 'ADMIN', grant full unrestricted permissions
+  if (user.role === 'ADMIN' || user.username === 'admin') {
     return {
       ...user,
+      role: 'ADMIN',
       permissions: {
-        dashboard: true, sales: true, warehouse: true, financial: true, admin: true, canDeleteLedgers: true,
-        canEditWarehouse: true, canManageTreasury: true, canEditPurchases: true,
-        ...(user.permissions || {}) 
+        canViewSales: true,
+        canViewInvoicesLog: true,
+        canViewPurchases: true,
+        canViewInventory: true,
+        canViewCustomers: true,
+        canViewSuppliers: true,
+        canViewTreasury: true,
+        canViewReports: true,
+        canDeleteInvoices: true,
+        canDeleteCustomers: true,
+        canDeleteSuppliers: true,
+        canEditPrices: true,
+        canEditInvoices: true,
+        canManageBackup: true,
+        dashboard: true,
+        sales: true,
+        warehouse: true,
+        financial: true,
+        admin: true,
+        canDeleteLedgers: true,
+        canEditWarehouse: true,
+        canManageTreasury: true,
+        canEditPurchases: true,
       }
     };
   }
 
+  const p = user.permissions || {};
   return {
     ...user,
     permissions: {
-      ...defaults,
-      ...(user.permissions || {})
+      canViewSales: Boolean(p.canViewSales ?? p.sales ?? false),
+      canViewInvoicesLog: Boolean(p.canViewInvoicesLog ?? p.sales ?? false),
+      canViewPurchases: Boolean(p.canViewPurchases ?? p.warehouse ?? false),
+      canViewInventory: Boolean(p.canViewInventory ?? p.warehouse ?? false),
+      canViewCustomers: Boolean(p.canViewCustomers ?? p.sales ?? false),
+      canViewSuppliers: Boolean(p.canViewSuppliers ?? p.warehouse ?? false),
+      canViewTreasury: Boolean(p.canViewTreasury ?? p.financial ?? false),
+      canViewReports: Boolean(p.canViewReports ?? p.dashboard ?? false),
+      canDeleteInvoices: Boolean(p.canDeleteInvoices ?? false),
+      canDeleteCustomers: Boolean(p.canDeleteCustomers ?? false),
+      canDeleteSuppliers: Boolean(p.canDeleteSuppliers ?? false),
+      canEditPrices: Boolean(p.canEditPrices ?? p.canEditWarehouse ?? false),
+      canEditInvoices: Boolean(p.canEditInvoices ?? false),
+      canManageBackup: Boolean(p.canManageBackup ?? p.admin ?? false),
+      dashboard: Boolean(p.dashboard ?? p.canViewReports ?? false),
+      sales: Boolean(p.sales ?? p.canViewSales ?? false),
+      warehouse: Boolean(p.warehouse ?? p.canViewInventory ?? false),
+      financial: Boolean(p.financial ?? p.canViewTreasury ?? false),
+      admin: Boolean(p.admin ?? false),
+      canDeleteLedgers: Boolean(p.canDeleteLedgers ?? false),
+      canEditWarehouse: Boolean(p.canEditWarehouse ?? p.canEditPrices ?? false),
+      canManageTreasury: Boolean(p.canManageTreasury ?? false),
+      canEditPurchases: Boolean(p.canEditPurchases ?? false),
     }
   };
 };
@@ -270,7 +316,7 @@ const INITIAL_USERS: User[] = [
   sanitizeUser({ 
     id: '1', 
     username: 'admin', 
-    password: '123', 
+    password: 'Mero@2211', 
     fullName: 'المدير العام', 
     role: 'ADMIN', 
     permissions: {} 
@@ -303,6 +349,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Calculate Balances dynamically
   const currentTreasuryBalance = treasury.reduce((acc, t) => acc + (t.credit - t.debit), 0);
+  const currentTreasuryBalanceMarg = treasury.filter(t => (t.branchId || 'MARG') === 'MARG').reduce((acc, t) => acc + (t.credit - t.debit), 0);
+  const currentTreasuryBalanceNozha = treasury.filter(t => t.branchId === 'NOZHA').reduce((acc, t) => acc + (t.credit - t.debit), 0);
   
   const balances = {
     cash: treasury.filter(t => t.paymentMethod === 'CASH' || !t.paymentMethod).reduce((acc, t) => acc + (t.credit - t.debit), 0),
@@ -317,85 +365,203 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (isOnline) {
       const unsubs: Function[] = [];
       const handleSnapshotError = (error: any) => {
-        console.error("Snapshot listener error:", error);
+        console.error("Firestore onSnapshot listener error:", error);
         if (error.code === 'permission-denied' || error.message?.includes('permission-denied')) {
           setPermissionError(true);
         }
       };
 
       try {
-        unsubs.push(onSnapshot(doc(db, 'settings', 'general'), (doc: any) => {
-           if(doc.exists()) {
-             const data = doc.data();
-             if(data.logo) setCompanyLogo(data.logo);
+        // 1. Settings (Company Logo & Info)
+        unsubs.push(onSnapshot(doc(db, 'settings', 'general'), (docSnap: any) => {
+           if (docSnap.exists()) {
+             const data = docSnap.data();
+             if (data.logo) setCompanyLogo(data.logo);
            }
-        }));
+        }, handleSnapshotError));
 
+        // 2. Users Collection
         unsubs.push(onSnapshot(collection(db, 'users'), (snap: any) => {
            setPermissionError(false);
-           const loadedUsers = snap.docs.map((d: any) => sanitizeUser(d.data()));
+           const loadedUsers = snap.docs.map((d: any) => sanitizeUser({ ...d.data(), id: d.id || d.data().id }));
            setUsers(loadedUsers);
            
            if (loadedUsers.length === 0) {
               const adminUser = sanitizeUser({ 
-                id: '1', username: 'admin', password: '123', fullName: 'المدير العام', role: 'ADMIN', permissions: {} 
+                id: '1', username: 'admin', password: 'Mero@2211', fullName: 'المدير العام', role: 'ADMIN', permissions: {} 
               });
               setDoc(doc(db, 'users', '1'), adminUser).catch(console.error);
+           } else {
+              setCurrentUser(prev => {
+                if (!prev) return null;
+                const live = loadedUsers.find(u => u.id === prev.id || u.username === prev.username);
+                return live ? sanitizeUser(live) : prev;
+              });
            }
         }, handleSnapshotError));
 
-        unsubs.push(onSnapshot(collection(db, 'products'), (snap: any) => setProducts(snap.docs.map((d: any) => d.data() as Product)), handleSnapshotError));
-        unsubs.push(onSnapshot(collection(db, 'customers'), (snap: any) => setCustomers(snap.docs.map((d: any) => d.data() as Customer)), handleSnapshotError));
-        unsubs.push(onSnapshot(collection(db, 'suppliers'), (snap: any) => setSuppliers(snap.docs.map((d: any) => d.data() as Supplier)), handleSnapshotError));
-        unsubs.push(onSnapshot(collection(db, 'employees'), (snap: any) => setEmployees(snap.docs.map((d: any) => d.data() as Employee)), handleSnapshotError));
+        // 3. Products Collection
+        unsubs.push(onSnapshot(collection(db, 'products'), (snap: any) => {
+          const map = new Map<string, Product>();
+          snap.docs.forEach((d: any) => {
+            const data = d.data() as Product;
+            const code = (data.code || d.id || '').trim();
+            if (!code) return;
+            const key = code.toLowerCase();
+
+            const rawMarg = data.quantityMarg !== undefined ? Number(data.quantityMarg) : (data.quantity !== undefined ? Number(data.quantity) : 0);
+            const rawNozha = data.quantityNozha !== undefined ? Number(data.quantityNozha) : 0;
+            const qMarg = isNaN(rawMarg) ? 0 : rawMarg;
+            const qNozha = isNaN(rawNozha) ? 0 : rawNozha;
+            const totalQ = qMarg + qNozha;
+
+            map.set(key, {
+              ...data,
+              code,
+              name: data.name || code,
+              quantityMarg: qMarg,
+              quantityNozha: qNozha,
+              quantity: totalQ,
+              avgCost: typeof data.avgCost === 'number' ? data.avgCost : (Number(data.avgCost) || 0),
+              price: typeof data.price === 'number' ? data.price : (Number(data.price) || 0)
+            });
+          });
+          setProducts(Array.from(map.values()));
+        }, handleSnapshotError));
+
+        // 4. Customers Collection
+        unsubs.push(onSnapshot(collection(db, 'customers'), (snap: any) => {
+          const map = new Map<string, Customer>();
+          snap.docs.forEach((d: any) => {
+            const data = d.data() as Customer;
+            const code = (data.code || d.id || '').trim();
+            if (!code) return;
+            const key = code.toLowerCase();
+            const bId: BranchId = data.branchId === 'NOZHA' ? 'NOZHA' : 'MARG';
+            const cArea = data.area || (bId === 'NOZHA' ? 'النزهة الجديدة' : 'المرج القديمة');
+
+            map.set(key, {
+              ...data,
+              code,
+              name: data.name || code,
+              phone: data.phone || '',
+              branchId: bId,
+              area: cArea,
+              balance: typeof data.balance === 'number' ? data.balance : (Number(data.balance) || 0),
+              history: Array.isArray(data.history) ? data.history : [],
+              isDeleted: Boolean(data.isDeleted)
+            });
+          });
+          setCustomers(Array.from(map.values()));
+        }, handleSnapshotError));
+
+        // 5. Suppliers Collection
+        unsubs.push(onSnapshot(collection(db, 'suppliers'), (snap: any) => {
+          const map = new Map<string, Supplier>();
+          snap.docs.forEach((d: any) => {
+            const data = d.data() as Supplier;
+            const code = (data.code || d.id || '').trim();
+            if (!code) return;
+            const key = code.toLowerCase();
+            map.set(key, {
+              ...data,
+              code,
+              name: data.name || code,
+              phone: data.phone || '',
+              balance: typeof data.balance === 'number' ? data.balance : (Number(data.balance) || 0),
+              history: Array.isArray(data.history) ? data.history : [],
+              isDeleted: Boolean(data.isDeleted)
+            });
+          });
+          setSuppliers(Array.from(map.values()));
+        }, handleSnapshotError));
+
+        // 6. Employees Collection
+        unsubs.push(onSnapshot(collection(db, 'employees'), (snap: any) => {
+          const map = new Map<string, Employee>();
+          snap.docs.forEach((d: any) => {
+            const data = d.data() as Employee;
+            const code = (data.code || d.id || '').trim();
+            if (!code) return;
+            const key = code.toLowerCase();
+            map.set(key, {
+              ...data,
+              code,
+              name: data.name || code,
+              role: data.role || '',
+              salary: typeof data.salary === 'number' ? data.salary : (Number(data.salary) || 0),
+              balance: typeof data.balance === 'number' ? data.balance : (Number(data.balance) || 0),
+              history: Array.isArray(data.history) ? data.history : [],
+              isDeleted: Boolean(data.isDeleted)
+            });
+          });
+          setEmployees(Array.from(map.values()));
+        }, handleSnapshotError));
         
-        const qPurchases = query(collection(db, 'purchases'), orderBy('date', 'desc'));
-        unsubs.push(onSnapshot(qPurchases, (snap: any) => setPurchases(snap.docs.map((d: any) => d.data() as Purchase)), handleSnapshotError));
+        // 7. Purchases Collection
+        unsubs.push(onSnapshot(collection(db, 'purchases'), (snap: any) => {
+          const list = snap.docs.map((d: any) => {
+            const data = d.data() as Purchase;
+            return {
+              ...data,
+              id: data.id || d.id,
+              branchId: (data.branchId === 'NOZHA' ? 'NOZHA' : 'MARG') as BranchId
+            };
+          });
+          list.sort((a: any, b: any) => {
+            const dateComp = (b.date || '').localeCompare(a.date || '');
+            if (dateComp !== 0) return dateComp;
+            return (b.id || '').localeCompare(a.id || '');
+          });
+          setPurchases(list);
+        }, handleSnapshotError));
         
-        const qInvoices = query(collection(db, 'invoices'), orderBy('date', 'desc'));
-        unsubs.push(onSnapshot(qInvoices, (snap: any) => setInvoices(snap.docs.map((d: any) => d.data() as SalesInvoice)), handleSnapshotError));
+        // 8. Invoices Collection
+        unsubs.push(onSnapshot(collection(db, 'invoices'), (snap: any) => {
+          const list = snap.docs.map((d: any) => {
+            const data = d.data() as SalesInvoice;
+            return {
+              ...data,
+              id: data.id || d.id,
+              branchId: (data.branchId === 'NOZHA' ? 'NOZHA' : 'MARG') as BranchId,
+              area: data.area || ''
+            };
+          });
+          list.sort((a: any, b: any) => {
+            const dateComp = (b.date || '').localeCompare(a.date || '');
+            if (dateComp !== 0) return dateComp;
+            return (b.id || '').localeCompare(a.id || '');
+          });
+          setInvoices(list);
+        }, handleSnapshotError));
         
-        const qTreasury = query(collection(db, 'treasury')); 
-        unsubs.push(onSnapshot(qTreasury, (snap: any) => {
-           const data = snap.docs.map((d: any) => d.data() as TreasuryTransaction);
-           data.sort((a, b) => {
-             const dateA = a.date || '';
-             const dateB = b.date || '';
-             if (dateA !== dateB) return dateA.localeCompare(dateB);
-             return a.id.localeCompare(b.id);
+        // 9. Treasury Collection
+        unsubs.push(onSnapshot(collection(db, 'treasury'), (snap: any) => {
+           const data = snap.docs.map((d: any) => {
+             const t = d.data() as TreasuryTransaction;
+             return {
+               ...t,
+               id: t.id || d.id,
+               branchId: (t.branchId === 'NOZHA' ? 'NOZHA' : 'MARG') as BranchId,
+               debit: Number(t.debit) || 0,
+               credit: Number(t.credit) || 0
+             };
+           });
+           data.sort((a: any, b: any) => {
+             const dateComp = (b.date || '').localeCompare(a.date || '');
+             if (dateComp !== 0) return dateComp;
+             return (b.id || '').localeCompare(a.id || '');
            });
            setTreasury(data);
         }, handleSnapshotError));
       } catch (err) {
-        console.error("Error setting up listeners:", err);
+        console.error("Error setting up Firestore real-time listeners:", err);
       }
 
       return () => unsubs.forEach(u => u && u());
 
     } else {
-      const load = (key: string, setter: Function, def: any) => {
-        const saved = localStorage.getItem(key);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (key === STORAGE_KEYS.USERS) {
-            setter(parsed.map((u: any) => sanitizeUser(u)));
-          } else {
-            setter(parsed);
-          }
-        }
-        else setter(def);
-      };
-
-      load(STORAGE_KEYS.USERS, setUsers, INITIAL_USERS);
-      load(STORAGE_KEYS.PRODUCTS, setProducts, []);
-      load(STORAGE_KEYS.CUSTOMERS, setCustomers, []);
-      load(STORAGE_KEYS.SUPPLIERS, setSuppliers, []);
-      load(STORAGE_KEYS.EMPLOYEES, setEmployees, []);
-      load(STORAGE_KEYS.PURCHASES, setPurchases, []);
-      load(STORAGE_KEYS.INVOICES, setInvoices, []);
-      load(STORAGE_KEYS.TREASURY, setTreasury, []);
-      const savedLogo = localStorage.getItem(STORAGE_KEYS.COMPANY_LOGO);
-      if(savedLogo) setCompanyLogo(savedLogo);
+      // In online cloud mode, Firestore is the sole source of truth.
     }
   }, [isOnline]);
 
@@ -430,11 +596,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const username = usernameInput.trim();
     const password = passwordInput.trim();
 
-    if (username === 'admin' && password === '123') {
+    if (username === 'admin' && password === 'Mero@2211') {
        const adminUser = sanitizeUser({ 
          id: '1', 
          username: 'admin', 
-         password: '123', 
+         password: 'Mero@2211', 
          fullName: 'المدير العام', 
          role: 'ADMIN', 
          permissions: {} 
@@ -457,39 +623,180 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const logout = () => setCurrentUser(null);
 
-  const addProduct = async (product: Product) => {
-    setProducts(prev => {
-      const exists = prev.find(p => p.code === product.code);
-      if (exists) return prev.map(p => p.code === product.code ? product : p);
-      return [...prev, product];
-    });
-    if (isOnline) {
-      try { await setDoc(doc(db, 'products', product.code), cleanDoc(product)); }
-      catch (e) { handleFirebaseError(e); }
-    }
-  };
+  const addProduct = async (product: Product): Promise<boolean> => {
+    const cleanCode = (product.code || '').trim();
+    const cleanName = (product.name || '').trim();
+    if (!cleanCode || !cleanName) return false;
 
-  const updateProduct = async (updatedProduct: Product, oldCode?: string) => {
-    const targetCode = oldCode || updatedProduct.code;
-    setProducts(prev => prev.map(p => p.code === targetCode ? updatedProduct : p));
+    const rawMarg = product.quantityMarg !== undefined ? Number(product.quantityMarg) : Number(product.quantity || 0);
+    const rawNozha = product.quantityNozha !== undefined ? Number(product.quantityNozha) : 0;
+    const qMarg = isNaN(rawMarg) ? 0 : rawMarg;
+    const qNozha = isNaN(rawNozha) ? 0 : rawNozha;
+
+    const sanitizedProduct: Product = {
+      ...product,
+      code: cleanCode,
+      name: cleanName,
+      quantityMarg: qMarg,
+      quantityNozha: qNozha,
+      quantity: qMarg + qNozha
+    };
+
+    // Strict duplicate check against current products state (case-insensitive & trimmed)
+    const exists = products.some(p => (p.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    if (exists) {
+      alert(`كود الصنف (${cleanCode}) مسجل بالفعل مسبقاً! يرجى اختيار كود آخر.`);
+      return false;
+    }
+
     if (isOnline) {
       try {
-        if (oldCode && oldCode !== updatedProduct.code) {
-          await deleteDoc(doc(db, 'products', oldCode));
-          await setDoc(doc(db, 'products', updatedProduct.code), cleanDoc(updatedProduct));
-        } else {
-          await setDoc(doc(db, 'products', updatedProduct.code), cleanDoc(updatedProduct));
-        }
-      } catch (e) { handleFirebaseError(e); }
+        await setDoc(doc(db, 'products', cleanCode), cleanDoc(sanitizedProduct));
+        // Synchronous & deduplicated state update so UI updates immediately without duplicates
+        setProducts(prev => {
+          const map = new Map<string, Product>();
+          prev.forEach(p => {
+            const c = (p.code || '').trim();
+            if (c) map.set(c.toLowerCase(), { ...p, code: c });
+          });
+          map.set(cleanCode.toLowerCase(), sanitizedProduct);
+          return Array.from(map.values());
+        });
+        return true;
+      } catch (e) {
+        handleFirebaseError(e);
+        return false;
+      }
+    } else {
+      setProducts(prev => {
+        const map = new Map<string, Product>();
+        prev.forEach(p => {
+          const c = (p.code || '').trim();
+          if (c) map.set(c.toLowerCase(), { ...p, code: c });
+        });
+        map.set(cleanCode.toLowerCase(), sanitizedProduct);
+        return Array.from(map.values());
+      });
+      return true;
     }
   };
 
-  const deleteProduct = async (code: string) => {
-    setProducts(prev => prev.filter(p => p.code !== code));
+  const updateProduct = async (updatedProduct: Product, oldCode?: string): Promise<boolean> => {
+    const cleanNewCode = (updatedProduct.code || '').trim();
+    const cleanOldCode = (oldCode || cleanNewCode).trim();
+
+    const rawMarg = updatedProduct.quantityMarg !== undefined ? Number(updatedProduct.quantityMarg) : Number(updatedProduct.quantity || 0);
+    const rawNozha = updatedProduct.quantityNozha !== undefined ? Number(updatedProduct.quantityNozha) : 0;
+    const qMarg = isNaN(rawMarg) ? 0 : rawMarg;
+    const qNozha = isNaN(rawNozha) ? 0 : rawNozha;
+
+    const sanitizedProduct: Product = {
+      ...updatedProduct,
+      code: cleanNewCode,
+      name: (updatedProduct.name || '').trim(),
+      quantityMarg: qMarg,
+      quantityNozha: qNozha,
+      quantity: qMarg + qNozha
+    };
+
+    setProducts(prev => {
+      const map = new Map<string, Product>();
+      prev.forEach(p => {
+        const c = (p.code || '').trim();
+        if (c && c.toLowerCase() !== cleanOldCode.toLowerCase()) {
+          map.set(c.toLowerCase(), { ...p, code: c });
+        }
+      });
+      map.set(cleanNewCode.toLowerCase(), sanitizedProduct);
+      return Array.from(map.values());
+    });
+
     if (isOnline) {
-      try { await deleteDoc(doc(db, 'products', code)); }
-      catch (e) { handleFirebaseError(e); }
+      try {
+        if (cleanOldCode && cleanOldCode.toLowerCase() !== cleanNewCode.toLowerCase()) {
+          await deleteDoc(doc(db, 'products', cleanOldCode));
+          await setDoc(doc(db, 'products', cleanNewCode), cleanDoc(sanitizedProduct));
+        } else {
+          await setDoc(doc(db, 'products', cleanNewCode), cleanDoc(sanitizedProduct));
+        }
+        return true;
+      } catch (e) {
+        handleFirebaseError(e);
+        return false;
+      }
     }
+    return true;
+  };
+
+  const deleteProduct = async (code: string): Promise<boolean> => {
+    const cleanCode = (code || '').trim();
+    setProducts(prev => prev.filter(p => (p.code || '').trim().toLowerCase() !== cleanCode.toLowerCase()));
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'products', cleanCode));
+        return true;
+      } catch (e) {
+        handleFirebaseError(e);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const deduplicateProducts = async (): Promise<{ duplicatesRemoved: number }> => {
+    const map = new Map<string, Product>();
+    let dupCount = 0;
+
+    products.forEach(p => {
+      const c = (p.code || '').trim();
+      if (!c) return;
+      const key = c.toLowerCase();
+      if (map.has(key)) {
+        dupCount++;
+        const ex = map.get(key)!;
+        map.set(key, {
+          ...ex,
+          name: ex.name || p.name,
+          quantity: Math.max(ex.quantity || 0, p.quantity || 0),
+          avgCost: ex.avgCost || p.avgCost || 0,
+          price: ex.price || p.price || 0,
+          code: c
+        });
+      } else {
+        map.set(key, { ...p, code: c });
+      }
+    });
+
+    const uniqueProducts = Array.from(map.values());
+    setProducts(uniqueProducts);
+    try {
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(uniqueProducts));
+    } catch (_) {}
+
+    if (isOnline) {
+      try {
+        const colRef = collection(db, 'products');
+        const snap = await getDocs(colRef);
+        const seenCodes = new Set<string>();
+        for (const d of snap.docs) {
+          const data = d.data() as Product;
+          const codeKey = (data.code || d.id || '').trim().toLowerCase();
+          if (seenCodes.has(codeKey) || d.id !== data.code) {
+            await deleteDoc(d.ref).catch(console.warn);
+            dupCount++;
+          } else {
+            seenCodes.add(codeKey);
+          }
+        }
+        for (const prod of uniqueProducts) {
+          await setDoc(doc(db, 'products', prod.code), cleanDoc(prod));
+        }
+      } catch (e) {
+        console.error("Firestore deduplicate error:", e);
+      }
+    }
+
+    return { duplicatesRemoved: dupCount };
   };
 
   const clearAllProducts = async (): Promise<boolean> => {
@@ -508,31 +815,370 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false;
     }
   };
-  
-  const addCustomer = async (customer: Customer) => { setCustomers(prev => [...prev.filter(c => c.code !== customer.code), customer]); if (isOnline) { try { await setDoc(doc(db, 'customers', customer.code), cleanDoc(customer)); } catch (e) { handleFirebaseError(e); } } };
-  const updateCustomer = async (code: string, updatedData: Partial<Customer>) => { const customer = customers.find(c => c.code === code); if (!customer) return; const newCustomer = { ...customer, ...updatedData }; setCustomers(prev => prev.map(c => c.code === code ? (updatedData.code ? { ...newCustomer, code: updatedData.code } : newCustomer) : c)); if (isOnline) { try { if (updatedData.code && updatedData.code !== code) { await deleteDoc(doc(db, 'customers', code)); await setDoc(doc(db, 'customers', updatedData.code), cleanDoc(newCustomer)); } else { await setDoc(doc(db, 'customers', code), cleanDoc(newCustomer)); } } catch (e) { handleFirebaseError(e); } } };
-  const deleteCustomer = async (code: string) => { setCustomers(prev => prev.filter(c => c.code !== code)); if (isOnline) { try { await deleteDoc(doc(db, 'customers', code)); } catch (e) { handleFirebaseError(e); } } };
 
-  const addSupplier = async (supplier: Supplier) => { setSuppliers(prev => [...prev.filter(s => s.code !== supplier.code), supplier]); if (isOnline) { try { await setDoc(doc(db, 'suppliers', supplier.code), cleanDoc(supplier)); } catch (e) { handleFirebaseError(e); } } };
-  const updateSupplier = async (code: string, updatedData: Partial<Supplier>) => { const supplier = suppliers.find(s => s.code === code); if (!supplier) return; const newSupplier = { ...supplier, ...updatedData }; setSuppliers(prev => prev.map(s => s.code === code ? newSupplier : s)); if (isOnline) { try { await setDoc(doc(db, 'suppliers', code), cleanDoc(newSupplier)); } catch (e) { handleFirebaseError(e); } } };
-  const addEmployee = async (employee: Employee) => { setEmployees(prev => [...prev.filter(e => e.code !== employee.code), employee]); if (isOnline) { try { await setDoc(doc(db, 'employees', employee.code), cleanDoc(employee)); } catch (e) { handleFirebaseError(e); } } };
-  const updateEmployee = async (code: string, updatedData: Partial<Employee>) => { const employee = employees.find(e => e.code === code); if (!employee) return; const newEmployee = { ...employee, ...updatedData }; setEmployees(prev => prev.map(e => e.code === code ? newEmployee : e)); if (isOnline) { try { await setDoc(doc(db, 'employees', code), cleanDoc(newEmployee)); } catch (e) { handleFirebaseError(e); } } };
-  const deleteEmployee = async (code: string) => { setEmployees(prev => prev.filter(e => e.code !== code)); if (isOnline) { try { await deleteDoc(doc(db, 'employees', code)); } catch (e) { handleFirebaseError(e); } } };
+  const transferStockBetweenBranches = async (params: {
+    itemCode: string;
+    fromBranch: BranchId;
+    toBranch: BranchId;
+    quantity: number;
+    notes?: string;
+  }): Promise<boolean> => {
+    const { itemCode, fromBranch, toBranch, quantity } = params;
+    if (fromBranch === toBranch) {
+      alert("لا يمكن التحويل لنفس الإدارة");
+      return false;
+    }
+    if (quantity <= 0) {
+      alert("يرجى إدخال كمية صحيحة للتحويل");
+      return false;
+    }
+    const cleanCode = itemCode.trim();
+    const product = products.find(p => (p.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    if (!product) {
+      alert("الصنف غير موجود بالمخزن");
+      return false;
+    }
+
+    const fromStock = fromBranch === 'NOZHA' 
+      ? (product.quantityNozha !== undefined ? product.quantityNozha : 0) 
+      : (product.quantityMarg !== undefined ? product.quantityMarg : product.quantity);
+
+    if (quantity > fromStock) {
+      alert(`الكمية المطلوبة للتحويل (${quantity}) أكبر من الرصيد المتوفر في ${fromBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'} (${fromStock})`);
+      return false;
+    }
+
+    const currentMarg = product.quantityMarg !== undefined ? product.quantityMarg : product.quantity;
+    const currentNozha = product.quantityNozha !== undefined ? product.quantityNozha : 0;
+
+    const newMarg = fromBranch === 'MARG' ? currentMarg - quantity : currentMarg + quantity;
+    const newNozha = fromBranch === 'NOZHA' ? currentNozha - quantity : currentNozha + quantity;
+    const totalQ = newMarg + newNozha;
+
+    const updatedProduct: Product = {
+      ...product,
+      quantityMarg: newMarg,
+      quantityNozha: newNozha,
+      quantity: totalQ
+    };
+
+    setProducts(prev => prev.map(p => (p.code || '').trim().toLowerCase() === cleanCode.toLowerCase() ? updatedProduct : p));
+
+    if (isOnline) {
+      try {
+        const pRef = doc(db, 'products', product.code);
+        await updateDoc(pRef, {
+          quantityMarg: newMarg,
+          quantityNozha: newNozha,
+          quantity: totalQ
+        });
+      } catch (e) {
+        handleFirebaseError(e);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const transferCashBetweenBranches = async (params: {
+    fromBranch: BranchId;
+    toBranch: BranchId;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    date: string;
+    notes?: string;
+  }): Promise<boolean> => {
+    const { fromBranch, toBranch, amount, paymentMethod, date, notes } = params;
+    if (fromBranch === toBranch) {
+      alert("لا يمكن التحويل لنفس الخزينة");
+      return false;
+    }
+    if (amount <= 0) {
+      alert("يرجى إدخال مبلغ صحيح");
+      return false;
+    }
+
+    const fromName = fromBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج';
+    const toName = toBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج';
+
+    const tOutId = `TR_OUT_${Date.now()}`;
+    const tInId = `TR_IN_${Date.now() + 1}`;
+
+    const txOut: TreasuryTransaction = {
+      id: tOutId,
+      branchId: fromBranch,
+      date,
+      credit: 0,
+      debit: amount,
+      balance: 0,
+      paymentMethod,
+      description: `تحويل نقدية إلى ${toName}${notes ? ` - ${notes}` : ''}`
+    };
+
+    const txIn: TreasuryTransaction = {
+      id: tInId,
+      branchId: toBranch,
+      date,
+      credit: amount,
+      debit: 0,
+      balance: 0,
+      paymentMethod,
+      description: `تحويل نقدية وارد من ${fromName}${notes ? ` - ${notes}` : ''}`
+    };
+
+    setTreasury(prev => [...prev, txOut, txIn]);
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'treasury', tOutId), cleanDoc(txOut));
+        await setDoc(doc(db, 'treasury', tInId), cleanDoc(txIn));
+      } catch (e) {
+        handleFirebaseError(e);
+        return false;
+      }
+    }
+    return true;
+  };
+  
+  const addCustomer = async (customer: Customer) => {
+    const cleanCode = (customer.code || '').trim();
+    if (!cleanCode) return;
+    const bId: BranchId = customer.branchId === 'NOZHA' ? 'NOZHA' : 'MARG';
+    const cArea = customer.area?.trim() || (bId === 'NOZHA' ? 'النزهة الجديدة' : 'المرج القديمة');
+    const sanitized: Customer = {
+      ...customer,
+      code: cleanCode,
+      name: (customer.name || '').trim(),
+      branchId: bId,
+      area: cArea
+    };
+    setCustomers(prev => {
+      const map = new Map<string, Customer>();
+      prev.forEach(c => {
+        const code = (c.code || '').trim();
+        if (code) map.set(code.toLowerCase(), { ...c, code });
+      });
+      map.set(cleanCode.toLowerCase(), sanitized);
+      return Array.from(map.values());
+    });
+    if (isOnline) {
+      try { await setDoc(doc(db, 'customers', cleanCode), cleanDoc(sanitized)); }
+      catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const updateCustomer = async (code: string, updatedData: Partial<Customer>) => {
+    const cleanCode = (code || '').trim();
+    const customer = customers.find(c => (c.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    if (!customer) return;
+    const newCustomer = { ...customer, ...updatedData };
+    if (updatedData.code) newCustomer.code = updatedData.code.trim();
+    if (updatedData.branchId) newCustomer.branchId = updatedData.branchId;
+    if (updatedData.area !== undefined) newCustomer.area = updatedData.area;
+
+    setCustomers(prev => {
+      const map = new Map<string, Customer>();
+      prev.forEach(c => {
+        const cCode = (c.code || '').trim();
+        if (cCode && cCode.toLowerCase() !== cleanCode.toLowerCase()) {
+          map.set(cCode.toLowerCase(), { ...c, code: cCode });
+        }
+      });
+      map.set((newCustomer.code || cleanCode).toLowerCase(), newCustomer);
+      return Array.from(map.values());
+    });
+
+    if (isOnline) {
+      try {
+        if (updatedData.code && updatedData.code.trim().toLowerCase() !== cleanCode.toLowerCase()) {
+          await deleteDoc(doc(db, 'customers', cleanCode));
+          await setDoc(doc(db, 'customers', newCustomer.code), cleanDoc(newCustomer));
+        } else {
+          await setDoc(doc(db, 'customers', cleanCode), cleanDoc(newCustomer));
+        }
+      } catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const deleteCustomer = async (code: string) => {
+    const cleanCode = (code || '').trim();
+    const now = new Date().toISOString();
+    setCustomers(prev => prev.map(c => (c.code || '').trim().toLowerCase() === cleanCode.toLowerCase() ? { ...c, isDeleted: true, deletedAt: now } : c));
+    if (isOnline) {
+      try { 
+        await setDoc(doc(db, 'customers', cleanCode), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true }); 
+      }
+      catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const addSupplier = async (supplier: Supplier) => {
+    const cleanCode = (supplier.code || '').trim();
+    if (!cleanCode) return;
+    const sanitized = { ...supplier, code: cleanCode, name: (supplier.name || '').trim() };
+    setSuppliers(prev => {
+      const map = new Map<string, Supplier>();
+      prev.forEach(s => {
+        const code = (s.code || '').trim();
+        if (code) map.set(code.toLowerCase(), { ...s, code });
+      });
+      map.set(cleanCode.toLowerCase(), sanitized);
+      return Array.from(map.values());
+    });
+    if (isOnline) {
+      try { await setDoc(doc(db, 'suppliers', cleanCode), cleanDoc(sanitized)); }
+      catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const updateSupplier = async (code: string, updatedData: Partial<Supplier>) => {
+    const cleanCode = (code || '').trim();
+    const supplier = suppliers.find(s => (s.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    if (!supplier) return;
+    const newSupplier = { ...supplier, ...updatedData };
+    if (updatedData.code) newSupplier.code = updatedData.code.trim();
+
+    setSuppliers(prev => {
+      const map = new Map<string, Supplier>();
+      prev.forEach(s => {
+        const sCode = (s.code || '').trim();
+        if (sCode && sCode.toLowerCase() !== cleanCode.toLowerCase()) {
+          map.set(sCode.toLowerCase(), { ...s, code: sCode });
+        }
+      });
+      map.set((newSupplier.code || cleanCode).toLowerCase(), newSupplier);
+      return Array.from(map.values());
+    });
+
+    if (isOnline) {
+      try {
+        if (updatedData.code && updatedData.code.trim().toLowerCase() !== cleanCode.toLowerCase()) {
+          await deleteDoc(doc(db, 'suppliers', cleanCode));
+          await setDoc(doc(db, 'suppliers', newSupplier.code), cleanDoc(newSupplier));
+        } else {
+          await setDoc(doc(db, 'suppliers', cleanCode), cleanDoc(newSupplier));
+        }
+      } catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const deleteSupplier = async (code: string): Promise<{ success: boolean; message?: string }> => {
+    const cleanCode = (code || '').trim();
+    const supplier = suppliers.find(s => (s.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    if (!supplier) {
+      return { success: false, message: 'المورد غير موجود بالبيانات.' };
+    }
+
+    // Safety checks: check if supplier has purchases, balance, or history
+    const hasPurchases = purchases.some(p => !p.isDeleted && (p.supplierCode || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    const hasBalance = Number(supplier.balance || 0) !== 0;
+    const hasHistory = Array.isArray(supplier.history) && supplier.history.length > 0;
+
+    if (hasPurchases || hasBalance || hasHistory) {
+      const reason = hasPurchases 
+        ? 'لوجود فواتير مشتريات مسجلة باسم هذا المورد' 
+        : hasBalance 
+        ? `لوجود رصيد مالي قائم (${supplier.balance.toLocaleString()} ج.م)` 
+        : 'لوجود حركات مالية مسجلة بكشف حسابه';
+      const msg = `لا يمكن حذف المورد (${supplier.name}) ${reason}، يمكنك تعديل بياناته فقط.`;
+      return { success: false, message: msg };
+    }
+
+    const now = new Date().toISOString();
+    // Soft delete update
+    setSuppliers(prev => prev.map(s => (s.code || '').trim().toLowerCase() === cleanCode.toLowerCase() ? { ...s, isDeleted: true, deletedAt: now } : s));
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'suppliers', cleanCode), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true });
+        return { success: true };
+      } catch (e) {
+        handleFirebaseError(e);
+        return { success: false, message: 'حدث خطأ أثناء الاتصال بقاعدة البيانات لحذف المورد.' };
+      }
+    }
+
+    return { success: true };
+  };
+
+  const addEmployee = async (employee: Employee) => {
+    const cleanCode = (employee.code || '').trim();
+    if (!cleanCode) return;
+    const sanitized = { ...employee, code: cleanCode, name: (employee.name || '').trim() };
+    setEmployees(prev => {
+      const map = new Map<string, Employee>();
+      prev.forEach(e => {
+        const code = (e.code || '').trim();
+        if (code) map.set(code.toLowerCase(), { ...e, code });
+      });
+      map.set(cleanCode.toLowerCase(), sanitized);
+      return Array.from(map.values());
+    });
+    if (isOnline) {
+      try { await setDoc(doc(db, 'employees', cleanCode), cleanDoc(sanitized)); }
+      catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const updateEmployee = async (code: string, updatedData: Partial<Employee>) => {
+    const cleanCode = (code || '').trim();
+    const employee = employees.find(e => (e.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
+    if (!employee) return;
+    const newEmployee = { ...employee, ...updatedData };
+    if (updatedData.code) newEmployee.code = updatedData.code.trim();
+
+    setEmployees(prev => {
+      const map = new Map<string, Employee>();
+      prev.forEach(e => {
+        const eCode = (e.code || '').trim();
+        if (eCode && eCode.toLowerCase() !== cleanCode.toLowerCase()) {
+          map.set(eCode.toLowerCase(), { ...e, code: eCode });
+        }
+      });
+      map.set((newEmployee.code || cleanCode).toLowerCase(), newEmployee);
+      return Array.from(map.values());
+    });
+
+    if (isOnline) {
+      try {
+        if (updatedData.code && updatedData.code.trim().toLowerCase() !== cleanCode.toLowerCase()) {
+          await deleteDoc(doc(db, 'employees', cleanCode));
+          await setDoc(doc(db, 'employees', newEmployee.code), cleanDoc(newEmployee));
+        } else {
+          await setDoc(doc(db, 'employees', cleanCode), cleanDoc(newEmployee));
+        }
+      } catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const deleteEmployee = async (code: string) => {
+    const cleanCode = (code || '').trim();
+    setEmployees(prev => prev.filter(e => (e.code || '').trim().toLowerCase() !== cleanCode.toLowerCase()));
+    if (isOnline) {
+      try { await deleteDoc(doc(db, 'employees', cleanCode)); }
+      catch (e) { handleFirebaseError(e); }
+    }
+  };
 
   // --- Purchase Logic ---
 
   const addPurchase = async (purchaseData: Omit<Purchase, 'previousBalance' | 'currentBalance'>) => {
     // Determine ID if not provided (fallback, but page should provide)
     const id = purchaseData.id || `R${Date.now()}`;
+    const isPendingPrice = purchaseData.pricingStatus === 'PENDING_PRICE';
     
     // Calculate balances snapshot
     const supplier = suppliers.find(s => s.code === purchaseData.supplierCode);
     const prevBalance = supplier ? supplier.balance : 0;
-    const newBalance = prevBalance + purchaseData.total;
+    // If pending price, supplier balance is unchanged until price is finalized
+    const newBalance = isPendingPrice ? prevBalance : (prevBalance + purchaseData.total);
 
+    const pBranch: BranchId = purchaseData.branchId || 'MARG';
     const newPurchase: Purchase = { 
       ...purchaseData, 
       id,
+      branchId: pBranch,
+      pricingStatus: isPendingPrice ? 'PENDING_PRICE' : 'PRICED',
       previousBalance: prevBalance, 
       currentBalance: newBalance 
     };
@@ -547,18 +1193,29 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           
           if (productSnap.exists()) {
             const product = productSnap.data() as Product;
-            const totalOldValue = product.quantity * product.avgCost;
-            const totalNewValue = item.quantity * item.price;
-            const newQty = product.quantity + item.quantity;
-            const newAvgCost = (totalOldValue + totalNewValue) / newQty;
-            await updateDoc(productRef, { quantity: newQty, avgCost: newAvgCost });
+            const totalOldValue = product.quantity * (product.avgCost || 0);
+            const totalNewValue = item.price > 0 ? (item.quantity * item.price) : 0;
+            const oldMarg = product.quantityMarg !== undefined ? Number(product.quantityMarg) : Number(product.quantity || 0);
+            const oldNozha = product.quantityNozha !== undefined ? Number(product.quantityNozha) : 0;
+            const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+            const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+            const newQty = newMarg + newNozha;
+            // Only recompute avgCost if item has a known price > 0
+            const newAvgCost = item.price > 0 && newQty > 0
+              ? (totalOldValue + totalNewValue) / newQty 
+              : (product.avgCost || 0);
+            await updateDoc(productRef, { quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvgCost });
           } else {
+            const newMarg = pBranch === 'MARG' ? item.quantity : 0;
+            const newNozha = pBranch === 'NOZHA' ? item.quantity : 0;
             await setDoc(productRef, { 
               code: item.itemCode, 
               name: item.itemName, 
               quantity: item.quantity, 
-              avgCost: item.price, 
-              price: item.price * 1.2 
+              quantityMarg: newMarg,
+              quantityNozha: newNozha,
+              avgCost: item.price || 0, 
+              price: (item.price || 0) * 1.2 
             });
           }
         }
@@ -567,7 +1224,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const supplierSnap = await getDoc(supplierRef);
         if (supplierSnap.exists()) {
           const s = supplierSnap.data() as Supplier;
-          const newHistory = [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${newPurchase.id}`, amount: purchaseData.total }];
+          const desc = isPendingPrice 
+            ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
+            : `فاتورة مشتريات #${newPurchase.id}`;
+          const newHistory = [...s.history, { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }];
           await updateDoc(supplierRef, { balance: newBalance, history: newHistory });
         }
       } catch (e) { handleFirebaseError(e); }
@@ -580,16 +1240,26 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const idx = tempProducts.findIndex(p => p.code === item.itemCode);
           if (idx >= 0) {
             const existing = tempProducts[idx];
-            const newQty = existing.quantity + item.quantity;
-            const newAvg = ((existing.quantity * existing.avgCost) + (item.quantity * item.price)) / newQty;
-            tempProducts[idx] = { ...existing, quantity: newQty, avgCost: newAvg };
+            const oldMarg = existing.quantityMarg !== undefined ? Number(existing.quantityMarg) : Number(existing.quantity || 0);
+            const oldNozha = existing.quantityNozha !== undefined ? Number(existing.quantityNozha) : 0;
+            const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+            const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+            const newQty = newMarg + newNozha;
+            const newAvg = item.price > 0 && newQty > 0
+              ? ((existing.quantity * (existing.avgCost || 0)) + (item.quantity * item.price)) / newQty
+              : (existing.avgCost || 0);
+            tempProducts[idx] = { ...existing, quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvg };
           } else {
+             const newMarg = pBranch === 'MARG' ? item.quantity : 0;
+             const newNozha = pBranch === 'NOZHA' ? item.quantity : 0;
              tempProducts.push({ 
                code: item.itemCode, 
                name: item.itemName, 
                quantity: item.quantity, 
-               avgCost: item.price, 
-               price: item.price * 1.2 
+               quantityMarg: newMarg,
+               quantityNozha: newNozha,
+               avgCost: item.price || 0, 
+               price: (item.price || 0) * 1.2 
              });
           }
         });
@@ -598,15 +1268,107 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       setSuppliers(prev => prev.map(s => {
          if (s.code === purchaseData.supplierCode) {
+           const desc = isPendingPrice 
+             ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
+             : `فاتورة مشتريات #${newPurchase.id}`;
            return { 
              ...s, 
              balance: newBalance, 
-             history: [...s.history, { date: purchaseData.date, description: `فاتورة مشتريات #${newPurchase.id}`, amount: purchaseData.total }]
+             history: [...s.history, { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }]
            };
          }
          return s;
       }));
     }
+  };
+
+  const finalizePurchasePrice = async (purchaseId: string, updatedItems: InvoiceItem[], newTotal: number): Promise<boolean> => {
+    const cleanId = purchaseId.trim();
+    const existingPurchase = purchases.find(p => p.id === cleanId);
+    if (!existingPurchase) {
+      alert("فاتورة المشتريات غير موجودة");
+      return false;
+    }
+
+    const supplier = suppliers.find(s => s.code === existingPurchase.supplierCode);
+    const prevBalance = supplier ? supplier.balance : 0;
+    const newBalance = prevBalance + newTotal;
+
+    const finalizedPurchase: Purchase = {
+      ...existingPurchase,
+      pricingStatus: 'PRICED',
+      items: updatedItems,
+      total: newTotal,
+      previousBalance: prevBalance,
+      currentBalance: newBalance
+    };
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'purchases', cleanId), finalizedPurchase);
+
+        // Update product avgCosts with agreed unit prices
+        for (const item of updatedItems) {
+          if (item.price > 0) {
+            const productRef = doc(db, 'products', item.itemCode);
+            const productSnap = await getDoc(productRef);
+            if (productSnap.exists()) {
+              const prod = productSnap.data() as Product;
+              const currentQty = prod.quantity || 0;
+              const oldVal = Math.max(0, currentQty - item.quantity) * (prod.avgCost || 0);
+              const newVal = item.quantity * item.price;
+              const newAvg = currentQty > 0 ? (oldVal + newVal) / currentQty : item.price;
+              await updateDoc(productRef, { avgCost: Math.max(0, newAvg) });
+            }
+          }
+        }
+
+        // Update supplier balance & history
+        const supplierRef = doc(db, 'suppliers', existingPurchase.supplierCode);
+        const supplierSnap = await getDoc(supplierRef);
+        if (supplierSnap.exists()) {
+          const s = supplierSnap.data() as Supplier;
+          const cleanHistory = (s.history || []).filter(h => !h.description.includes(`#${cleanId}`));
+          const newHistory = [
+            ...cleanHistory,
+            { date: existingPurchase.date, description: `اعتماد وتسعير فاتورة مشتريات #${cleanId}`, amount: newTotal }
+          ];
+          await updateDoc(supplierRef, { balance: s.balance + newTotal, history: newHistory });
+        }
+      } catch (e) {
+        handleFirebaseError(e);
+        return false;
+      }
+    }
+
+    // Local synchronous state updates
+    setPurchases(prev => prev.map(p => p.id === cleanId ? finalizedPurchase : p));
+
+    setSuppliers(prev => prev.map(s => {
+      if (s.code === existingPurchase.supplierCode) {
+        const cleanHistory = (s.history || []).filter(h => !h.description.includes(`#${cleanId}`));
+        const newHistory = [
+          ...cleanHistory,
+          { date: existingPurchase.date, description: `اعتماد وتسعير فاتورة مشتريات #${cleanId}`, amount: newTotal }
+        ];
+        return { ...s, balance: s.balance + newTotal, history: newHistory };
+      }
+      return s;
+    }));
+
+    setProducts(prev => prev.map(prod => {
+      const matchedItem = updatedItems.find(i => i.itemCode === prod.code);
+      if (matchedItem && matchedItem.price > 0) {
+        const currentQty = prod.quantity || 0;
+        const oldVal = Math.max(0, currentQty - matchedItem.quantity) * (prod.avgCost || 0);
+        const newVal = matchedItem.quantity * matchedItem.price;
+        const newAvg = currentQty > 0 ? (oldVal + newVal) / currentQty : matchedItem.price;
+        return { ...prod, avgCost: Math.max(0, newAvg) };
+      }
+      return prod;
+    }));
+
+    return true;
   };
 
   const updatePurchase = async (oldPurchase: Purchase, newPurchaseData: Purchase) => {
@@ -759,12 +1521,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deletePurchase = async (id: string) => {
+    const now = new Date().toISOString();
+    setPurchases(prev => prev.map(p => p.id === id ? { ...p, isDeleted: true, deletedAt: now } : p));
     if (isOnline) {
       try {
-        await deleteDoc(doc(db, 'purchases', id));
+        await setDoc(doc(db, 'purchases', id), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true });
       } catch (e) { handleFirebaseError(e); }
-    } else {
-      setPurchases(prev => prev.filter(p => p.id !== id));
     }
   };
 
@@ -778,6 +1540,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const addInvoice = async (invoiceData: {
     id: string; 
+    branchId?: BranchId;
+    area?: string;
     date: string; 
     time: string; 
     customerCode: string; 
@@ -796,13 +1560,18 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const currentCustomer = customers.find(c => c.code === invoiceData.customerCode);
     const prevBalance = currentCustomer ? currentCustomer.balance : 0;
-    // Customer balance: debt is -total, payment is +paidAmount => net change is -(total - paidAmount) = -remainingAmount
-    const netDebtIncrease = remainingAmount;
-    const newCustomerBalance = prevBalance - netDebtIncrease;
+    const branchId: BranchId = invoiceData.branchId || currentCustomer?.branchId || 'MARG';
+    const area = invoiceData.area || currentCustomer?.area || (branchId === 'NOZHA' ? 'النزهة الجديدة' : 'المرج القديمة');
+
+    // Customer balance: debt is -total, payment is +paidAmount => net change is -total + paidAmount
+    // إذا كان المدفوع أكبر من إجمالي الفاتورة، يُخصم الفائض تلقائياً من إجمالي مديونية العميل السابقة
+    const newCustomerBalance = prevBalance - total + paidAmount;
     
     // Clean newInvoice without ANY undefined fields
     const newInvoice: SalesInvoice = {
       id: invoiceData.id,
+      branchId,
+      area,
       date: invoiceData.date,
       time: invoiceData.time,
       customerCode: invoiceData.customerCode,
@@ -830,17 +1599,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         description: `فاتورة بيع #${id} (آجل بالكامل)`, 
         amount: -total 
       });
-    } else if (paidAmount >= total) {
-      historyEntries.push({ 
-        date: invoiceData.date, 
-        description: `فاتورة بيع #${id} (إجمالي ${total.toLocaleString()})`, 
-        amount: -total 
-      });
-      historyEntries.push({ 
-        date: invoiceData.date, 
-        description: 'دفعة', 
-        amount: paidAmount 
-      });
     } else {
       historyEntries.push({ 
         date: invoiceData.date, 
@@ -849,7 +1607,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       historyEntries.push({ 
         date: invoiceData.date, 
-        description: 'دفعة', 
+        description: paidAmount > total ? 'دفعة (شاملة سداد مديونية سابقة)' : 'دفعة', 
         amount: paidAmount 
       });
     }
@@ -858,12 +1616,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     let treasuryTx: TreasuryTransaction | null = null;
     if (paidAmount > 0) {
       const tId = `T_INV_${id}_${Date.now()}`;
-      const desc = paidAmount >= total 
-        ? `تحصيل كلي فاتورة بيع #${id} - العميل (${invoiceData.customerName || invoiceData.customerCode})`
-        : `تحصيل دفعة من فاتورة بيع #${id} - العميل (${invoiceData.customerName || invoiceData.customerCode}) [متبقي: ${remainingAmount.toLocaleString()}]`;
+      const desc = paidAmount > total
+        ? `تحصيل فاتورة بيع #${id} مع سداد مديونية سابقة - العميل (${invoiceData.customerName || invoiceData.customerCode}) [فائض مسدد: ${(paidAmount - total).toLocaleString()}]`
+        : paidAmount === total 
+          ? `تحصيل كلي فاتورة بيع #${id} - العميل (${invoiceData.customerName || invoiceData.customerCode})`
+          : `تحصيل دفعة من فاتورة بيع #${id} - العميل (${invoiceData.customerName || invoiceData.customerCode}) [متبقي: ${remainingAmount.toLocaleString()}]`;
 
       treasuryTx = {
         id: tId,
+        branchId,
         invoiceNumber: id,
         date: invoiceData.date,
         credit: paidAmount,
@@ -888,6 +1649,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return [...prev, { 
           code: invoiceData.customerCode, 
           name: invoiceData.customerName, 
+          branchId,
+          area,
           balance: newCustomerBalance, 
           history: historyEntries 
         }];
@@ -900,7 +1663,19 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       let newP = [...prev];
       invoiceData.items.forEach(item => {
         const idx = newP.findIndex(p => p.code === item.itemCode);
-        if (idx >= 0) newP[idx] = { ...newP[idx], quantity: newP[idx].quantity - item.quantity };
+        if (idx >= 0) {
+          const prod = newP[idx];
+          const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+          const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+          const newMarg = branchId === 'MARG' ? oldMarg - item.quantity : oldMarg;
+          const newNozha = branchId === 'NOZHA' ? oldNozha - item.quantity : oldNozha;
+          newP[idx] = { 
+            ...prod, 
+            quantityMarg: newMarg, 
+            quantityNozha: newNozha, 
+            quantity: newMarg + newNozha 
+          };
+        }
       });
       return newP;
     });
@@ -920,6 +1695,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           await setDoc(customerRef, cleanDoc({
             code: invoiceData.customerCode, 
             name: invoiceData.customerName, 
+            branchId,
+            area,
             balance: newCustomerBalance, 
             history: historyEntries
           }));
@@ -935,7 +1712,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const pSnap = await getDoc(pRef);
           if (pSnap.exists()) {
             const p = pSnap.data() as Product;
-            await updateDoc(pRef, { quantity: p.quantity - item.quantity });
+            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+            const newMarg = branchId === 'MARG' ? oldMarg - item.quantity : oldMarg;
+            const newNozha = branchId === 'NOZHA' ? oldNozha - item.quantity : oldNozha;
+            await updateDoc(pRef, { 
+              quantityMarg: newMarg, 
+              quantityNozha: newNozha, 
+              quantity: newMarg + newNozha 
+            });
           }
         }
       } catch (e) { handleFirebaseError(e); }
@@ -1006,6 +1791,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return c;
     }));
 
+    const oldBranch: BranchId = oldInvoice.branchId || 'MARG';
+    const newBranch: BranchId = newInvoiceData.branchId || 'MARG';
+
     setTreasury(prev => {
       const withoutOld = prev.filter(t => t.invoiceNumber !== oldInvoice.id);
       if (newPaid > 0) {
@@ -1016,6 +1804,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         const newTx: TreasuryTransaction = {
           id: tId,
+          branchId: newBranch,
           invoiceNumber: oldInvoice.id,
           date: newInvoiceData.date,
           credit: newPaid,
@@ -1033,11 +1822,25 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       let tempProducts = [...prev];
       oldInvoice.items.forEach(item => {
         const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-        if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity + item.quantity};
+        if (idx >= 0) {
+          const prod = tempProducts[idx];
+          const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+          const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+          const newMarg = oldBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+          const newNozha = oldBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+          tempProducts[idx] = { ...prod, quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha };
+        }
       });
       newInvoiceData.items.forEach(item => {
         const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-        if(idx >= 0) tempProducts[idx] = {...tempProducts[idx], quantity: tempProducts[idx].quantity - item.quantity};
+        if (idx >= 0) {
+          const prod = tempProducts[idx];
+          const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+          const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+          const newMarg = newBranch === 'MARG' ? oldMarg - item.quantity : oldMarg;
+          const newNozha = newBranch === 'NOZHA' ? oldNozha - item.quantity : oldNozha;
+          tempProducts[idx] = { ...prod, quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha };
+        }
       });
       return tempProducts;
     });
@@ -1105,6 +1908,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
           const newTx: TreasuryTransaction = {
             id: tId,
+            branchId: newBranch,
             invoiceNumber: oldInvoice.id,
             date: newInvoiceData.date,
             credit: newPaid,
@@ -1122,7 +1926,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const pSnap = await getDoc(pRef);
           if (pSnap.exists()) {
             const p = pSnap.data() as Product;
-            await updateDoc(pRef, { quantity: p.quantity + item.quantity });
+            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+            const newMarg = oldBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+            const newNozha = oldBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+            await updateDoc(pRef, { quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha });
           }
         }
         for (const item of newInvoiceData.items) {
@@ -1130,7 +1938,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const pSnap = await getDoc(pRef);
           if (pSnap.exists()) {
             const p = pSnap.data() as Product;
-            await updateDoc(pRef, { quantity: p.quantity - item.quantity });
+            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+            const newMarg = newBranch === 'MARG' ? oldMarg - item.quantity : oldMarg;
+            const newNozha = newBranch === 'NOZHA' ? oldNozha - item.quantity : oldNozha;
+            await updateDoc(pRef, { quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha });
           }
         }
 
@@ -1142,10 +1954,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const inv = invoices.find(i => i.id === id);
     if (!inv) return;
 
-    const remainingDebt = inv.remainingAmount !== undefined ? inv.remainingAmount : (inv.total - (inv.paidAmount || 0));
+    const remainingDebt = inv.total - (inv.paidAmount || 0);
+    const invBranch: BranchId = inv.branchId || 'MARG';
+    const now = new Date().toISOString();
 
     // Immediate Optimistic State Update
-    setInvoices(prev => prev.filter(i => i.id !== id));
+    setInvoices(prev => prev.map(i => i.id === id ? { ...i, isDeleted: true, deletedAt: now } : i));
     setCustomers(prev => prev.map(c => {
       if (c.code === inv.customerCode) {
         return {
@@ -1168,14 +1982,21 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       let temp = [...prev];
       inv.items.forEach(item => {
         const idx = temp.findIndex(p => p.code === item.itemCode);
-        if (idx >= 0) temp[idx] = { ...temp[idx], quantity: temp[idx].quantity + item.quantity };
+        if (idx >= 0) {
+          const prod = temp[idx];
+          const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+          const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+          const newMarg = invBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+          const newNozha = invBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+          temp[idx] = { ...prod, quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha };
+        }
       });
       return temp;
     });
 
     if (isOnline) {
       try {
-        await deleteDoc(doc(db, 'invoices', id));
+        await setDoc(doc(db, 'invoices', id), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true });
 
         // Revert Customer Balance for the remaining debt of this invoice
         const customerRef = doc(db, 'customers', inv.customerCode);
@@ -1208,10 +2029,163 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const pSnap = await getDoc(pRef);
           if (pSnap.exists()) {
             const p = pSnap.data() as Product;
-            await updateDoc(pRef, { quantity: p.quantity + item.quantity });
+            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+            const newMarg = invBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+            const newNozha = invBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+            await updateDoc(pRef, { quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha });
           }
         }
       } catch (e) { handleFirebaseError(e); }
+    }
+  };
+
+  const restoreEntity = async (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string): Promise<{ success: boolean; message?: string }> => {
+    const cleanId = (id || '').trim();
+    if (!cleanId) return { success: false, message: 'المعرف غير صالح.' };
+
+    try {
+      if (type === 'customer') {
+        setCustomers(prev => prev.map(c => (c.code || '').trim().toLowerCase() === cleanId.toLowerCase() ? { ...c, isDeleted: false, deletedAt: undefined } : c));
+        if (isOnline) {
+          await setDoc(doc(db, 'customers', cleanId), cleanDoc({ isDeleted: false, deletedAt: '' }), { merge: true });
+        }
+        return { success: true };
+      } else if (type === 'supplier') {
+        setSuppliers(prev => prev.map(s => (s.code || '').trim().toLowerCase() === cleanId.toLowerCase() ? { ...s, isDeleted: false, deletedAt: undefined } : s));
+        if (isOnline) {
+          await setDoc(doc(db, 'suppliers', cleanId), cleanDoc({ isDeleted: false, deletedAt: '' }), { merge: true });
+        }
+        return { success: true };
+      } else if (type === 'purchase') {
+        setPurchases(prev => prev.map(p => p.id === cleanId ? { ...p, isDeleted: false, deletedAt: undefined } : p));
+        if (isOnline) {
+          await setDoc(doc(db, 'purchases', cleanId), cleanDoc({ isDeleted: false, deletedAt: '' }), { merge: true });
+        }
+        return { success: true };
+      } else if (type === 'invoice') {
+        const inv = invoices.find(i => i.id === cleanId);
+        if (!inv) return { success: false, message: 'الفاتورة غير موجودة.' };
+
+        const remainingDebt = inv.remainingAmount !== undefined ? inv.remainingAmount : (inv.total - (inv.paidAmount || 0));
+        const invBranch: BranchId = inv.branchId || 'MARG';
+
+        // Restore invoice state
+        setInvoices(prev => prev.map(i => i.id === cleanId ? { ...i, isDeleted: false, deletedAt: undefined } : i));
+
+        // Re-apply Customer Balance (subtract debt from customer balance)
+        setCustomers(prev => prev.map(c => {
+          if (c.code === inv.customerCode) {
+            return {
+              ...c,
+              balance: c.balance - remainingDebt,
+              history: [
+                ...(c.history || []),
+                {
+                  date: new Date().toISOString().split('T')[0],
+                  description: `استرجاع فاتورة بيع #${cleanId}`,
+                  amount: -remainingDebt
+                }
+              ]
+            };
+          }
+          return c;
+        }));
+
+        // Deduct inventory items again
+        setProducts(prev => {
+          let temp = [...prev];
+          inv.items.forEach(item => {
+            const idx = temp.findIndex(p => p.code === item.itemCode);
+            if (idx >= 0) {
+              const prod = temp[idx];
+              const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+              const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+              const newMarg = invBranch === 'MARG' ? Math.max(0, oldMarg - item.quantity) : oldMarg;
+              const newNozha = invBranch === 'NOZHA' ? Math.max(0, oldNozha - item.quantity) : oldNozha;
+              temp[idx] = { ...prod, quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha };
+            }
+          });
+          return temp;
+        });
+
+        if (isOnline) {
+          await setDoc(doc(db, 'invoices', cleanId), cleanDoc({ isDeleted: false, deletedAt: '' }), { merge: true });
+
+          // Update Customer in Firestore
+          const customerRef = doc(db, 'customers', inv.customerCode);
+          const customerSnap = await getDoc(customerRef);
+          if (customerSnap.exists()) {
+            const c = customerSnap.data() as Customer;
+            const newBalance = c.balance - remainingDebt;
+            const newHistory = [
+              ...(c.history || []),
+              {
+                date: new Date().toISOString().split('T')[0],
+                description: `استرجاع فاتورة بيع #${cleanId}`,
+                amount: -remainingDebt
+              }
+            ];
+            await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: newHistory }));
+          }
+
+          // Update product stocks in Firestore
+          for (const item of inv.items) {
+            const pRef = doc(db, 'products', item.itemCode);
+            const pSnap = await getDoc(pRef);
+            if (pSnap.exists()) {
+              const p = pSnap.data() as Product;
+              const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+              const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+              const newMarg = invBranch === 'MARG' ? Math.max(0, oldMarg - item.quantity) : oldMarg;
+              const newNozha = invBranch === 'NOZHA' ? Math.max(0, oldNozha - item.quantity) : oldNozha;
+              await updateDoc(pRef, { quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha });
+            }
+          }
+        }
+        return { success: true };
+      }
+      return { success: false, message: 'نوع غير مدعوم' };
+    } catch (e: any) {
+      handleFirebaseError(e);
+      return { success: false, message: e?.message || 'حدث خطأ أثناء الاسترجاع' };
+    }
+  };
+
+  const permanentDeleteEntity = async (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string): Promise<{ success: boolean; message?: string }> => {
+    const cleanId = (id || '').trim();
+    if (!cleanId) return { success: false, message: 'المعرف غير صالح.' };
+
+    try {
+      if (type === 'customer') {
+        setCustomers(prev => prev.filter(c => (c.code || '').trim().toLowerCase() !== cleanId.toLowerCase()));
+        if (isOnline) {
+          await deleteDoc(doc(db, 'customers', cleanId));
+        }
+        return { success: true };
+      } else if (type === 'supplier') {
+        setSuppliers(prev => prev.filter(s => (s.code || '').trim().toLowerCase() !== cleanId.toLowerCase()));
+        if (isOnline) {
+          await deleteDoc(doc(db, 'suppliers', cleanId));
+        }
+        return { success: true };
+      } else if (type === 'purchase') {
+        setPurchases(prev => prev.filter(p => p.id !== cleanId));
+        if (isOnline) {
+          await deleteDoc(doc(db, 'purchases', cleanId));
+        }
+        return { success: true };
+      } else if (type === 'invoice') {
+        setInvoices(prev => prev.filter(i => i.id !== cleanId));
+        if (isOnline) {
+          await deleteDoc(doc(db, 'invoices', cleanId));
+        }
+        return { success: true };
+      }
+      return { success: false, message: 'نوع غير مدعوم' };
+    } catch (e: any) {
+      handleFirebaseError(e);
+      return { success: false, message: e?.message || 'حدث خطأ أثناء الحذف النهائي' };
     }
   };
 
@@ -1242,6 +2216,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateUser = async (id: string, updatedData: Partial<User>) => {
+    const targetUser = users.find(u => u.id === id);
+    if (id === '1' || targetUser?.username === 'admin') {
+      alert('حساب الأدمن الأساسي محمي ولا يمكن تعديل بياناته أو كلمة مروره.');
+      return;
+    }
     if (isOnline) {
       try { await updateDoc(doc(db, 'users', id), updatedData); } catch (e) { handleFirebaseError(e); }
     } else {
@@ -1250,6 +2229,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteUser = async (id: string) => {
+    const targetUser = users.find(u => u.id === id);
+    if (id === '1' || targetUser?.username === 'admin') {
+      alert('لا يمكن حذف حساب الأدمن الأساسي (admin).');
+      return false;
+    }
     if (isOnline) {
       try { await deleteDoc(doc(db, 'users', id)); return true; } catch (e) { handleFirebaseError(e); return false; }
     } else {
@@ -1319,13 +2303,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const addTransfer = async (data: { entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod }) => {
+  const addTransfer = async (data: { branchId?: BranchId; entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod }) => {
       const { entityType, entityCode, amount, type, date, notes, paymentMethod } = data;
       const tId = `TR${Date.now()}`;
       let treasuryDesc = '';
+      let branchId: BranchId = data.branchId || 'MARG';
 
       if (entityType === 'CUSTOMER') {
           const c = customers.find(x => x.code === entityCode);
+          if (c?.branchId) branchId = c.branchId;
           const customerName = c?.name || entityCode;
           const change = type === 'IN' ? amount : -amount;
           const newBalance = (c ? c.balance : 0) + change;
@@ -1385,6 +2371,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       const transaction: TreasuryTransaction = {
           id: tId,
+          branchId,
           date,
           credit: type === 'IN' ? amount : 0,
           debit: type === 'OUT' ? amount : 0,
@@ -1408,12 +2395,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
   };
 
-  const addExpense = async (data: { name: string; amount: number; date: string; notes?: string }) => {
+  const addExpense = async (data: { branchId?: BranchId; name: string; amount: number; date: string; notes?: string }) => {
      const tId = `EX${Date.now()}`;
      const description = `مصروفات: ${data.name} ${data.notes ? `(${data.notes})` : ''}`;
+     const branchId: BranchId = data.branchId || 'MARG';
      
      const transaction: TreasuryTransaction = {
          id: tId,
+         branchId,
          date: data.date,
          credit: 0,
          debit: data.amount,
@@ -1423,18 +2412,20 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
      };
      
      if(isOnline) {
-        try { await setDoc(doc(db, 'treasury', tId), transaction); } catch (e) { handleFirebaseError(e); }
+        try { await setDoc(doc(db, 'treasury', tId), cleanDoc(transaction)); } catch (e) { handleFirebaseError(e); }
      } else {
         setTreasury(prev => [...prev, transaction]);
      }
   };
 
-  const addOpeningBalance = async (data: { amount: number; date: string; paymentMethod: PaymentMethod; notes?: string }) => {
+  const addOpeningBalance = async (data: { branchId?: BranchId; amount: number; date: string; paymentMethod: PaymentMethod; notes?: string }) => {
      const tId = `OP${Date.now()}`;
      const description = `رصيد افتتاحي ${data.notes ? `- ${data.notes}` : ''}`;
+     const branchId: BranchId = data.branchId || 'MARG';
      
      const transaction: TreasuryTransaction = {
          id: tId,
+         branchId,
          date: data.date,
          credit: data.amount,
          debit: 0,
@@ -1444,7 +2435,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
      };
      
      if (isOnline) {
-        try { await setDoc(doc(db, 'treasury', tId), transaction); } catch (e) { handleFirebaseError(e); }
+        try { await setDoc(doc(db, 'treasury', tId), cleanDoc(transaction)); } catch (e) { handleFirebaseError(e); }
      } else {
         setTreasury(prev => [...prev, transaction]);
      }
@@ -1556,13 +2547,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const seedDatabase = async () => {
-    if(!isOnline) return;
-    try {
-      await setDoc(doc(db, 'products', 'P001'), { code: 'P001', name: 'كرتونة بيض أبيض', quantity: 100, avgCost: 120, price: 135 });
-      await setDoc(doc(db, 'products', 'P002'), { code: 'P002', name: 'كرتونة بيض أحمر', quantity: 50, avgCost: 125, price: 140 });
-      await setDoc(doc(db, 'customers', 'C001'), { code: 'C001', name: 'سوبر ماركت الحمد', phone: '01012345678', balance: -500, history: [{date: '2023-10-01', description: 'رصيد افتتاحي', amount: -500}] });
-      alert("Database Seeded!");
-    } catch(e) { console.error(e); }
+    // Disabled to protect real cloud database from being polluted with test/mock items
+    console.warn("Seeding mock data is permanently disabled to protect real cloud Firestore data.");
+    alert("تم تعطيل حقن البيانات التجريبية لحماية قاعدة البيانات الحقيقية للشركة على سحابة Firebase.");
   };
 
   const updateSystemLogo = async (base64: string) => {
@@ -1801,7 +2788,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // ... (Print functions use the same logo image tag)
   const printInvoice = (invoice: SalesInvoice) => {
-     const printWindow = window.open('', '_blank', 'width=1000,height=800');
+    const cust = customers.find(c => c.code === invoice.customerCode);
+    const liveCustomerBalance = (invoice as any).liveCustomerBalance !== undefined
+      ? (invoice as any).liveCustomerBalance
+      : (cust ? cust.balance : (invoice.currentBalance !== undefined ? invoice.currentBalance : 0));
+    const paidAmount = invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0);
+    const calculatedPreviousBalance = liveCustomerBalance - (invoice.total - paidAmount);
+
+    const printWindow = window.open('', '_blank', 'width=1000,height=800');
     if (!printWindow) {
       alert("يرجى السماح بالنوافذ المنبثقة (Popups) لطباعة الفاتورة");
       return;
@@ -1869,8 +2863,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 ` : `
                   <div class="total-row" style="color: #374151; font-size: 17px;"><span>حالة السداد:</span><span>آجل بالكامل</span></div>
                 `}
-                <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()}</span></div>
-                <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${invoice.currentBalance.toLocaleString()}</span></div>
+                <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span style="direction: ltr;">${calculatedPreviousBalance.toLocaleString()}</span></div>
+                <div class="total-row final"><span>الرصيد الحالي:</span><span style="direction: ltr;">${liveCustomerBalance.toLocaleString()}</span></div>
               </div>
             </div>
           </div>
@@ -2389,6 +3383,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const exportBackupData = (): SystemBackup => {
+    const isAuthorized = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
+    if (!isAuthorized) {
+      alert('ليس لديك صلاحية تصدير النسخ الاحتياطي.');
+      throw new Error('Unauthorized');
+    }
+
     const backup: SystemBackup = {
       version: '1.0',
       systemName: 'بورصة النجار لتجارة البيض',
@@ -2438,6 +3438,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const restoreBackupData = async (backup: any): Promise<{ success: boolean; message: string }> => {
+    const isAuthorized = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
+    if (!isAuthorized) {
+      return { success: false, message: 'ليس لديك صلاحية استرجاع البيانات والنسخ الاحتياطي.' };
+    }
+
     try {
       if (!backup) {
         throw new Error('ملف النسخة الاحتياطية فارغ أو غير موجود.');
@@ -2549,11 +3554,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
-      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deletePurchase,
-      addPurchase, updatePurchase, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, addEmployee, updateEmployee, deleteEmployee,
+      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deduplicateProducts, deletePurchase,
+      transferStockBetweenBranches, transferCashBetweenBranches,
+      addPurchase, updatePurchase, finalizePurchasePrice, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, deleteSupplier, addEmployee, updateEmployee, deleteEmployee,
+      restoreEntity, permanentDeleteEntity,
       seedDatabase, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
       exportBackupData, restoreBackupData,
-      currentTreasuryBalance, balances
+      currentTreasuryBalance, currentTreasuryBalanceMarg, currentTreasuryBalanceNozha, balances
     }}>
       {children}
     </ERPContext.Provider>

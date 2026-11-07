@@ -1,3 +1,6 @@
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 
 export const firebaseConfig = {
   apiKey: "AIzaSyD7fJ0V4AMjsi6_CcpLmYdDSsnhnr_nRDs",
@@ -9,7 +12,16 @@ export const firebaseConfig = {
   measurementId: "G-DPY6KQKGNY"
 };
 
-// هذه الدالة تتأكد هل قمت بوضع البيانات أم لا
-export const isFirebaseConfigured = () => {
-  return firebaseConfig.apiKey !== "YOUR_API_KEY_HERE";
+// Returns true if Firebase config is valid
+export const isFirebaseConfigured = (): boolean => {
+  return Boolean(firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY_HERE");
 };
+
+// Initialize Firebase App instance safely (singleton)
+export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+
+// Initialize & Export live Firestore instance
+export const db = getFirestore(app);
+
+// Initialize & Export Auth
+export const auth = getAuth(app);

@@ -3,9 +3,9 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle, ArrowRight,
-  Calendar, Filter, MessageCircle
+  Calendar, Filter, MessageCircle, MapPin, Building
 } from 'lucide-react';
-import { SalesInvoice } from '../types';
+import { SalesInvoice, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
@@ -17,13 +17,17 @@ export const Customers: React.FC = () => {
     clearLedger, 
     currentUser, invoices, printInvoice, printLedger, companyLogo 
   } = useERP();
+
+  const canDeleteCustomers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteCustomers);
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
   const [isSharingPdf, setIsSharingPdf] = useState(false);
 
-  // Search state
+  // Search & Branch Filter state
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>('ALL');
+  const [selectedAreaFilter, setSelectedAreaFilter] = useState<string>('ALL');
 
   // Consolidated Ledger Modal state
   const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
@@ -31,9 +35,26 @@ export const Customers: React.FC = () => {
 
   // Customer Add/Edit Modal state
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
-  const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: '' });
+  const [formData, setFormData] = useState<{
+    code: string;
+    name: string;
+    phone: string;
+    branchId: BranchId;
+    area: string;
+    balance: string;
+    adjustmentReason: string;
+  }>({
+    code: '',
+    name: '',
+    phone: '',
+    branchId: 'MARG',
+    area: BRANCH_AREAS.MARG[0],
+    balance: '',
+    adjustmentReason: ''
+  });
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
+  const [originalBalance, setOriginalBalance] = useState<number>(0);
 
   // Selected customer
   const [selectedCustomerCode, setSelectedCustomerCode] = useState<string | null>(null);
@@ -78,32 +99,73 @@ export const Customers: React.FC = () => {
     return `C${(maxId + 1).toString().padStart(3, '0')}`;
   };
 
+  // Active (non-deleted) customers
+  const activeCustomers = useMemo(() => customers.filter(c => !c.isDeleted), [customers]);
+
   // Auto-select first customer if none selected
   useEffect(() => {
-    if (!selectedCustomerCode && customers.length > 0) {
-      setSelectedCustomerCode(customers[0].code);
+    if ((!selectedCustomerCode || !activeCustomers.some(c => c.code === selectedCustomerCode)) && activeCustomers.length > 0) {
+      setSelectedCustomerCode(activeCustomers[0].code);
     }
-  }, [customers, selectedCustomerCode]);
+  }, [activeCustomers, selectedCustomerCode]);
 
-  // Filtered customer list
+  // Filtered customer list by search, branch, and area
   const filteredCustomers = useMemo(() => {
-    if (!searchTerm.trim()) return customers;
-    const q = searchTerm.toLowerCase().trim();
-    return customers.filter(c => 
-      c.name.toLowerCase().includes(q) || 
-      c.code.toLowerCase().includes(q) || 
-      (c.phone && c.phone.includes(q))
-    );
-  }, [customers, searchTerm]);
+    let list = activeCustomers;
+    if (selectedBranchFilter !== 'ALL') {
+      list = list.filter(c => (c.branchId || 'MARG') === selectedBranchFilter);
+    }
+    if (selectedAreaFilter !== 'ALL') {
+      list = list.filter(c => (c.area || '') === selectedAreaFilter);
+    }
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      list = list.filter(c => 
+        c.name.toLowerCase().includes(q) || 
+        c.code.toLowerCase().includes(q) || 
+        (c.phone && c.phone.includes(q)) ||
+        (c.area && c.area.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [activeCustomers, searchTerm, selectedBranchFilter, selectedAreaFilter]);
 
   const selectedCustomer = useMemo(() => {
-    return customers.find(c => c.code === selectedCustomerCode) || (customers.length > 0 ? customers[0] : null);
-  }, [customers, selectedCustomerCode]);
+    return activeCustomers.find(c => c.code === selectedCustomerCode) || (filteredCustomers.length > 0 ? filteredCustomers[0] : (activeCustomers.length > 0 ? activeCustomers[0] : null));
+  }, [activeCustomers, filteredCustomers, selectedCustomerCode]);
+
+  // Dynamic list of areas for the filter toolbar based on selectedBranchFilter (default + typed custom areas)
+  const availableFilterAreas = useMemo(() => {
+    if (selectedBranchFilter === 'ALL') {
+      const set = new Set<string>();
+      getBranchAreas('MARG', customers).forEach(a => set.add(a));
+      getBranchAreas('NOZHA', customers).forEach(a => set.add(a));
+      return Array.from(set);
+    }
+    return getBranchAreas(selectedBranchFilter, customers);
+  }, [selectedBranchFilter, customers]);
+
+  // Dynamic list of areas for the Add/Edit Customer modal based on formData.branchId
+  const modalBranchAreas = useMemo(() => {
+    return getBranchAreas(formData.branchId, customers);
+  }, [formData.branchId, customers]);
 
   const handleOpenAddModal = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', phone: '', balance: '' });
+    setOriginalBalance(0);
+    const defaultBranch: BranchId = selectedBranchFilter !== 'ALL' ? selectedBranchFilter : 'MARG';
+    const branchAreasList = getBranchAreas(defaultBranch, customers);
+    const defaultArea = selectedAreaFilter !== 'ALL' ? selectedAreaFilter : (branchAreasList[0] || 'المرج القديمة');
+    setFormData({ 
+      code: generateNextCode(), 
+      name: '', 
+      phone: '', 
+      branchId: defaultBranch,
+      area: defaultArea,
+      balance: '',
+      adjustmentReason: ''
+    });
     setIsCustomerModalOpen(true);
   };
 
@@ -111,11 +173,17 @@ export const Customers: React.FC = () => {
     e.stopPropagation();
     setIsEditing(true);
     setEditingOldCode(customer.code);
+    setOriginalBalance(customer.balance || 0);
+    const bId: BranchId = customer.branchId === 'NOZHA' ? 'NOZHA' : 'MARG';
+    const cArea = customer.area || (bId === 'NOZHA' ? 'النزهة الجديدة' : 'المرج القديمة');
     setFormData({
       code: customer.code,
       name: customer.name,
       phone: customer.phone || '',
-      balance: formatWithCommas(customer.balance)
+      branchId: bId,
+      area: cArea,
+      balance: formatWithCommas(customer.balance),
+      adjustmentReason: ''
     });
     setIsCustomerModalOpen(true);
   };
@@ -124,18 +192,45 @@ export const Customers: React.FC = () => {
     setIsCustomerModalOpen(false);
     setIsEditing(false);
     setEditingOldCode(null);
+    setOriginalBalance(0);
   };
 
   const handleSubmitCustomer = (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.code && formData.name) {
+      if (!formData.branchId || !formData.area) {
+        alert("يرجى اختيار الإدارة والمنطقة للعميل");
+        return;
+      }
       const parsedBal = parseNumberFromCommas(formData.balance);
       if (isEditing && editingOldCode) {
+        const oldCustomer = customers.find(c => c.code === editingOldCode);
+        const oldBal = oldCustomer ? oldCustomer.balance : 0;
+        const diff = parsedBal - oldBal;
+        
+        let updatedHistory = [...(oldCustomer?.history || [])];
+
+        if (diff !== 0) {
+          if (!formData.adjustmentReason || !formData.adjustmentReason.trim()) {
+            alert("حقل 'سبب/بيان تعديل الرصيد' إجباري لتسجيل حركة التسوية في كشف حساب العميل (مثل: تسوية حساب، رصيد افتتاحي، خصم إضافي).");
+            return;
+          }
+          const adjustmentMovement: CustomerHistory = {
+            date: new Date().toISOString().split('T')[0],
+            description: formData.adjustmentReason.trim(),
+            amount: diff
+          };
+          updatedHistory.push(adjustmentMovement);
+        }
+
         updateCustomer(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
           phone: formData.phone,
-          balance: parsedBal 
+          branchId: formData.branchId,
+          area: formData.area,
+          balance: parsedBal,
+          history: updatedHistory
         });
         handleCloseModal();
       } else {
@@ -143,12 +238,23 @@ export const Customers: React.FC = () => {
           alert('هذا الكود مستخدم بالفعل لعميل آخر!');
           return;
         }
+        const initialHistory: CustomerHistory[] = [];
+        if (parsedBal !== 0) {
+          const reason = formData.adjustmentReason.trim() || 'رصيد افتتاحي';
+          initialHistory.push({
+            date: new Date().toISOString().split('T')[0],
+            description: reason,
+            amount: parsedBal
+          });
+        }
         addCustomer({ 
           code: formData.code, 
           name: formData.name, 
           phone: formData.phone, 
+          branchId: formData.branchId,
+          area: formData.area,
           balance: parsedBal, 
-          history: [] 
+          history: initialHistory 
         });
         setSelectedCustomerCode(formData.code);
         handleCloseModal();
@@ -158,6 +264,10 @@ export const Customers: React.FC = () => {
 
   const handleDelete = async (e: React.MouseEvent, code: string) => {
     e.stopPropagation();
+    if (!canDeleteCustomers) {
+      alert('ليس لديك صلاحية حذف العملاء');
+      return;
+    }
     await deleteCustomer(code);
     setDeleteConfirmId(null);
     if (selectedCustomerCode === code) {
@@ -219,7 +329,7 @@ export const Customers: React.FC = () => {
 
     for (let i = 0; i < history.length; i++) {
       const h = history[i];
-      if (h.description.includes('تعديل')) continue;
+      if (h.description.includes('تعديل فاتورة')) continue;
 
       const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
       if (!isInvoiceSale) continue;
@@ -250,7 +360,7 @@ export const Customers: React.FC = () => {
       // 2. Direct sequence match: immediate entry following invoice (standard ERPContext.addInvoice order)
       if (matchedIdx === -1 && i + 1 < history.length && !consumedIndices.has(i + 1)) {
         const next = history[i + 1];
-        if (next.amount > 0 && Math.abs(next.amount - invoicePaid) < 0.01 && !next.description.includes('فاتورة بيع')) {
+        if (next.amount > 0 && Math.abs(next.amount - invoicePaid) < 0.01 && !next.description.includes('فاتورة بيع') && (next.description.includes('دفعة') || next.description.includes(invId))) {
           matchedIdx = i + 1;
         }
       }
@@ -261,7 +371,7 @@ export const Customers: React.FC = () => {
           if (j === i || consumedIndices.has(j)) continue;
           const candidate = history[j];
           if (candidate.amount > 0 && Math.abs(candidate.amount - invoicePaid) < 0.01) {
-            if (candidate.date === (invoice?.date || h.date) && !candidate.description.includes('فاتورة بيع')) {
+            if (candidate.date === (invoice?.date || h.date) && !candidate.description.includes('فاتورة بيع') && (candidate.description.includes('دفعة') || candidate.description.includes(invId))) {
               matchedIdx = j;
               break;
             }
@@ -289,7 +399,7 @@ export const Customers: React.FC = () => {
       for (let i = 0; i < selectedCustomer.history.length; i++) {
         if (consumedPaymentIndices.has(i)) continue; // Prevent double-counting in prior balance
         const h = selectedCustomer.history[i];
-        if (h.description.includes('تعديل')) continue;
+        if (h.description.includes('تعديل فاتورة')) continue;
         if (h.date < startDate) {
           const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
           const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
@@ -351,7 +461,7 @@ export const Customers: React.FC = () => {
       if (consumedPaymentIndices.has(i)) continue;
 
       const h = selectedCustomer.history[i];
-      if (h.description.includes('تعديل')) continue;
+      if (h.description.includes('تعديل فاتورة')) continue;
       if (startDate && h.date < startDate) continue;
       if (endDate && h.date > endDate) continue;
 
@@ -417,11 +527,14 @@ export const Customers: React.FC = () => {
         running += h.amount;
 
         const displayName = formatCustomerMovementDesc(h.description);
+        let refCol = invId || '-';
+        if (h.description.includes('افتتاحي')) refCol = 'افتتاحي';
+        else if (h.description.includes('تسوية') || h.description.includes('خصم') || h.description.includes('تعديل')) refCol = 'تسوية';
 
         rows.push({
           num: counter++,
           date: h.date,
-          ref: invId || '-',
+          ref: refCol,
           itemName: displayName,
           quantity: '-',
           price: '-',
@@ -452,7 +565,7 @@ export const Customers: React.FC = () => {
 
     if (filterStartDate) {
       selectedCustomer.history.forEach((h, i) => {
-        if (h.description.includes('تعديل') || consumedPaymentIndices.has(i)) return;
+        if (h.description.includes('تعديل فاتورة') || consumedPaymentIndices.has(i)) return;
         if (h.date < filterStartDate) {
           const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة');
           const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
@@ -478,7 +591,7 @@ export const Customers: React.FC = () => {
     }
 
     selectedCustomer.history.forEach((h, i) => {
-      if (h.description.includes('تعديل') || consumedPaymentIndices.has(i)) return;
+      if (h.description.includes('تعديل فاتورة') || consumedPaymentIndices.has(i)) return;
       if (filterStartDate && h.date < filterStartDate) return;
       if (filterEndDate && h.date > filterEndDate) return;
 
@@ -654,7 +767,7 @@ export const Customers: React.FC = () => {
       <div className={`bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex-wrap justify-between items-center gap-2 ${
         mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
       }`}>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <div className="flex items-center gap-1.5">
             <span className="font-bold text-brand-900 text-base">العملاء</span>
             <span className="bg-brand-50 text-brand-700 font-mono font-bold text-xs px-2 py-0.5 rounded-full border border-brand-200">
@@ -662,15 +775,57 @@ export const Customers: React.FC = () => {
             </span>
           </div>
 
+          {/* Branch Filter Tabs */}
+          <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200 text-xs">
+            <button 
+              type="button" 
+              onClick={() => { setSelectedBranchFilter('ALL'); setSelectedAreaFilter('ALL'); }}
+              className={`px-2.5 py-1 rounded-md font-bold transition-all ${selectedBranchFilter === 'ALL' ? 'bg-white text-brand-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              كل الإدارات
+            </button>
+            <button 
+              type="button" 
+              onClick={() => { setSelectedBranchFilter('MARG'); setSelectedAreaFilter('ALL'); }}
+              className={`px-2.5 py-1 rounded-md font-bold transition-all ${selectedBranchFilter === 'MARG' ? 'bg-brand-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              إدارة المرج
+            </button>
+            <button 
+              type="button" 
+              onClick={() => { setSelectedBranchFilter('NOZHA'); setSelectedAreaFilter('ALL'); }}
+              className={`px-2.5 py-1 rounded-md font-bold transition-all ${selectedBranchFilter === 'NOZHA' ? 'bg-amber-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              إدارة النزهة
+            </button>
+          </div>
+
+          {/* Dynamic Area Filter Dropdown */}
+          {selectedBranchFilter !== 'ALL' && (
+            <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded-lg border border-gray-200">
+              <MapPin size={12} className="text-gray-400" />
+              <select
+                value={selectedAreaFilter}
+                onChange={e => setSelectedAreaFilter(e.target.value)}
+                className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer max-w-[170px]"
+              >
+                <option value="ALL">جميع مناطق {selectedBranchFilter === 'NOZHA' ? 'النزهة' : 'المرج'}</option>
+                {availableFilterAreas.map(a => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Real-time Search Input */}
           <div className="relative">
             <Search size={15} className="absolute right-2.5 top-2.5 text-gray-400" />
             <input 
-              type="text"
-              placeholder="بحث بالاسم أو الكود..."
+              type="text" 
+              placeholder="بحث بالاسم أو الكود أو المنطقة..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              className="pr-8 pl-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-brand-500 focus:bg-white w-48 sm:w-64 transition-all"
+              className="pr-8 pl-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-brand-500 focus:bg-white w-44 sm:w-56 transition-all"
             />
             {searchTerm && (
               <button 
@@ -719,17 +874,20 @@ export const Customers: React.FC = () => {
           <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
             {filteredCustomers.length === 0 ? (
               <div className="p-6 text-center text-gray-400 text-xs">
-                {searchTerm ? 'لا توجد نتائج مطابقة للبحث' : 'لا يوجد عملاء مسجلين'}
+                {searchTerm || selectedBranchFilter !== 'ALL' || selectedAreaFilter !== 'ALL' 
+                  ? 'لا توجد نتائج مطابقة للبحث أو الفلتر المحدد' 
+                  : 'لا يوجد عملاء مسجلين'}
               </div>
             ) : (
-              filteredCustomers.map(c => {
+              filteredCustomers.map((c, idx) => {
                 const isSelected = selectedCustomer?.code === c.code;
                 const isNegative = c.balance < 0;
                 const isPositive = c.balance > 0;
+                const bId = c.branchId || 'MARG';
 
                 return (
                   <div 
-                    key={c.code}
+                    key={`${c.code}_${idx}`}
                     onClick={() => {
                       setSelectedCustomerCode(c.code);
                       setMobileView('DETAILS');
@@ -739,17 +897,29 @@ export const Customers: React.FC = () => {
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-bold text-gray-900 text-xs truncate">{c.name}</span>
                         <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.2 rounded font-mono font-bold">
                           {c.code}
                         </span>
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
+                          bId === 'NOZHA' ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-brand-100 text-brand-800 border border-brand-200'
+                        }`}>
+                          {bId === 'NOZHA' ? 'النزهة' : 'المرج'}
+                        </span>
                       </div>
-                      {c.phone && (
-                        <p className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-1" dir="ltr">
-                          <Phone size={10} /> {c.phone}
-                        </p>
-                      )}
+                      <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-400">
+                        {c.area && (
+                          <span className="flex items-center gap-0.5 text-gray-500 font-medium">
+                            <MapPin size={10} /> {c.area}
+                          </span>
+                        )}
+                        {c.phone && (
+                          <span className="flex items-center gap-0.5 font-mono" dir="ltr">
+                            <Phone size={10} /> {c.phone}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="text-left flex items-center gap-1.5">
@@ -772,7 +942,8 @@ export const Customers: React.FC = () => {
                           <Edit size={13} />
                         </button>
 
-                        {deleteConfirmId === c.code ? (
+                        {canDeleteCustomers && (
+                          deleteConfirmId === c.code ? (
                            <div className="flex items-center gap-0.5 bg-red-50 p-0.5 rounded border border-red-200" onClick={e => e.stopPropagation()}>
                              <button 
                                onClick={(e) => handleDelete(e, c.code)} 
@@ -797,7 +968,7 @@ export const Customers: React.FC = () => {
                           >
                             <Trash2 size={13} />
                           </button>
-                        )}
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -947,6 +1118,18 @@ export const Customers: React.FC = () => {
                       <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-gray-200">
                         كود: {selectedCustomer.code}
                       </span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold border ${
+                        (selectedCustomer.branchId || 'MARG') === 'NOZHA' 
+                          ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                          : 'bg-brand-100 text-brand-800 border-brand-300'
+                      }`}>
+                        {(selectedCustomer.branchId || 'MARG') === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'}
+                      </span>
+                      {selectedCustomer.area && (
+                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs font-bold border border-slate-200 flex items-center gap-1">
+                          <MapPin size={11} /> {selectedCustomer.area}
+                        </span>
+                      )}
                       {selectedCustomer.phone && (
                         <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-bold border border-blue-100 flex items-center gap-1" dir="ltr">
                           <Phone size={11} /> {selectedCustomer.phone}
@@ -1329,20 +1512,21 @@ export const Customers: React.FC = () => {
       {/* Add / Edit Customer Modal (Clean popup, frees up screen real estate) */}
       {isCustomerModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in">
-            <div className={`p-4 flex justify-between items-center text-white ${isEditing ? 'bg-blue-600' : 'bg-brand-600'}`}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in max-h-[90vh] flex flex-col">
+            <div className={`p-4 flex justify-between items-center text-white shrink-0 ${isEditing ? 'bg-blue-600' : 'bg-brand-600'}`}>
               <h3 className="text-base font-bold flex items-center gap-2">
                 {isEditing ? <Edit size={18} /> : <UserPlus size={18} />}
                 {isEditing ? 'تعديل بيانات العميل' : 'إضافة عميل جديد'}
               </h3>
-              <button onClick={handleCloseModal} className="hover:bg-black/20 p-1 rounded-full transition-colors">
+              <button onClick={handleCloseModal} className="hover:bg-black/20 p-1 rounded-full transition-colors cursor-pointer">
                 <X size={20} />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitCustomer} className="p-5 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">كود العميل</label>
+            <form onSubmit={handleSubmitCustomer} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div className="p-5 space-y-4 overflow-y-auto flex-1">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">كود العميل</label>
                 <input 
                   type="text" 
                   required
@@ -1353,8 +1537,89 @@ export const Customers: React.FC = () => {
                 />
               </div>
 
+              {/* Branch Selection - Clean Single Select Dropdown */}
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">اسم العميل</label>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  الإدارة / الفرع <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.branchId}
+                  onChange={(e) => {
+                    const newBranch = e.target.value as BranchId;
+                    setFormData(prev => ({
+                      ...prev,
+                      branchId: newBranch,
+                      area: newBranch === 'MARG'
+                        ? (prev.area && !BRANCH_AREAS.NOZHA.includes(prev.area) ? prev.area : (getBranchAreas('MARG', customers)[0] || 'المرج القديمة'))
+                        : (prev.area && !BRANCH_AREAS.MARG.includes(prev.area) ? prev.area : (getBranchAreas('NOZHA', customers)[0] || 'النزهة الجديدة'))
+                    }));
+                  }}
+                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg outline-none text-xs font-bold text-gray-900 focus:border-brand-500 focus:bg-white focus:ring-1 focus:ring-brand-500 transition-all cursor-pointer"
+                >
+                  <option value="MARG">إدارة المرج</option>
+                  <option value="NOZHA">إدارة النزهة</option>
+                </select>
+              </div>
+
+              {/* Area Selection - Creatable Combobox & Datalist */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-xs font-bold text-gray-700 flex items-center gap-1">
+                    <MapPin size={13} className="text-brand-600" />
+                    <span>المنطقة الجغرافية <span className="text-red-500">*</span></span>
+                  </label>
+                  <span className="text-[10px] text-brand-600 font-bold bg-brand-50 px-2 py-0.5 rounded">
+                    اختر أو اكتب اسم المنطقة / الشارع يدوياً
+                  </span>
+                </div>
+                
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    list="customerModalAreaSuggestions"
+                    placeholder="اختر من القائمة أو اكتب اسم منطقة أو شارع جديد..."
+                    value={formData.area}
+                    onChange={e => setFormData({ ...formData, area: e.target.value })}
+                    className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 text-sm font-bold bg-white"
+                  />
+                  <datalist id="customerModalAreaSuggestions">
+                    {modalBranchAreas.map(areaName => (
+                      <option key={areaName} value={areaName} />
+                    ))}
+                  </datalist>
+                </div>
+
+                {/* Quick Selection Pills */}
+                <div className="mt-2">
+                  <p className="text-[10px] text-gray-500 font-medium mb-1">
+                    المناطق الشائعة في {formData.branchId === 'NOZHA' ? 'النزهة' : 'المرج'} (اضغط للاختيار السريع أو اكتب أعلاه):
+                  </p>
+                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1 bg-gray-50 rounded-lg border border-gray-200">
+                    {modalBranchAreas.map(areaName => {
+                      const isSelected = formData.area === areaName;
+                      return (
+                        <button
+                          key={areaName}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, area: areaName })}
+                          className={`text-[11px] px-2 py-1 rounded-md transition-all font-medium flex items-center gap-1 ${
+                            isSelected
+                              ? 'bg-brand-600 text-white font-bold shadow-xs'
+                              : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          {isSelected && <Check size={11} />}
+                          <span>{areaName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">اسم العميل <span className="text-red-500">*</span></label>
                 <input 
                   type="text" 
                   required
@@ -1379,9 +1644,16 @@ export const Customers: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">
-                  {isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}
-                </label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-xs font-bold text-gray-700">
+                    {isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}
+                  </label>
+                  {isEditing && (
+                    <span className="text-[11px] text-gray-500 font-mono" dir="ltr">
+                      الرصيد السابق: {originalBalance.toLocaleString()} ج.م
+                    </span>
+                  )}
+                </div>
                 <div className="relative">
                   <input 
                     type="text" 
@@ -1396,12 +1668,74 @@ export const Customers: React.FC = () => {
                     (سالب = عليه)
                   </span>
                 </div>
+
+                {/* Reason / Statement Description for Balance Adjustment */}
+                {(() => {
+                  const parsedModalBal = parseNumberFromCommas(formData.balance);
+                  const balDiff = isEditing ? (parsedModalBal - originalBalance) : parsedModalBal;
+                  const isChanged = isEditing ? (balDiff !== 0) : (parsedModalBal !== 0);
+                  if (!isChanged) return null;
+
+                  return (
+                    <div className="mt-3 p-3 bg-amber-50/90 rounded-xl border border-amber-300 space-y-2 animate-fade-in">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                          <span>سبب/بيان تعديل الرصيد</span>
+                          <span className="text-red-600 font-black text-sm">* (إجباري)</span>
+                        </label>
+                        {isEditing && (
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+                            balDiff > 0 
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                              : 'bg-red-100 text-red-800 border-red-300'
+                          }`}>
+                            {balDiff > 0 ? `دائن (+${balDiff.toLocaleString()} ج.م)` : `مدين (${balDiff.toLocaleString()} ج.م)`}
+                          </span>
+                        )}
+                      </div>
+                      
+                      <input 
+                        type="text" 
+                        required
+                        placeholder="مثال: تسوية حساب، رصيد افتتاحي، خصم إضافي، فرق جرد..."
+                        className="w-full p-2.5 bg-white border border-amber-300 rounded-lg outline-none focus:ring-2 focus:ring-amber-500 text-xs font-bold text-gray-800 placeholder:text-gray-400"
+                        value={formData.adjustmentReason}
+                        onChange={e => setFormData({ ...formData, adjustmentReason: e.target.value })}
+                      />
+
+                      {/* Quick suggestion tags */}
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {['تسوية حساب', 'رصيد افتتاحي', 'خصم إضافي', 'تعديل جرد', 'فرق حساب'].map(chip => (
+                          <button
+                            key={chip}
+                            type="button"
+                            onClick={() => setFormData({ ...formData, adjustmentReason: chip })}
+                            className={`text-[11px] px-2.5 py-1 rounded-md transition-colors font-bold ${
+                              formData.adjustmentReason === chip 
+                                ? 'bg-amber-600 text-white shadow-xs' 
+                                : 'bg-white text-amber-800 border border-amber-300 hover:bg-amber-100'
+                            }`}
+                          >
+                            {chip}
+                          </button>
+                        ))}
+                      </div>
+                      
+                      <p className="text-[10px] text-amber-800 font-medium leading-relaxed">
+                        سيتم تسجيل حركة تسوية رسمية في كشف حساب العميل بهذا المسمى مع إظهار الفرق بدقة في عمود (مدين/دائن) وتحديث الرصيد التراكمي.
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
 
-              <div className="flex gap-2 pt-2">
+              </div>
+
+              {/* Fixed bottom action buttons bar */}
+              <div className="sticky bottom-0 bg-white p-3 border-t border-gray-200 shrink-0 z-10 flex gap-2 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
                 <button 
                   type="submit" 
-                  className={`flex-1 text-white py-2.5 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-1.5 shadow-sm ${
+                  className={`flex-1 text-white py-2.5 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer ${
                     isEditing ? 'bg-blue-600 hover:bg-blue-700' : 'bg-brand-600 hover:bg-brand-700'
                   }`}
                 >
@@ -1410,7 +1744,7 @@ export const Customers: React.FC = () => {
                 <button 
                   type="button" 
                   onClick={handleCloseModal}
-                  className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors"
+                  className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors cursor-pointer"
                 >
                   إلغاء
                 </button>
@@ -1493,23 +1827,58 @@ export const Customers: React.FC = () => {
                     حالة السداد: آجل بالكامل على الحساب
                   </div>
                 )}
-                <div className="mt-2 pt-2 border-t border-gray-700 text-[11px] text-gray-400 flex justify-between">
-                   <span>رصيد سابق: {viewInvoice.previousBalance?.toLocaleString()}</span>
-                   <span className="font-bold text-gray-200">رصيد بعد الفاتورة: {viewInvoice.currentBalance?.toLocaleString()}</span>
-                </div>
+                {(() => {
+                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance ?? 0;
+                  const paid = viewInvoice.paidAmount || 0;
+                  const netInvoice = viewInvoice.total - paid;
+                  const calculatedPreviousBalance = curBal - netInvoice;
+
+                  return (
+                    <>
+                      <div className="flex justify-between items-center text-xs text-gray-300 bg-gray-800 px-2.5 py-1.5 rounded">
+                        <span>رصيد سابق:</span>
+                        <span className="font-bold font-mono" dir="ltr">{calculatedPreviousBalance.toLocaleString()} ج.م</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs font-bold text-amber-300 bg-gray-800 px-2.5 py-1.5 rounded">
+                        <span>الرصيد الحالي:</span>
+                        <span className="font-black font-mono text-sm" dir="ltr">{curBal.toLocaleString()} ج.م</span>
+                      </div>
+                      <div className="mt-2 pt-2 border-t border-gray-700 text-[11px] text-gray-400 flex flex-col sm:flex-row justify-between gap-1.5">
+                        <span>رصيد الفاتورة وقت الإصدار: {viewInvoice.currentBalance?.toLocaleString()} ج.م</span>
+                        <span className="font-bold text-amber-300">
+                          إجمالي مديونية العميل الحالية: {curBal.toLocaleString()} ج.م
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
             <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
               <button 
-                onClick={() => printInvoice(viewInvoice)} 
-                className="px-3.5 py-1.5 bg-gray-200 text-gray-800 rounded-lg text-xs font-bold hover:bg-gray-300 flex items-center gap-1.5"
+                onClick={() => {
+                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                  printInvoice({
+                    ...viewInvoice,
+                    currentBalance: curBal,
+                    liveCustomerBalance: curBal
+                  });
+                }} 
+                className="px-3.5 py-1.5 bg-gray-200 text-gray-800 rounded-lg text-xs font-bold hover:bg-gray-300 flex items-center gap-1.5 cursor-pointer"
               >
                 <Printer size={14}/> طباعة الفاتورة
               </button>
               <button 
-                onClick={() => shareSalesInvoicePdfViaWhatsApp(viewInvoice, companyLogo, selectedCustomer.phone)} 
-                className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs"
+                onClick={() => {
+                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                  shareSalesInvoicePdfViaWhatsApp({
+                    ...viewInvoice,
+                    currentBalance: curBal,
+                    liveCustomerBalance: curBal
+                  }, companyLogo, selectedCustomer.phone);
+                }} 
+                className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
               >
                 <MessageCircle size={14}/> مشاركة PDF واتساب
               </button>

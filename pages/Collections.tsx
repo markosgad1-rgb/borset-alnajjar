@@ -120,7 +120,7 @@ export const Collections: React.FC = () => {
                   />
                   <Search className="absolute left-3 top-3.5 text-gray-400" size={18}/>
                   <datalist id="customerNames">
-                    {customers.map(c => <option key={c.code} value={c.name} />)}
+                    {customers.map((c, idx) => <option key={`col_cname_${c.code || idx}_${idx}`} value={c.name} />)}
                   </datalist>
                 </div>
               </div>
@@ -137,7 +137,7 @@ export const Collections: React.FC = () => {
                   onChange={e => handleCustomerCodeChange(e.target.value)}
                 />
                 <datalist id="customerCodes">
-                   {customers.map(c => <option key={c.code} value={c.code} />)}
+                   {customers.map((c, idx) => <option key={`col_ccode_${c.code || idx}_${idx}`} value={c.code} />)}
                 </datalist>
               </div>
             </div>

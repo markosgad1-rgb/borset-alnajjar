@@ -37,17 +37,34 @@
     </script>
     <style>
       @media print {
-        body * {
-          visibility: hidden;
+        @page {
+          size: A4 portrait;
+          margin: 10mm;
+        }
+        html, body, #root, main {
+          height: auto !important;
+          overflow: visible !important;
+          position: static !important;
+          background: #ffffff !important;
+          color: #000000 !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        .no-print,
+        .print\:hidden {
+          display: none !important;
+        }
+        .print\:block {
+          display: block !important;
+        }
+        .print\:grid {
+          display: grid !important;
+        }
+        .print\:flex {
+          display: flex !important;
         }
         .printable-content, .printable-content * {
-          visibility: visible;
-        }
-        .printable-content {
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 100%;
+          visibility: visible !important;
         }
       }
     </style>

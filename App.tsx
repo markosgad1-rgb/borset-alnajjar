@@ -16,24 +16,21 @@ import { Transfers } from './pages/Transfers';
 import { Expenses } from './pages/Expenses';
 import { UserManagement } from './pages/UserManagement';
 import { SalesHistory } from './pages/SalesHistory';
-import { PageView, User } from './types';
+import { Reports } from './pages/Reports';
+import { Trash } from './pages/Trash';
+import { PageView, User, UserPermissions } from './types';
 import { setupBackNavigation, clearAllBackHandlers } from './utils/backNavigation';
 
 const AppContent: React.FC = () => {
   const { currentUser } = useERP();
   
-  // Determine initial page based on permissions
-  const getInitialPage = (user: User): PageView => {
-    if (user.permissions.dashboard) return 'dashboard';
-    if (user.permissions.sales) return 'sales';
-    if (user.permissions.warehouse) return 'warehouse';
-    if (user.permissions.financial) return 'treasury';
-    if (user.permissions.admin) return 'users';
-    return 'sales'; // Fallback safe page
+  // Determine initial page based on granular permissions
+  const getInitialPage = (_user: User): PageView => {
+    return 'dashboard';
   };
 
   const [activePage, setActivePage] = useState<PageView>('dashboard');
-  const homePage = currentUser ? getInitialPage(currentUser) : 'dashboard';
+  const homePage = 'dashboard';
   const activePageRef = useRef(activePage);
   activePageRef.current = activePage;
 
@@ -75,25 +72,42 @@ const AppContent: React.FC = () => {
     setActivePage(page);
   };
 
-  // Security Check: Validate Page Permissions on User Change
+  // Security Check: Validate Page Permissions on User Change or Navigation
   useEffect(() => {
     if (currentUser) {
-      // Map pages to required permissions
-      const permissionsMap: Partial<Record<PageView, keyof typeof currentUser.permissions>> = {
-        'dashboard': 'dashboard',
+      // Admins have unrestricted access to all pages
+      if (currentUser.role === 'ADMIN' || currentUser.username === 'admin') {
+        return;
+      }
+
+      // Map pages to required granular permissions
+      const permissionsMap: Partial<Record<PageView, keyof UserPermissions>> = {
+        'reports': 'canViewReports',
+        'sales': 'canViewSales',
+        'sales-history': 'canViewInvoicesLog',
+        'purchases': 'canViewPurchases',
+        'warehouse': 'canViewInventory',
+        'customers': 'canViewCustomers',
+        'suppliers': 'canViewSuppliers',
+        'treasury': 'canViewTreasury',
+        'collections': 'canViewTreasury',
+        'transfers': 'canViewTreasury',
+        'expenses': 'canViewTreasury',
+        'employees': 'canViewTreasury',
         'users': 'admin',
-        'sales': 'sales',
-        'sales-history': 'sales',
-        'customers': 'sales',
-        'purchases': 'warehouse',
-        'warehouse': 'warehouse',
-        'suppliers': 'warehouse',
-        'treasury': 'financial',
-        'collections': 'financial',
-        'transfers': 'financial',
-        'expenses': 'financial',
-        'employees': 'financial'
       };
+
+      if (activePage === 'trash') {
+        const canTrash = Boolean(
+          currentUser.permissions.canDeleteInvoices ||
+          currentUser.permissions.canDeleteCustomers ||
+          currentUser.permissions.canDeleteSuppliers
+        );
+        if (!canTrash) {
+          setActivePage(getInitialPage(currentUser));
+        }
+        return;
+      }
 
       const requiredPerm = permissionsMap[activePage];
 
@@ -112,6 +126,7 @@ const AppContent: React.FC = () => {
   const renderPage = () => {
     switch (activePage) {
       case 'dashboard': return <Dashboard />;
+      case 'reports': return <Reports />;
       case 'purchases': return <Purchases />;
       case 'warehouse': return <Warehouse />;
       case 'sales': return <Sales />;
@@ -123,6 +138,7 @@ const AppContent: React.FC = () => {
       case 'collections': return <Collections />;
       case 'transfers': return <Transfers />;
       case 'expenses': return <Expenses />;
+      case 'trash': return <Trash />;
       case 'users': return <UserManagement />;
       default: return <Dashboard />;
     }

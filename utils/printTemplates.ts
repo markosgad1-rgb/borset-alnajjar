@@ -273,6 +273,13 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
   const remainingAmount = invoice.remainingAmount !== undefined 
     ? invoice.remainingAmount 
     : (invoice.total - paidAmount);
+  const displayCustomerBalance = (invoice as any).liveCustomerBalance !== undefined 
+    ? (invoice as any).liveCustomerBalance 
+    : (invoice.currentBalance !== undefined ? invoice.currentBalance : 0);
+
+  // Dynamic previous balance consistent with statement:
+  // calculatedPreviousBalance = currentBalance - (invoice.total - invoice.paidAmount)
+  const calculatedPreviousBalance = displayCustomerBalance - (invoice.total - paidAmount);
 
   return `
     <div style="font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; width: 860px; padding: 20px; background: #fff; color: #000; box-sizing: border-box; margin: 0 auto;">
@@ -342,12 +349,8 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
               ` : `
                 <div class="total-row" style="color: #374151;"><span>حالة السداد:</span><span>آجل بالكامل على الحساب</span></div>
               `}
-              ${invoice.previousBalance !== undefined ? `
-                <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span>${invoice.previousBalance.toLocaleString()} ج.م</span></div>
-              ` : ''}
-              ${invoice.currentBalance !== undefined ? `
-                <div class="total-row final"><span>الرصيد الحالي:</span><span dir="ltr">${invoice.currentBalance.toLocaleString()} ج.م</span></div>
-              ` : ''}
+              <div class="total-row" style="color: #1f2937;"><span>رصيد سابق:</span><span dir="ltr">${calculatedPreviousBalance.toLocaleString()} ج.م</span></div>
+              <div class="total-row final"><span>الرصيد الحالي:</span><span dir="ltr">${displayCustomerBalance.toLocaleString()} ج.م</span></div>
             </div>
           </div>
         </div>
@@ -773,3 +776,330 @@ export function getConsolidatedLedgerHtml(options: {
     </div>
   `;
 }
+
+export interface GeneralReportPrintOptions {
+  title: string;
+  reportType: 'SALES' | 'PURCHASES' | 'CUSTOMERS';
+  branchLabel: string;
+  areaLabel: string;
+  dateLabel: string;
+  kpis: {
+    totalSalesAmount: number;
+    invoicesCount: number;
+    totalSalesPaid: number;
+    totalPurchasesAmount: number;
+    purchasesCount: number;
+    grossProfit: number;
+    totalCostOfSoldItems: number;
+    totalCustomerDebt: number;
+    customersCount: number;
+    totalSalesRemaining: number;
+  };
+  topProducts?: Array<{
+    code: string;
+    name: string;
+    quantity: number;
+    totalRevenue: number;
+    profit: number;
+  }>;
+  salesInvoices?: Array<{
+    id: string;
+    date: string;
+    time: string;
+    customerName: string;
+    branchName: string;
+    area: string;
+    itemsCount: number;
+    total: number;
+    paid: number;
+    remaining: number;
+    status: string;
+  }>;
+  purchases?: Array<{
+    id: string;
+    date: string;
+    supplierName: string;
+    branchName: string;
+    itemsSummary: string;
+    total: number;
+    isPending: boolean;
+    status: string;
+  }>;
+  customers?: Array<{
+    code: string;
+    name: string;
+    branchName: string;
+    area: string;
+    phone: string;
+    totalPurchased: number;
+    invoiceCount: number;
+    balance: number;
+    lastDate: string;
+  }>;
+}
+
+export function getGeneralReportHtml(options: GeneralReportPrintOptions, companyLogo?: string): string {
+  const { title, reportType, branchLabel, areaLabel, dateLabel, kpis } = options;
+  const printDateStr = `${new Date().toLocaleDateString('ar-EG')} - ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
+
+  return `
+    <div style="font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; width: 880px; padding: 18px; background: #fff; color: #000; box-sizing: border-box; margin: 0 auto;">
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
+      <style>${getInvoicePrintStyle()}</style>
+
+      <div class="header">
+        <div class="company-info">
+          <h1>بورصة النجار</h1>
+          <p>لتجارة البيض وتوزيعه</p>
+        </div>
+        <div class="logo-box">
+          <img src="${companyLogo || '/logo.png'}" alt="Logo" style="max-height: 70px; max-width: 190px; object-fit: contain;" onerror="this.style.display='none'"/>
+        </div>
+        <div class="statement-title">
+          <h2>${title}</h2>
+        </div>
+      </div>
+
+      <div class="info-bar">
+        <div class="info-item"><span class="info-label">الفترة المحددة</span><span class="info-value" style="color: #0369a1;">${dateLabel}</span></div>
+        <div class="info-item"><span class="info-label">الإدارة / الفرع</span><span class="info-value">${branchLabel}</span></div>
+        <div class="info-item"><span class="info-label">المنطقة الجغرافية</span><span class="info-value">${areaLabel}</span></div>
+        <div class="info-item"><span class="info-label">تاريخ الاستخراج</span><span class="info-value" style="font-size: 13px;">${printDateStr}</span></div>
+      </div>
+
+      <!-- KPI Summary Cards -->
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px;">
+        <div style="border: 2px solid #000; border-radius: 6px; padding: 6px 10px; background: #f8fafc;">
+          <div style="font-size: 11px; font-weight: 800; color: #475569;">إجمالي المبيعات المفلترة</div>
+          <div style="font-size: 17px; font-weight: 900; color: #1e3a8a; font-family: monospace; direction: ltr; margin: 2px 0;">${kpis.totalSalesAmount.toLocaleString()} ج.م</div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; font-weight: 800; border-top: 1px dashed #cbd5e1; padding-top: 3px; margin-top: 3px;">
+            <span>الفواتير: ${kpis.invoicesCount}</span>
+            <span>المحصل: ${kpis.totalSalesPaid.toLocaleString()}</span>
+          </div>
+        </div>
+
+        <div style="border: 2px solid #000; border-radius: 6px; padding: 6px 10px; background: #f8fafc;">
+          <div style="font-size: 11px; font-weight: 800; color: #475569;">إجمالي المشتريات (الوارد)</div>
+          <div style="font-size: 17px; font-weight: 900; color: #3730a3; font-family: monospace; direction: ltr; margin: 2px 0;">${kpis.totalPurchasesAmount.toLocaleString()} ج.م</div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; font-weight: 800; border-top: 1px dashed #cbd5e1; padding-top: 3px; margin-top: 3px;">
+            <span>الفواتير: ${kpis.purchasesCount}</span>
+            <span>الفرع: ${branchLabel}</span>
+          </div>
+        </div>
+
+        <div style="border: 2px solid #000; border-radius: 6px; padding: 6px 10px; background: #f8fafc;">
+          <div style="font-size: 11px; font-weight: 800; color: #475569;">صافي الأرباح التقديري</div>
+          <div style="font-size: 17px; font-weight: 900; color: #065f46; font-family: monospace; direction: ltr; margin: 2px 0;">${kpis.grossProfit.toLocaleString()} ج.م</div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; font-weight: 800; border-top: 1px dashed #cbd5e1; padding-top: 3px; margin-top: 3px;">
+            <span>التكلفة: ${kpis.totalCostOfSoldItems.toLocaleString()}</span>
+            <span>الهامش: ${kpis.totalSalesAmount > 0 ? ((kpis.grossProfit / kpis.totalSalesAmount) * 100).toFixed(1) : 0}%</span>
+          </div>
+        </div>
+
+        <div style="border: 2px solid #000; border-radius: 6px; padding: 6px 10px; background: #f8fafc;">
+          <div style="font-size: 11px; font-weight: 800; color: #475569;">مديونيات العملاء (في النطاق)</div>
+          <div style="font-size: 17px; font-weight: 900; color: #92400e; font-family: monospace; direction: ltr; margin: 2px 0;">${kpis.totalCustomerDebt.toLocaleString()} ج.م</div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; font-weight: 800; border-top: 1px dashed #cbd5e1; padding-top: 3px; margin-top: 3px;">
+            <span>العملاء: ${kpis.customersCount}</span>
+            <span>الآجل: ${kpis.totalSalesRemaining.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      ${reportType === 'SALES' ? `
+        ${options.topProducts && options.topProducts.length > 0 ? `
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: 13px; font-weight: 900; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 6px; color: #1e3a8a;">
+              ⭐ الأصناف الأكثر مبيعاً وتحقيقاً للإيراد (${options.topProducts.length} صنف)
+            </div>
+            <table>
+              <colgroup>
+                <col style="width: 6%;">
+                <col style="width: 12%;">
+                <col style="width: 38%;">
+                <col style="width: 14%;">
+                <col style="width: 15%;">
+                <col style="width: 15%;">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th><div class="cell-content">م</div></th>
+                  <th><div class="cell-content">الكود</div></th>
+                  <th><div class="cell-content">اسم الصنف</div></th>
+                  <th><div class="cell-content">الكمية المباعة</div></th>
+                  <th><div class="cell-content">إجمالي الإيراد</div></th>
+                  <th><div class="cell-content">الربح التقديري</div></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${options.topProducts.map((p, idx) => `
+                  <tr>
+                    <td><div class="cell-content">${idx + 1}</div></td>
+                    <td style="font-weight: 800;"><div class="cell-content">${p.code}</div></td>
+                    <td style="font-weight: 900; text-align: right !important; padding-right: 8px !important;"><div class="cell-content" style="text-align: right;">${p.name}</div></td>
+                    <td dir="ltr" style="font-weight: 900;"><div class="cell-content">${p.quantity.toLocaleString()}</div></td>
+                    <td dir="ltr" style="font-weight: 900; color: #065f46;"><div class="cell-content">${p.totalRevenue.toLocaleString()} ج.م</div></td>
+                    <td dir="ltr" style="font-weight: 900; color: #1e3a8a;"><div class="cell-content">${p.profit.toLocaleString()} ج.م</div></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+
+        <div style="font-size: 13px; font-weight: 900; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 6px; margin-top: 10px;">
+          📋 بيان فواتير المبيعات (${options.salesInvoices?.length || 0} فاتورة)
+        </div>
+        <table>
+          <colgroup>
+            <col style="width: 4%;">
+            <col style="width: 9%;">
+            <col style="width: 14%;">
+            <col style="width: 21%;">
+            <col style="width: 8%;">
+            <col style="width: 10%;">
+            <col style="width: 6%;">
+            <col style="width: 10%;">
+            <col style="width: 9%;">
+            <col style="width: 9%;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th><div class="cell-content">م</div></th>
+              <th><div class="cell-content"># الفاتورة</div></th>
+              <th><div class="cell-content">التاريخ</div></th>
+              <th><div class="cell-content">العميل</div></th>
+              <th><div class="cell-content">الإدارة</div></th>
+              <th><div class="cell-content">المنطقة</div></th>
+              <th><div class="cell-content">أصناف</div></th>
+              <th><div class="cell-content">الإجمالي</div></th>
+              <th><div class="cell-content">المدفوع</div></th>
+              <th><div class="cell-content">المتبقي</div></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(options.salesInvoices || []).map((inv, idx) => `
+              <tr>
+                <td><div class="cell-content">${idx + 1}</div></td>
+                <td style="font-weight: 900; font-family: monospace;"><div class="cell-content">${inv.id}</div></td>
+                <td dir="ltr" style="font-size: 11px;"><div class="cell-content">${inv.date}</div></td>
+                <td style="font-weight: 900; text-align: right !important; padding-right: 6px !important;"><div class="cell-content" style="text-align: right;">${inv.customerName}</div></td>
+                <td><div class="cell-content">${inv.branchName}</div></td>
+                <td><div class="cell-content">${inv.area}</div></td>
+                <td><div class="cell-content">${inv.itemsCount}</div></td>
+                <td dir="ltr" style="font-weight: 900;"><div class="cell-content">${inv.total.toLocaleString()}</div></td>
+                <td dir="ltr" style="color: #065f46; font-weight: 800;"><div class="cell-content">${inv.paid.toLocaleString()}</div></td>
+                <td dir="ltr" style="color: ${inv.remaining > 0 ? '#b91c1c' : '#475569'}; font-weight: 900;"><div class="cell-content">${inv.remaining.toLocaleString()}</div></td>
+              </tr>
+            `).join('')}
+            ${(!options.salesInvoices || options.salesInvoices.length === 0) ? `
+              <tr><td colspan="10" style="padding: 16px !important; color: #64748b;">لا توجد فواتير مبيعات في الفترة والفلاتر المحددة</td></tr>
+            ` : ''}
+          </tbody>
+        </table>
+      ` : reportType === 'PURCHASES' ? `
+        <div style="font-size: 13px; font-weight: 900; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 6px;">
+          📦 بيان فواتير المشتريات والتوريد (${options.purchases?.length || 0} فاتورة)
+        </div>
+        <table>
+          <colgroup>
+            <col style="width: 5%;">
+            <col style="width: 11%;">
+            <col style="width: 12%;">
+            <col style="width: 24%;">
+            <col style="width: 12%;">
+            <col style="width: 21%;">
+            <col style="width: 15%;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th><div class="cell-content">م</div></th>
+              <th><div class="cell-content"># الفاتورة</div></th>
+              <th><div class="cell-content">التاريخ</div></th>
+              <th><div class="cell-content">اسم المورد</div></th>
+              <th><div class="cell-content">المخزن المستلم</div></th>
+              <th><div class="cell-content">بيان الأصناف الموردة</div></th>
+              <th><div class="cell-content">إجمالي الفاتورة</div></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(options.purchases || []).map((p, idx) => `
+              <tr>
+                <td><div class="cell-content">${idx + 1}</div></td>
+                <td style="font-weight: 900; font-family: monospace;"><div class="cell-content">${p.id}</div></td>
+                <td dir="ltr" style="font-size: 11px;"><div class="cell-content">${p.date}</div></td>
+                <td style="font-weight: 900; text-align: right !important; padding-right: 6px !important;"><div class="cell-content" style="text-align: right;">${p.supplierName}</div></td>
+                <td><div class="cell-content">${p.branchName}</div></td>
+                <td style="font-size: 11px; text-align: right !important; padding-right: 6px !important;"><div class="cell-content" style="text-align: right;">${p.itemsSummary}</div></td>
+                <td dir="ltr" style="font-weight: 900;"><div class="cell-content">${p.isPending ? 'معلق السعر' : `${p.total.toLocaleString()} ج.م`}</div></td>
+              </tr>
+            `).join('')}
+            ${(!options.purchases || options.purchases.length === 0) ? `
+              <tr><td colspan="7" style="padding: 16px !important; color: #64748b;">لا توجد فواتير مشتريات في الفترة والفلاتر المحددة</td></tr>
+            ` : ''}
+          </tbody>
+        </table>
+      ` : `
+        <div style="font-size: 13px; font-weight: 900; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 6px;">
+          👥 بيان العملاء والمديونيات (${options.customers?.length || 0} عميل)
+        </div>
+        <table>
+          <colgroup>
+            <col style="width: 4%;">
+            <col style="width: 9%;">
+            <col style="width: 22%;">
+            <col style="width: 9%;">
+            <col style="width: 12%;">
+            <col style="width: 12%;">
+            <col style="width: 12%;">
+            <col style="width: 8%;">
+            <col style="width: 12%;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th><div class="cell-content">م</div></th>
+              <th><div class="cell-content">الكود</div></th>
+              <th><div class="cell-content">اسم العميل</div></th>
+              <th><div class="cell-content">الإدارة</div></th>
+              <th><div class="cell-content">المنطقة</div></th>
+              <th><div class="cell-content">الهاتف</div></th>
+              <th><div class="cell-content">المسحوبات</div></th>
+              <th><div class="cell-content">فواتير</div></th>
+              <th><div class="cell-content">الرصيد / المديونية</div></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(options.customers || []).map((c, idx) => `
+              <tr>
+                <td><div class="cell-content">${idx + 1}</div></td>
+                <td style="font-weight: 800; font-family: monospace;"><div class="cell-content">${c.code}</div></td>
+                <td style="font-weight: 900; text-align: right !important; padding-right: 6px !important;"><div class="cell-content" style="text-align: right;">${c.name}</div></td>
+                <td><div class="cell-content">${c.branchName}</div></td>
+                <td><div class="cell-content">${c.area}</div></td>
+                <td dir="ltr" style="font-size: 11px;"><div class="cell-content">${c.phone || '-'}</div></td>
+                <td dir="ltr" style="font-weight: 800;"><div class="cell-content">${c.totalPurchased.toLocaleString()}</div></td>
+                <td><div class="cell-content">${c.invoiceCount}</div></td>
+                <td dir="ltr" style="font-weight: 900; color: ${c.balance < 0 ? '#b91c1c' : c.balance > 0 ? '#065f46' : '#475569'};"><div class="cell-content">${c.balance.toLocaleString()} ج.م</div></td>
+              </tr>
+            `).join('')}
+            ${(!options.customers || options.customers.length === 0) ? `
+              <tr><td colspan="9" style="padding: 16px !important; color: #64748b;">لا يوجد عملاء مطابقين للفلاتر المحددة</td></tr>
+            ` : ''}
+          </tbody>
+        </table>
+      `}
+
+      <div class="signatures" style="margin-top: 25px;">
+        <div class="sig-box"><strong>توقيع المستخرج / المسؤول</strong><div class="sig-line"></div></div>
+        <div class="sig-box"><strong>توقيع إدارة البورصة</strong><div class="sig-line"></div></div>
+      </div>
+
+      <div class="footer-bar" style="margin-top: 15px;">
+        للمبيعات والاستفسارات: 01280808532 - 01274688088 - 01000285428
+      </div>
+    </div>
+  `;
+}
+
