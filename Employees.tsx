@@ -1,15 +1,27 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, Briefcase } from 'lucide-react';
+import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle, Check, X } from 'lucide-react';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useBackHandler } from '../utils/backNavigation';
 
 export const Employees: React.FC = () => {
-  const { employees, addEmployee, updateEmployee } = useERP();
+  const { employees, addEmployee, updateEmployee, deleteEmployee, clearLedger, currentUser } = useERP();
   
-  const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: 0, balance: 0 });
+  const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: '', balance: '' });
   const [selectedEmployeeCode, setSelectedEmployeeCode] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
+
+  // Clear Ledger confirmation state
+  const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
+  
+  // Delete Confirmation state
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Hardware Back button handlers
+  useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'employees-clear-confirm');
+  useBackHandler(() => setDeleteConfirmId(null), !!deleteConfirmId, 'employees-delete-confirm');
 
   const generateNextCode = () => {
     if (employees.length === 0) return 'E001';
@@ -29,13 +41,15 @@ export const Employees: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.code && formData.name) {
+      const parsedSalary = parseNumberFromCommas(formData.salary);
+      const parsedBalance = parseNumberFromCommas(formData.balance);
       if (isEditing && editingOldCode) {
         updateEmployee(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
           role: formData.role,
-          salary: Number(formData.salary),
-          balance: Number(formData.balance) 
+          salary: parsedSalary,
+          balance: parsedBalance 
         });
         handleCancelEdit();
       } else {
@@ -43,8 +57,15 @@ export const Employees: React.FC = () => {
           alert('هذا الكود مستخدم بالفعل لموظف آخر!');
           return;
         }
-        addEmployee({ ...formData, salary: Number(formData.salary), balance: Number(formData.balance), history: [] });
-        setFormData({ code: '', name: '', role: '', salary: 0, balance: 0 });
+        addEmployee({ 
+          code: formData.code,
+          name: formData.name,
+          role: formData.role,
+          salary: parsedSalary, 
+          balance: parsedBalance, 
+          history: [] 
+        });
+        setFormData({ code: '', name: '', role: '', salary: '', balance: '' });
       }
     }
   };
@@ -57,8 +78,8 @@ export const Employees: React.FC = () => {
       code: employee.code,
       name: employee.name,
       role: employee.role,
-      salary: employee.salary,
-      balance: employee.balance
+      salary: formatWithCommas(employee.salary),
+      balance: formatWithCommas(employee.balance)
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -66,7 +87,25 @@ export const Employees: React.FC = () => {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', role: '', salary: 0, balance: 0 });
+    setFormData({ code: generateNextCode(), name: '', role: '', salary: '', balance: '' });
+  };
+
+  const handleDelete = async (e: React.MouseEvent, code: string) => {
+    e.stopPropagation();
+    await deleteEmployee(code);
+    setDeleteConfirmId(null);
+    if (selectedEmployeeCode === code) {
+      setSelectedEmployeeCode(null);
+    }
+  };
+
+  const handleClearLedger = async () => {
+    if (!selectedEmployee) return;
+    const success = await clearLedger('EMPLOYEE', selectedEmployee.code);
+    if (success) {
+      setShowClearLedgerConfirm(false);
+      alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
   };
 
   const selectedEmployee = employees.find(e => e.code === selectedEmployeeCode);
@@ -116,20 +155,24 @@ export const Employees: React.FC = () => {
           <div className="md:col-span-1">
             <label className="block text-sm text-gray-600 mb-1">الراتب الشهري</label>
             <input 
-              type="number" 
-              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+              type="text" 
+              dir="ltr"
+              placeholder="0"
+              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500 font-mono font-bold text-center"
               value={formData.salary}
-              onChange={e => setFormData({...formData, salary: Number(e.target.value)})}
+              onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, salary: val}))}
             />
           </div>
           <div className="md:col-span-2">
              <label className="block text-sm text-gray-600 mb-1">{isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}</label>
              <div className="relative">
                <input 
-                type="number" 
-                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
+                type="text" 
+                dir="ltr"
+                placeholder="0"
+                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500 font-mono font-bold text-center"
                 value={formData.balance}
-                onChange={e => setFormData({...formData, balance: Number(e.target.value)})}
+                onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), true)}
               />
               <span className="absolute left-2 top-2 text-xs text-gray-400 pointer-events-none">
                 (سالب = مستحقات له)
@@ -160,7 +203,10 @@ export const Employees: React.FC = () => {
               {employees.map(e => (
                 <li 
                   key={e.code} 
-                  onClick={() => setSelectedEmployeeCode(e.code)}
+                  onClick={() => {
+                    setSelectedEmployeeCode(e.code);
+                    setShowClearLedgerConfirm(false);
+                  }}
                   className={`p-4 cursor-pointer hover:bg-brand-50 transition-colors flex justify-between items-center group
                     ${selectedEmployeeCode === e.code ? 'bg-brand-50 border-r-4 border-brand-500' : ''}
                   `}
@@ -169,18 +215,52 @@ export const Employees: React.FC = () => {
                     <p className="font-bold text-gray-800">{e.name}</p>
                     <p className="text-xs text-gray-500">{e.role} - #{e.code}</p>
                   </div>
-                  <div className="text-left flex items-center gap-3">
+                  <div className="text-left flex items-center gap-2">
                     <div>
                       <p className={`font-bold text-sm ${e.balance < 0 ? 'text-red-600' : e.balance > 0 ? 'text-green-600' : 'text-gray-600'}`} dir="ltr">
                         {e.balance.toLocaleString()}
                       </p>
                     </div>
-                    <button 
-                      onClick={(e) => handleEditClick(e, e)}
-                      className="opacity-0 group-hover:opacity-100 p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-all"
-                    >
-                      <Edit size={16} />
-                    </button>
+                    
+                    <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={(event) => handleEditClick(event, e)}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        title="تعديل"
+                      >
+                        <Edit size={16} />
+                      </button>
+
+                      {currentUser?.permissions.canDeleteLedgers && (
+                        deleteConfirmId === e.code ? (
+                           <div className="flex items-center gap-1 bg-red-50 p-1 rounded border border-red-100" onClick={e => e.stopPropagation()}>
+                             <button 
+                               onClick={(event) => handleDelete(event, e.code)} 
+                               className="bg-red-500 text-white p-1 rounded hover:bg-red-600 transition-colors" 
+                               title="تأكيد الحذف"
+                             >
+                               <Check size={14}/>
+                             </button>
+                             <button 
+                               onClick={(event) => { event.stopPropagation(); setDeleteConfirmId(null); }} 
+                               className="bg-white text-gray-500 p-1 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
+                               title="إلغاء"
+                             >
+                               <X size={14}/>
+                             </button>
+                           </div>
+                        ) : (
+                          <button 
+                            onClick={(event) => { event.stopPropagation(); setDeleteConfirmId(e.code); }}
+                            className="p-1.5 text-red-400 hover:bg-red-50 hover:text-red-600 rounded transition-colors"
+                            title="حذف الموظف"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )
+                      )}
+                    </div>
+
                   </div>
                 </li>
               ))}
@@ -228,9 +308,40 @@ export const Employees: React.FC = () => {
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
-                    <FileText size={18} /> سجل الرواتب والسلف
-                  </h4>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                      <FileText size={18} /> سجل الرواتب والسلف
+                    </h4>
+                    
+                    {currentUser?.permissions.canDeleteLedgers && (
+                      showClearLedgerConfirm ? (
+                         <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
+                           <AlertTriangle size={16} className="text-red-500" />
+                           <span className="text-xs font-bold text-red-600">تأكيد التصفير؟</span>
+                           <button 
+                             onClick={handleClearLedger}
+                             className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-red-700"
+                           >
+                             نعم
+                           </button>
+                           <button 
+                             onClick={() => setShowClearLedgerConfirm(false)}
+                             className="bg-white text-gray-600 px-3 py-1 rounded border text-xs font-bold hover:bg-gray-100"
+                           >
+                             إلغاء
+                           </button>
+                         </div>
+                      ) : (
+                        <button 
+                          onClick={() => setShowClearLedgerConfirm(true)}
+                          className="flex items-center gap-2 bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-sm font-bold hover:bg-red-200 transition-colors shadow-sm"
+                        >
+                          <Trash2 size={16} /> حذف كشف الحساب (تصفير)
+                        </button>
+                      )
+                    )}
+
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm text-right">
                       <thead className="bg-gray-50 text-gray-600 border-y">
@@ -246,17 +357,6 @@ export const Employees: React.FC = () => {
                           <tr><td colSpan={4} className="p-4 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
                         ) : (
                           selectedEmployee.history.map((h, idx) => {
-                            // Employee Logic:
-                            // Negative Amount = Liability Increases (Salary Due) or Payment Received?
-                            // Let's trace Context:
-                            // OUT (We pay him) -> Balance +Amount. (Reduces Negative or Adds Positive).
-                            // So Positive Amount in history = We Paid Him (Cash Out).
-                            // Negative Amount in history = He Paid Us (Rare) OR We set salary due (Not implemented yet as auto, but logically).
-                            
-                            // Based on current Transfers Context:
-                            // OUT (Payment) -> +Amount.
-                            // IN (Collection) -> -Amount.
-                            
                             const isPaymentToEmployee = h.amount > 0;
                             const isReturnFromEmployee = h.amount < 0;
 

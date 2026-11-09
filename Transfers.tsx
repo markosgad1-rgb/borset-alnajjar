@@ -1,57 +1,209 @@
-
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { ArrowRightLeft, Save, Search, AlertCircle, ArrowDownCircle, ArrowUpCircle, Users, Truck, Briefcase } from 'lucide-react';
+import { 
+  ArrowRightLeft, Save, Search, AlertCircle, ArrowDownCircle, ArrowUpCircle, 
+  Users, Truck, Briefcase, Wallet, Building2, Smartphone, Building, MapPin, Check, X 
+} from 'lucide-react';
+import { PaymentMethod, BranchId, BRANCHES, getBranchAreas, Customer, Supplier, Employee } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 
 export const Transfers: React.FC = () => {
   const { customers, suppliers, employees, addTransfer } = useERP();
   
   const [entityType, setEntityType] = useState<'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'>('CUSTOMER');
   
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedArea, setSelectedArea] = useState<string>('ALL');
+
   const [formData, setFormData] = useState({
     code: '',
     name: '',
     amount: '',
     type: 'IN' as 'IN' | 'OUT',
     date: new Date().toISOString().split('T')[0],
-    notes: ''
+    notes: '',
+    paymentMethod: 'CASH' as PaymentMethod
   });
 
+  const [entitySearchText, setEntitySearchText] = useState('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const [currentBalance, setCurrentBalance] = useState<number | null>(null);
 
-  // Determine which list to use
-  const activeList = entityType === 'CUSTOMER' 
-    ? customers 
-    : entityType === 'SUPPLIER' 
-      ? suppliers 
-      : employees;
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-  const handleNameChange = (name: string) => {
-    const entity = activeList.find(e => e.name === name);
-    if (entity) {
-      setFormData(prev => ({ 
-        ...prev, 
-        name: name, 
-        code: entity.code 
+  // Exclude deleted entities strictly
+  const activeCustomers = useMemo(() => customers.filter(c => !c.isDeleted), [customers]);
+  const activeSuppliers = useMemo(() => suppliers.filter(s => !s.isDeleted), [suppliers]);
+  const activeEmployees = useMemo(() => employees.filter(e => !(e as any).isDeleted), [employees]);
+
+  // Dynamic areas for customers in selected branch
+  const availableBranchAreas = useMemo(() => {
+    return getBranchAreas(selectedBranch, activeCustomers);
+  }, [selectedBranch, activeCustomers]);
+
+  // Customers filtered by branch and area
+  const availableCustomers = useMemo(() => {
+    let list = activeCustomers.filter(c => (c.branchId || 'MARG') === selectedBranch);
+    if (selectedArea && selectedArea !== 'ALL') {
+      list = list.filter(c => (c.area || '') === selectedArea);
+    }
+    return list;
+  }, [activeCustomers, selectedBranch, selectedArea]);
+
+  // Display list based on entityType
+  const currentDisplayList = useMemo(() => {
+    if (entityType === 'CUSTOMER') return availableCustomers;
+    if (entityType === 'SUPPLIER') return activeSuppliers;
+    return activeEmployees;
+  }, [entityType, availableCustomers, activeSuppliers, activeEmployees]);
+
+  // All active entities of this type (for direct code lookup regardless of filters)
+  const allActiveOfType = useMemo(() => {
+    if (entityType === 'CUSTOMER') return activeCustomers;
+    if (entityType === 'SUPPLIER') return activeSuppliers;
+    return activeEmployees;
+  }, [entityType, activeCustomers, activeSuppliers, activeEmployees]);
+
+  // Unified Label format: [Code] Name - Area/Phone/Role (e.g. [C079] مرقص - عين شمس)
+  const formatEntityLabel = (e: Customer | Supplier | Employee): string => {
+    if (entityType === 'CUSTOMER') {
+      const c = e as Customer;
+      return `[${c.code}] ${c.name}${c.area ? ` - ${c.area}` : ''}`;
+    }
+    if (entityType === 'SUPPLIER') {
+      const s = e as Supplier;
+      return `[${s.code}] ${s.name}${s.phone ? ` - ${s.phone}` : ''}`;
+    }
+    const emp = e as Employee;
+    return `[${emp.code}] ${emp.name}${emp.role ? ` - ${emp.role}` : ''}`;
+  };
+
+  // Interactive suggestions
+  const filteredSuggestions = useMemo(() => {
+    const q = entitySearchText.trim().toLowerCase();
+    if (!q) return currentDisplayList.slice(0, 50);
+    return currentDisplayList.filter(e => {
+      const codeMatch = e.code.toLowerCase().includes(q);
+      const nameMatch = e.name.toLowerCase().includes(q);
+      const labelMatch = formatEntityLabel(e).toLowerCase().includes(q);
+      let extraMatch = false;
+      if (entityType === 'CUSTOMER') {
+        extraMatch = (e as Customer).area?.toLowerCase?.().includes(q) || false;
+      } else if (entityType === 'SUPPLIER') {
+        extraMatch = (e as Supplier).phone?.toLowerCase?.().includes(q) || false;
+      } else if (entityType === 'EMPLOYEE') {
+        extraMatch = (e as Employee).role?.toLowerCase?.().includes(q) || false;
+      }
+      return codeMatch || nameMatch || labelMatch || extraMatch;
+    }).slice(0, 50);
+  }, [currentDisplayList, entitySearchText, entityType]);
+
+  const selectEntity = (entity: Customer | Supplier | Employee | null) => {
+    if (entity && !(entity as any).isDeleted) {
+      setFormData(prev => ({
+        ...prev,
+        code: entity.code,
+        name: entity.name
       }));
       setCurrentBalance(entity.balance);
+      setEntitySearchText(formatEntityLabel(entity));
+
+      if (entityType === 'CUSTOMER') {
+        const c = entity as Customer;
+        if (c.branchId && c.branchId !== selectedBranch) {
+          setSelectedBranch(c.branchId);
+        }
+        if (c.area && c.area !== selectedArea) {
+          setSelectedArea(c.area);
+        }
+      }
     } else {
-      setFormData(prev => ({ ...prev, name: name }));
+      setFormData(prev => ({ ...prev, code: '', name: '' }));
       setCurrentBalance(null);
+      setEntitySearchText('');
+    }
+    setIsDropdownOpen(false);
+  };
+
+  const handleSearchChange = (val: string) => {
+    setEntitySearchText(val);
+    setIsDropdownOpen(true);
+    const trimmed = val.trim();
+
+    if (!trimmed) {
+      setFormData(prev => ({ ...prev, code: '', name: '' }));
+      setCurrentBalance(null);
+      return;
+    }
+
+    // 1. Bracket match [CODE] e.g. [C079] مرقص - عين شمس
+    const bracketMatch = trimmed.match(/^\[([A-Za-z0-9_-]+)\]/);
+    if (bracketMatch) {
+      const extractedCode = bracketMatch[1].toLowerCase();
+      const entity = allActiveOfType.find(e => e.code.toLowerCase() === extractedCode);
+      if (entity) {
+        selectEntity(entity);
+        return;
+      }
+    }
+
+    // 2. Direct code match
+    const byCode = allActiveOfType.find(e => e.code.toLowerCase() === trimmed.toLowerCase());
+    if (byCode) {
+      selectEntity(byCode);
+      return;
+    }
+
+    // 3. Exact name match in currently displayed list
+    const exactInDisplayed = currentDisplayList.filter(e => e.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (exactInDisplayed.length === 1) {
+      selectEntity(exactInDisplayed[0]);
+      return;
+    }
+
+    // 4. Exact name match in all active entities of type
+    const exactInAll = allActiveOfType.filter(e => e.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (exactInAll.length === 1) {
+      selectEntity(exactInAll[0]);
+      return;
     }
   };
 
   const handleCodeChange = (code: string) => {
-    const entity = activeList.find(e => e.code === code);
+    const trimmed = code.trim().toLowerCase();
+    setFormData(prev => ({ ...prev, code }));
+    if (!trimmed) {
+      setFormData(prev => ({ ...prev, name: '' }));
+      setCurrentBalance(null);
+      setEntitySearchText('');
+      return;
+    }
+    const entity = allActiveOfType.find(e => e.code.toLowerCase() === trimmed);
     if (entity) {
-      setFormData(prev => ({ 
-        ...prev, 
-        code: code, 
-        name: entity.name 
-      }));
+      setFormData(prev => ({ ...prev, name: entity.name }));
       setCurrentBalance(entity.balance);
+      setEntitySearchText(formatEntityLabel(entity));
+      if (entityType === 'CUSTOMER') {
+        const c = entity as Customer;
+        if (c.branchId && c.branchId !== selectedBranch) {
+          setSelectedBranch(c.branchId);
+        }
+        if (c.area && c.area !== selectedArea) {
+          setSelectedArea(c.area);
+        }
+      }
     } else {
-      setFormData(prev => ({ ...prev, code: code }));
+      setFormData(prev => ({ ...prev, name: '' }));
       setCurrentBalance(null);
     }
   };
@@ -59,15 +211,19 @@ export const Transfers: React.FC = () => {
   const handleTypeToggle = (newType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE') => {
     setEntityType(newType);
     setFormData(prev => ({ ...prev, code: '', name: '' }));
+    setEntitySearchText('');
     setCurrentBalance(null);
+    setIsDropdownOpen(false);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Number(formData.amount);
+    const amount = parseNumberFromCommas(formData.amount);
 
     if (!formData.code || !formData.name) {
-      alert('الرجاء اختيار الاسم');
+      alert('الرجاء اختيار ' + getEntityLabel());
       return;
     }
     if (amount <= 0) {
@@ -75,22 +231,40 @@ export const Transfers: React.FC = () => {
       return;
     }
 
-    addTransfer({
-      entityType: entityType,
-      entityCode: formData.code,
-      amount: amount,
-      type: formData.type,
-      date: formData.date,
-      notes: formData.notes
-    });
+    try {
+      setIsSubmitting(true);
+      await addTransfer({
+        branchId: entityType === 'CUSTOMER' ? selectedBranch : undefined,
+        entityType: entityType,
+        entityCode: formData.code,
+        amount: amount,
+        type: formData.type,
+        date: formData.date,
+        notes: formData.notes,
+        paymentMethod: formData.paymentMethod
+      });
 
-    setFormData(prev => ({
-      ...prev,
-      amount: '',
-      notes: ''
-    }));
-    setCurrentBalance(null); 
-    alert('تم حفظ عملية التحويل بنجاح');
+      // Update current displayed balance
+      if (currentBalance !== null) {
+        let delta = 0;
+        if (entityType === 'CUSTOMER') delta = formData.type === 'IN' ? amount : -amount;
+        else if (entityType === 'SUPPLIER') delta = formData.type === 'OUT' ? amount : -amount;
+        else delta = formData.type === 'OUT' ? amount : -amount;
+        setCurrentBalance(currentBalance + delta);
+      }
+
+      setFormData(prev => ({
+        ...prev,
+        amount: '',
+        notes: ''
+      }));
+      alert('تم حفظ عملية التحويل وتحديث الخزنة والحساب بنجاح');
+    } catch (err: any) {
+      console.error("Transfer submission error:", err);
+      alert('حدث خطأ أثناء حفظ التحويل: ' + (err?.message || err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Helper text for UI
@@ -101,23 +275,30 @@ export const Transfers: React.FC = () => {
   };
 
   const getInLabel = () => {
-      if (entityType === 'CUSTOMER') return 'استلام نقدية من عميل';
-      if (entityType === 'SUPPLIER') return 'استلام نقدية من مورد (مرتجع)';
-      return 'استرداد سلفة من موظف';
+      if (entityType === 'CUSTOMER') return 'استلام من عميل';
+      if (entityType === 'SUPPLIER') return 'استلام من مورد';
+      return 'استرداد من موظف';
   };
 
   const getOutLabel = () => {
-      if (entityType === 'CUSTOMER') return 'دفع نقدية لعميل';
-      if (entityType === 'SUPPLIER') return 'دفع مستحقات لمورد';
-      return 'صرف راتب / سلفة لموظف';
+      if (entityType === 'CUSTOMER') return 'دفع لعميل';
+      if (entityType === 'SUPPLIER') return 'دفع لمورد';
+      return 'صرف لموظف';
   };
 
   return (
     <div className="max-w-4xl mx-auto">
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
-        <div className="p-6 bg-purple-600 text-white flex items-center gap-3">
-          <ArrowRightLeft size={28} />
-          <h2 className="text-xl font-bold">تسجيل التحويلات المالية (خزنة)</h2>
+        <div className="p-6 bg-purple-600 text-white flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <ArrowRightLeft size={28} />
+            <h2 className="text-xl font-bold">تسجيل التحويلات المالية</h2>
+          </div>
+          {entityType === 'CUSTOMER' && (
+            <span className="bg-white/20 backdrop-blur-sm px-3 py-1 rounded-lg text-xs font-bold text-white">
+              {selectedBranch === 'NOZHA' ? 'فرع النزهة' : 'فرع المرج'}
+            </span>
+          )}
         </div>
         
         <div className="p-8">
@@ -189,46 +370,383 @@ export const Transfers: React.FC = () => {
               </label>
             </div>
 
-            {/* Selection */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-gray-700">اسم {getEntityLabel()}</label>
-                <div className="relative">
-                  <input 
-                    type="text"
-                    list="namesList"
-                    required
-                    className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none pr-10"
-                    placeholder="بحث بالاسم..."
-                    value={formData.name}
-                    onChange={e => handleNameChange(e.target.value)}
-                  />
-                  <Search className="absolute left-3 top-3.5 text-gray-400" size={18}/>
-                  <datalist id="namesList">
-                    {activeList.map(e => <option key={e.code} value={e.name} />)}
-                  </datalist>
-                </div>
-              </div>
+            {/* Method Toggle */}
+            <div className="space-y-2">
+               <label className="block text-sm font-bold text-gray-700 mb-2">طريقة الدفع/التحصيل</label>
+               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                 <label className={`
+                   flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                   ${formData.paymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="CASH" 
+                     checked={formData.paymentMethod === 'CASH'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'CASH'})} 
+                     className="hidden"
+                   />
+                   <Wallet size={20} />
+                   <span className="font-bold text-xs">خزنة (كاش)</span>
+                 </label>
 
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-gray-700">الكود</label>
-                <input 
-                  type="text"
-                  list="codesList"
-                  required
-                  className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-mono bg-gray-50"
-                  placeholder="Code"
-                  value={formData.code}
-                  onChange={e => handleCodeChange(e.target.value)}
-                />
-                <datalist id="codesList">
-                   {activeList.map(e => <option key={e.code} value={e.code} />)}
-                </datalist>
-              </div>
+                 <label className={`
+                   flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                   ${formData.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="BANK_AHLY" 
+                     checked={formData.paymentMethod === 'BANK_AHLY'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'BANK_AHLY'})} 
+                     className="hidden"
+                   />
+                   <Building2 size={20} />
+                   <span className="font-bold text-xs">البنك الأهلي</span>
+                 </label>
+
+                 <label className={`
+                   flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                   ${formData.paymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="BANK_MISR" 
+                     checked={formData.paymentMethod === 'BANK_MISR'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'BANK_MISR'})} 
+                     className="hidden"
+                   />
+                   <Building2 size={20} />
+                   <span className="font-bold text-xs">بنك مصر</span>
+                 </label>
+
+                 <label className={`
+                   flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                   ${formData.paymentMethod === 'VF_CASH_AYMAN' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="VF_CASH_AYMAN" 
+                     checked={formData.paymentMethod === 'VF_CASH_AYMAN'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'VF_CASH_AYMAN'})} 
+                     className="hidden"
+                   />
+                   <Smartphone size={20} />
+                   <span className="font-bold text-xs">فودافون كاش أيمن</span>
+                 </label>
+
+                 <label className={`
+                   flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                   ${formData.paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600' : 'bg-white border-gray-200 hover:bg-gray-50'}
+                 `}>
+                   <input 
+                     type="radio" 
+                     name="method" 
+                     value="VF_CASH_KYRILLOS" 
+                     checked={formData.paymentMethod === 'VF_CASH_KYRILLOS'}
+                     onChange={() => setFormData({...formData, paymentMethod: 'VF_CASH_KYRILLOS'})} 
+                     className="hidden"
+                   />
+                   <Smartphone size={20} />
+                   <span className="font-bold text-xs">فودافون كاش كيرلس</span>
+                 </label>
+               </div>
             </div>
 
+            {/* Entity Selection Section */}
+            {entityType === 'CUSTOMER' ? (
+              /* Cascading Filter for Customer: Branch -> Area -> Customer */
+              <div className="p-4 bg-gradient-to-r from-purple-50/70 to-indigo-50/70 border border-purple-200/70 rounded-xl space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                  
+                  {/* Step 1: Branch Selection */}
+                  <div className="md:col-span-5">
+                    <label className="text-xs font-bold text-purple-900 flex items-center gap-1.5 mb-1.5">
+                      <span className="w-5 h-5 rounded-full bg-purple-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
+                      اختيار الفرع / الإدارة
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {BRANCHES.map(b => {
+                        const isSelected = selectedBranch === b.id;
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedBranch(b.id);
+                              setSelectedArea('ALL');
+                              setFormData(prev => ({ ...prev, code: '', name: '' }));
+                              setEntitySearchText('');
+                              setCurrentBalance(null);
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer ${
+                              isSelected
+                                ? 'bg-purple-600 text-white ring-2 ring-purple-300 shadow-purple-200'
+                                : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+                            }`}
+                          >
+                            <Building size={14} />
+                            <span>{b.name}</span>
+                            {isSelected && <Check size={14} className="mr-auto" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Step 2: Dynamic Area Selection */}
+                  <div className="md:col-span-7">
+                    <label className="text-xs font-bold text-purple-900 flex items-center gap-1.5 mb-1.5">
+                      <span className="w-5 h-5 rounded-full bg-purple-600 text-white inline-flex items-center justify-center text-[11px] font-bold">2</span>
+                      تحديد المنطقة ({selectedBranch === 'NOZHA' ? 'النزهة' : 'المرج'})
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <MapPin size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <select
+                          className="w-full pr-8 pl-3 py-2 border border-purple-200 rounded-lg text-xs font-medium bg-white focus:ring-2 focus:ring-purple-500 focus:outline-none cursor-pointer"
+                          value={selectedArea}
+                          onChange={e => {
+                            setSelectedArea(e.target.value);
+                            setFormData(prev => ({ ...prev, code: '', name: '' }));
+                            setEntitySearchText('');
+                            setCurrentBalance(null);
+                            setIsDropdownOpen(false);
+                          }}
+                        >
+                          <option value="ALL">جميع مناطق {selectedBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'} ({availableCustomers.length} عميل)</option>
+                          {availableBranchAreas.map(area => (
+                            <option key={area} value={area}>{area}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {selectedArea !== 'ALL' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedArea('ALL');
+                            setFormData(prev => ({ ...prev, code: '', name: '' }));
+                            setEntitySearchText('');
+                            setCurrentBalance(null);
+                            setIsDropdownOpen(false);
+                          }}
+                          className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                          title="عرض جميع مناطق الإدارة"
+                        >
+                          إلغاء الفلتر
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step 3: Cascading Customer Selection */}
+                <div className="pt-2 border-t border-purple-200/50">
+                  <label className="text-xs font-bold text-purple-900 flex items-center justify-between mb-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-purple-600 text-white inline-flex items-center justify-center text-[11px] font-bold">3</span>
+                      اختيار العميل بالاسم أو الكود (مفلتر حسب {selectedBranch === 'NOZHA' ? 'النزهة' : 'المرج'} {selectedArea !== 'ALL' ? `- ${selectedArea}` : ''})
+                    </span>
+                    <span className="text-[11px] text-purple-600 font-medium">
+                      ({availableCustomers.length} عميل نشط)
+                    </span>
+                  </label>
+
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start" ref={dropdownRef}>
+                    {/* Search Box / Combobox with dropdown popup */}
+                    <div className="md:col-span-8 relative">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          list="transfersEntityList"
+                          required
+                          className="w-full p-2.5 pr-8 pl-8 border border-purple-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                          value={entitySearchText}
+                          onChange={e => handleSearchChange(e.target.value)}
+                          onFocus={() => setIsDropdownOpen(true)}
+                          placeholder="ابحث بكود أو اسم العميل: [C079] مرقص - عين شمس..."
+                        />
+                        <Search size={16} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        {formData.code && (
+                          <button
+                            type="button"
+                            onClick={() => selectEntity(null)}
+                            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 p-0.5 rounded cursor-pointer transition-colors"
+                            title="إلغاء الاختيار"
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
+
+                      <datalist id="transfersEntityList">
+                        {availableCustomers.map(c => (
+                          <option key={`tr_cust_${c.code}`} value={formatEntityLabel(c)}>
+                            رصيد سابق: {c.balance.toLocaleString()} ج.م
+                          </option>
+                        ))}
+                      </datalist>
+
+                      {/* Interactive Suggestions Popup */}
+                      {isDropdownOpen && filteredSuggestions.length > 0 && (
+                        <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-purple-200 rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100">
+                          {filteredSuggestions.map(e => {
+                            const c = e as Customer;
+                            const isSelected = formData.code === c.code;
+                            return (
+                              <button
+                                key={`tr_suggest_${c.code}`}
+                                type="button"
+                                onClick={() => selectEntity(c)}
+                                className={`w-full text-right p-2.5 hover:bg-purple-50 flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                                  isSelected ? 'bg-purple-50 font-bold border-r-4 border-purple-600' : ''
+                                }`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 font-mono font-bold rounded text-[11px]">
+                                    {c.code}
+                                  </span>
+                                  <span className="font-bold text-gray-800 text-sm">
+                                    {c.name}
+                                  </span>
+                                  {c.area && (
+                                    <span className="text-gray-500 text-[11px]">
+                                      - {c.area}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-left shrink-0">
+                                  <span className={`font-mono text-xs font-bold ${
+                                    c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                  }`} dir="ltr">
+                                    {c.balance.toLocaleString()} ج.م
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Code Input (Synced) */}
+                    <div className="md:col-span-4 relative">
+                      <input 
+                        type="text"
+                        required
+                        className="w-full p-2.5 border border-purple-200 rounded-lg text-sm font-mono bg-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                        placeholder="كود العميل"
+                        value={formData.code}
+                        onChange={e => handleCodeChange(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* For Supplier / Employee */
+              <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-3">
+                <label className="text-xs font-bold text-gray-800 flex items-center justify-between">
+                  <span>اختيار {getEntityLabel()} (بحث بالكود أو الاسم)</span>
+                  <span className="text-gray-500 text-[11px]">({currentDisplayList.length} نشط)</span>
+                </label>
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start" ref={dropdownRef}>
+                  <div className="md:col-span-8 relative">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        list="transfersEntityList"
+                        required
+                        className="w-full p-2.5 pr-8 pl-8 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                        value={entitySearchText}
+                        onChange={e => handleSearchChange(e.target.value)}
+                        onFocus={() => setIsDropdownOpen(true)}
+                        placeholder={`ابحث بكود أو اسم ${getEntityLabel()}: [${entityType === 'SUPPLIER' ? 'S001' : 'E001'}] ...`}
+                      />
+                      <Search size={16} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      {formData.code && (
+                        <button
+                          type="button"
+                          onClick={() => selectEntity(null)}
+                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 p-0.5 rounded cursor-pointer transition-colors"
+                          title="إلغاء الاختيار"
+                        >
+                          <X size={15} />
+                        </button>
+                      )}
+                    </div>
+
+                    <datalist id="transfersEntityList">
+                      {currentDisplayList.map(e => (
+                        <option key={`tr_ent_${e.code}`} value={formatEntityLabel(e)}>
+                          رصيد: {e.balance.toLocaleString()} ج.م
+                        </option>
+                      ))}
+                    </datalist>
+
+                    {/* Interactive Suggestions Popup */}
+                    {isDropdownOpen && filteredSuggestions.length > 0 && (
+                      <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100">
+                        {filteredSuggestions.map(e => {
+                          const isSelected = formData.code === e.code;
+                          const subtitle = entityType === 'SUPPLIER' ? (e as Supplier).phone : (e as Employee).role;
+                          return (
+                            <button
+                              key={`tr_suggest_${e.code}`}
+                              type="button"
+                              onClick={() => selectEntity(e)}
+                              className={`w-full text-right p-2.5 hover:bg-purple-50 flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                                isSelected ? 'bg-purple-50 font-bold border-r-4 border-purple-600' : ''
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="px-1.5 py-0.5 bg-gray-200 text-gray-800 font-mono font-bold rounded text-[11px]">
+                                  {e.code}
+                                </span>
+                                <span className="font-bold text-gray-800 text-sm">
+                                  {e.name}
+                                </span>
+                                {subtitle && (
+                                  <span className="text-gray-500 text-[11px]">
+                                    - {subtitle}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-left shrink-0">
+                                <span className={`font-mono text-xs font-bold ${
+                                  e.balance < 0 ? 'text-red-600' : e.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                }`} dir="ltr">
+                                  {e.balance.toLocaleString()} ج.م
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-4 relative">
+                    <input 
+                      type="text"
+                      required
+                      className="w-full p-2.5 border border-gray-300 rounded-lg text-sm font-mono bg-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                      placeholder="الكود"
+                      value={formData.code}
+                      onChange={e => handleCodeChange(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
              {/* Balance Display */}
-             {formData.name && currentBalance !== null && (
+             {formData.code && currentBalance !== null && (
               <div className={`p-4 rounded-lg border flex items-center gap-3 animate-fade-in
                 ${currentBalance < 0 ? 'bg-red-50 border-red-200 text-red-800' : 'bg-green-50 border-green-200 text-green-800'}
               `}>
@@ -239,8 +757,10 @@ export const Transfers: React.FC = () => {
                     {currentBalance.toLocaleString()} ج.م 
                     <span className="text-xs mr-2 text-gray-600">
                         {entityType === 'EMPLOYEE' 
-                            ? (currentBalance < 0 ? '(مستحقات له)' : '(سلف عليه)') 
-                            : (currentBalance < 0 ? '(عليه/مديونية)' : '(له/رصيد)')
+                            ? (currentBalance < 0 ? '(مستحقات له)' : currentBalance > 0 ? '(سلف عليه)' : '(متزن)') 
+                            : entityType === 'SUPPLIER'
+                            ? (currentBalance < 0 ? '(له / مديونية علينا)' : currentBalance > 0 ? '(لنا عليه / رصيد)' : '(متزن)')
+                            : (currentBalance < 0 ? '(عليه / مديونية)' : currentBalance > 0 ? '(له / رصيد)' : '(متزن)')
                         }
                     </span>
                   </p>
@@ -254,17 +774,40 @@ export const Transfers: React.FC = () => {
                 <label className="block text-sm font-bold text-gray-700">قيمة التحويل</label>
                 <div className="relative">
                   <input 
-                    type="number"
+                    type="text"
+                    dir="ltr"
                     required
-                    min="1"
-                    step="0.01"
-                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-bold text-xl"
-                    placeholder="0.00"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-bold text-xl text-center font-mono"
+                    placeholder="0"
                     value={formData.amount}
-                    onChange={e => setFormData({...formData, amount: e.target.value})}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, amount: val}))}
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
+                {parseNumberFromCommas(formData.amount) > 0 && (
+                  <div className="space-y-1 mt-1">
+                    <p className="text-xs font-bold text-purple-700 bg-purple-50 p-2 rounded border border-purple-100 flex justify-between">
+                      <span>المبلغ المحدد:</span>
+                      <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
+                    </p>
+                    {currentBalance !== null && (() => {
+                      const enteredAmt = parseNumberFromCommas(formData.amount);
+                      let projectedDelta = 0;
+                      if (entityType === 'CUSTOMER') projectedDelta = formData.type === 'IN' ? enteredAmt : -enteredAmt;
+                      else if (entityType === 'SUPPLIER') projectedDelta = formData.type === 'OUT' ? enteredAmt : -enteredAmt;
+                      else projectedDelta = formData.type === 'OUT' ? enteredAmt : -enteredAmt;
+                      const projectedBal = currentBalance + projectedDelta;
+                      return (
+                        <p className="text-xs font-bold text-gray-700 bg-gray-50 p-2 rounded border border-gray-200 flex justify-between items-center">
+                          <span>الرصيد المتوقع بعد التحويل:</span>
+                          <span className={`font-mono font-bold ${projectedBal < 0 ? 'text-red-600' : projectedBal > 0 ? 'text-green-700' : 'text-gray-800'}`} dir="ltr">
+                            {projectedBal.toLocaleString()} ج.م
+                          </span>
+                        </p>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -293,10 +836,11 @@ export const Transfers: React.FC = () => {
             <div className="pt-6">
               <button 
                 type="submit"
-                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all flex justify-center items-center gap-3"
+                disabled={isSubmitting}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all flex justify-center items-center gap-3 cursor-pointer disabled:cursor-not-allowed"
               >
                 <Save size={24} />
-                حفظ التحويل
+                {isSubmitting ? 'جاري الحفظ...' : 'حفظ التحويل'}
               </button>
             </div>
 

@@ -1,15 +1,93 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
-import { UserPlus, FileText, Edit, Truck } from 'lucide-react';
+import { 
+  UserPlus, FileText, Edit, Truck, Download, Phone, Trash2, 
+  AlertTriangle, Eye, Printer, Package, Layers, X, Search, PlusCircle, Check, ArrowRight,
+  Calendar, Filter, MessageCircle, Sliders, ArrowUpCircle, ArrowDownCircle
+} from 'lucide-react';
+import { Purchase, CustomerHistory, ManualSupplierTransaction } from '../types';
+import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
+import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { useBackHandler } from '../utils/backNavigation';
+import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
 
 export const Suppliers: React.FC = () => {
-  const { suppliers, addSupplier, updateSupplier } = useERP();
+  const { 
+    suppliers, addSupplier, updateSupplier, deleteSupplier,
+    clearLedger, cleanCorruptedSupplierOpeningBalance,
+    currentUser, purchases, printLedger, printPurchaseInvoice,
+    companyLogo
+  } = useERP();
+
+  const canDeleteSuppliers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteSuppliers);
   
-  const [formData, setFormData] = useState({ code: '', name: '', balance: 0 });
-  const [selectedSupplierCode, setSelectedSupplierCode] = useState<string | null>(null);
+  // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
+  const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
+  const [isSharingPdf, setIsSharingPdf] = useState(false);
+
+  // Search state
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // Consolidated Ledger Modal state
+  const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
+  const [consolidatedInitialTab, setConsolidatedInitialTab] = useState<'CUSTOMERS' | 'SUPPLIERS' | 'ALL'>('SUPPLIERS');
+
+  // Supplier Add/Edit Modal state
+  const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
+  const [formData, setFormData] = useState<{
+    code: string;
+    name: string;
+    phone: string;
+    balance: string;
+    balanceType: 'DEBT' | 'ADVANCE';
+  }>({ code: '', name: '', phone: '', balance: '', balanceType: 'DEBT' });
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
+
+  // Selected supplier
+  const [selectedSupplierCode, setSelectedSupplierCode] = useState<string | null>(null);
+
+  // Date Filter state for statement
+  const [filterStartDate, setFilterStartDate] = useState<string>('');
+  const [filterEndDate, setFilterEndDate] = useState<string>('');
+
+  // Print Date Modal state
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [printStartDate, setPrintStartDate] = useState<string>('');
+  const [printEndDate, setPrintEndDate] = useState<string>('');
+
+  // Delete supplier modal state
+  const [supplierToDelete, setSupplierToDelete] = useState<any | null>(null);
+  const [deleteWarningReason, setDeleteWarningReason] = useState<string | null>(null);
+  const [isDeletingSupplier, setIsDeletingSupplier] = useState(false);
+
+  // Clear Ledger confirmation state
+  const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
+
+  // Manual Supplier Transaction / Adjustment Modal state
+  const [isManualTxModalOpen, setIsManualTxModalOpen] = useState(false);
+  const [manualTxType, setManualTxType] = useState<'DEBIT' | 'CREDIT'>('DEBIT');
+  const [manualTxAmount, setManualTxAmount] = useState('');
+  const [manualTxDate, setManualTxDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [manualTxDescription, setManualTxDescription] = useState('');
+  const [isSavingManualTx, setIsSavingManualTx] = useState(false);
+
+  // View Purchase Modal State
+  const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
+
+  // View Mode for Ledger: 'ITEMS' (default, itemized breakdown) or 'INVOICES' (summary)
+  const [viewMode, setViewMode] = useState<'ITEMS' | 'INVOICES'>('ITEMS');
+
+  // Mobile Back Button handlers for modals & sub-views
+  useBackHandler(() => setIsSupplierModalOpen(false), isSupplierModalOpen, 'suppliers-add-edit-modal');
+  useBackHandler(() => setIsManualTxModalOpen(false), isManualTxModalOpen, 'suppliers-manual-tx-modal');
+  useBackHandler(() => setIsConsolidatedModalOpen(false), isConsolidatedModalOpen, 'suppliers-consolidated-modal');
+  useBackHandler(() => setIsPrintModalOpen(false), isPrintModalOpen, 'suppliers-print-modal');
+  useBackHandler(() => setViewPurchase(null), !!viewPurchase, 'suppliers-view-purchase-modal');
+  useBackHandler(() => { setSupplierToDelete(null); setDeleteWarningReason(null); }, !!supplierToDelete, 'suppliers-delete-modal');
+  useBackHandler(() => setShowClearLedgerConfirm(false), showClearLedgerConfirm, 'suppliers-clear-ledger-confirm');
+  useBackHandler(() => setMobileView('LIST'), mobileView === 'DETAILS', 'suppliers-mobile-details');
 
   const generateNextCode = () => {
     if (suppliers.length === 0) return 'S001';
@@ -20,235 +98,2013 @@ export const Suppliers: React.FC = () => {
     return `S${(maxId + 1).toString().padStart(3, '0')}`;
   };
 
-  useEffect(() => {
-    if (!isEditing) {
-      setFormData(prev => ({ ...prev, code: generateNextCode() }));
-    }
-  }, [suppliers, isEditing]);
+  // Active (non-deleted) suppliers
+  const activeSuppliers = useMemo(() => suppliers.filter(s => !s.isDeleted), [suppliers]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Auto-select first supplier if none selected
+  useEffect(() => {
+    if ((!selectedSupplierCode || !activeSuppliers.some(s => s.code === selectedSupplierCode)) && activeSuppliers.length > 0) {
+      setSelectedSupplierCode(activeSuppliers[0].code);
+    }
+  }, [activeSuppliers, selectedSupplierCode]);
+
+  // Filtered supplier list
+  const filteredSuppliers = useMemo(() => {
+    if (!searchTerm.trim()) return activeSuppliers;
+    const q = searchTerm.toLowerCase().trim();
+    return activeSuppliers.filter(s => 
+      s.name.toLowerCase().includes(q) || 
+      s.code.toLowerCase().includes(q) || 
+      (s.phone && s.phone.includes(q))
+    );
+  }, [activeSuppliers, searchTerm]);
+
+  const selectedSupplier = useMemo(() => {
+    return activeSuppliers.find(s => s.code === selectedSupplierCode) || (activeSuppliers.length > 0 ? activeSuppliers[0] : null);
+  }, [activeSuppliers, selectedSupplierCode]);
+
+  // Single Source of Truth: live authoritative balance map for all active suppliers
+  const supplierBalancesMap = useMemo(() => {
+    const map = new Map<string, number>();
+    activeSuppliers.forEach(s => {
+      map.set(s.code, getSupplierBalance(s, purchases));
+    });
+    return map;
+  }, [activeSuppliers, purchases]);
+
+  const handleOpenAddModal = () => {
+    setIsEditing(false);
+    setEditingOldCode(null);
+    setFormData({ code: generateNextCode(), name: '', phone: '', balance: '', balanceType: 'DEBT' });
+    setIsSupplierModalOpen(true);
+  };
+
+  const handleOpenEditModal = (e: React.MouseEvent, supplier: any) => {
+    e.stopPropagation();
+    setIsEditing(true);
+    setEditingOldCode(supplier.code);
+    const isS005 = (supplier.code || '').trim().toUpperCase() === 'S005' || (supplier.name && supplier.name.includes('أحمد تعيلب'));
+    const rawOp = !isS005 && typeof supplier.openingBalance === 'number' && !isNaN(supplier.openingBalance)
+      ? supplier.openingBalance 
+      : 0;
+    const existingOp = Math.abs(rawOp) > 100000000 ? 0 : rawOp;
+    const isDebt = existingOp < 0;
+    setFormData({
+      code: supplier.code,
+      name: supplier.name,
+      phone: supplier.phone || '',
+      balance: formatWithCommas(Math.abs(existingOp)),
+      balanceType: isDebt ? 'DEBT' : 'ADVANCE'
+    });
+    setIsSupplierModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsSupplierModalOpen(false);
+    setIsEditing(false);
+    setEditingOldCode(null);
+  };
+
+  const handleSubmitSupplier = (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.code && formData.name) {
+      const rawNum = parseNumberFromCommas(formData.balance);
+      const absNum = Math.abs(rawNum);
+      // إذا كان سالباً (مديونية علينا للمورد): يدرج بالسالب
+      // إذا كان موجباً (مبلغ لنا عنده / دفعة مقدمة): يدرج بالموجب
+      const signedBal = absNum === 0 ? 0 : (formData.balanceType === 'DEBT' || rawNum < 0 ? -absNum : absNum);
+      const today = new Date().toISOString().split('T')[0];
+
       if (isEditing && editingOldCode) {
         updateSupplier(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
-          balance: Number(formData.balance) 
+          phone: formData.phone, 
+          balance: signedBal,
+          openingBalance: signedBal
         });
-        handleCancelEdit();
+        handleCloseModal();
       } else {
         if (suppliers.some(s => s.code === formData.code)) {
           alert('هذا الكود مستخدم بالفعل لمورد آخر!');
           return;
         }
-        addSupplier({ ...formData, history: [] });
-        setFormData({ code: '', name: '', balance: 0 });
+
+        const initialHistory: any[] = [];
+        if (signedBal !== 0) {
+          initialHistory.push({
+            date: today,
+            description: 'رصيد افتتاحي',
+            amount: signedBal
+          });
+        }
+
+        addSupplier({ 
+          code: formData.code, 
+          name: formData.name, 
+          phone: formData.phone, 
+          balance: signedBal,
+          openingBalance: signedBal,
+          createdAt: today,
+          history: initialHistory 
+        });
+        setSelectedSupplierCode(formData.code);
+        handleCloseModal();
       }
     }
   };
 
-  const handleEditClick = (e: React.MouseEvent, supplier: any) => {
+  const handleInitiateDelete = (e: React.MouseEvent, supplier: any) => {
     e.stopPropagation();
-    setIsEditing(true);
-    setEditingOldCode(supplier.code);
-    setFormData({
-      code: supplier.code,
-      name: supplier.name,
-      balance: supplier.balance
+    if (!supplier) return;
+    if (!canDeleteSuppliers) {
+      alert('ليس لديك صلاحية حذف الموردين');
+      return;
+    }
+
+    // Safety check: check if supplier has any purchases, non-zero balance, or history
+    const cleanCode = (supplier.code || '').trim().toLowerCase();
+    const hasPurchases = purchases.some(p => (p.supplierCode || '').trim().toLowerCase() === cleanCode);
+    const hasBalance = Number(supplier.balance || 0) !== 0;
+    const hasHistory = Array.isArray(supplier.history) && supplier.history.length > 0;
+
+    if (hasPurchases || hasBalance || hasHistory) {
+      setDeleteWarningReason(`لا يمكن حذف المورد لوجود حركات مالية وفواتير مرتبطة به، يمكنك تعديل بياناته فقط.`);
+      setSupplierToDelete(supplier);
+      return;
+    }
+
+    setDeleteWarningReason(null);
+    setSupplierToDelete(supplier);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!supplierToDelete || isDeletingSupplier) return;
+
+    setIsDeletingSupplier(true);
+    try {
+      const res = await deleteSupplier(supplierToDelete.code);
+      if (res.success) {
+        if (selectedSupplierCode === supplierToDelete.code) {
+          const remaining = suppliers.filter(s => s.code !== supplierToDelete.code);
+          setSelectedSupplierCode(remaining.length > 0 ? remaining[0].code : null);
+        }
+        setSupplierToDelete(null);
+        setDeleteWarningReason(null);
+        alert(`تم حذف المورد (${supplierToDelete.name}) بنجاح.`);
+      } else {
+        alert(res.message || 'حدث خطأ أثناء محاولة حذف المورد.');
+      }
+    } finally {
+      setIsDeletingSupplier(false);
+    }
+  };
+
+  const handleClearLedger = async () => {
+    if (!selectedSupplier) return;
+    const success = await clearLedger('SUPPLIER', selectedSupplier.code);
+    if (success) {
+      setShowClearLedgerConfirm(false);
+      alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+    }
+  };
+
+  const handleViewPurchaseDetails = (description: string) => {
+    const match = description.match(/#([A-Za-z0-9-]+)/);
+    if (match) {
+      const purchaseId = match[1];
+      const p = purchases.find(item => item.id === purchaseId);
+      if (p) {
+        setViewPurchase(p);
+      } else {
+        alert("عذراً، تفاصيل هذه الفاتورة غير متوفرة في السجل العام (ربما تم حذفها).");
+      }
+    }
+  };
+
+  // Helper to format supplier movement descriptions to a clean label like 'دفعة'
+  const formatSupplierMovementDesc = (desc: string): string => {
+    if (!desc) return '';
+    if (
+      desc.includes('دفع لـ مورد') || 
+      desc.includes('سداد مورد') || 
+      desc.includes('سداد دفعة') ||
+      desc.includes('سداد/تحصيل نقدية') ||
+      desc.startsWith('دفع لـ') ||
+      desc.startsWith('سداد')
+    ) {
+      const parts = desc.split(' - ');
+      if (parts.length > 1) {
+        const last = parts[parts.length - 1].trim();
+        if (!last.includes('دفع لـ مورد') && !last.startsWith('فاتورة #') && last !== '') {
+          return `دفعة (${last})`;
+        }
+      }
+      return 'دفعة';
+    }
+    return desc;
+  };
+
+  // Primary unified statement calculation for selected supplier
+  const statementResult = useMemo(() => {
+    return getSupplierStatementTransactions(selectedSupplier, purchases, {
+      startDate: filterStartDate,
+      endDate: filterEndDate,
+      viewMode
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [selectedSupplier, purchases, filterStartDate, filterEndDate, viewMode]);
+
+  const itemizedRows = statementResult.rows;
+  const totalEggQuantity = statementResult.totalQuantity;
+  const totalItemizedLineTotal = statementResult.totalLineTotal;
+  const totalItemizedCredit = statementResult.totalCredit;
+  const totalItemizedDebit = statementResult.totalDebit;
+  // دالة calculateSupplierBalance تعمل كـ useMemo وتعتمد على مصفوفة الحركات المفلترة للمورد الحالي فقط
+  const calculateSupplierBalance = useMemo((): number => {
+    if (!selectedSupplier) return 0;
+
+    const isS005 = (selectedSupplier.code || '').trim().toUpperCase() === 'S005' || 
+                   (selectedSupplier.name && selectedSupplier.name.includes('أحمد تعيلب'));
+
+    // قراءة الرصيد الافتتاحي فقط من openingBalance بدون استخدام balance كبديل لمنع التكرار التلقائي
+    const rawOpening = !isS005 && typeof selectedSupplier.openingBalance === 'number' && !isNaN(selectedSupplier.openingBalance)
+      ? selectedSupplier.openingBalance
+      : 0;
+    const openingBal = Math.abs(rawOpening) > 100000000 ? 0 : (parseFloat(String(rawOpening)) || 0);
+
+    // تصفية الحركات: استبعاد سطر الرصيد الافتتاحي لأن openingBal هو القيمة الابتدائية للـ reduce
+    // واستبعاد أي حركات تالفة تتجاوز 100M
+    const filteredMovements = itemizedRows.filter(r => {
+      if (r.isOpeningBalance) return false;
+      const cred = Math.abs(parseFloat(String(r.credit || 0)) || 0);
+      const deb = Math.abs(parseFloat(String(r.debit || 0)) || 0);
+      if (cred > 100000000 || deb > 100000000) return false;
+      return true;
+    });
+
+    // استخدام reduce لحساب الرصيد التراكمي مع تحويل كافة قيم الدائن والمدين إلى float عبر parseFloat
+    const totalBalance = filteredMovements.reduce((acc: number, row) => {
+      const credit = parseFloat(String(row.credit || 0)) || 0;
+      const debit = parseFloat(String(row.debit || 0)) || 0;
+      // المعادلة المحاسبية المعتمدة: الرصيد = الرصيد الافتتاحي + السدادات (مدين/لنا) - التوريدات (دائن/علينا)
+      return acc + debit - credit;
+    }, openingBal);
+
+    // التأكد التام من إعادة قيمة عددية (number) وليس نصاً
+    return Math.round(Number(totalBalance) * 100) / 100;
+  }, [selectedSupplier, itemizedRows]);
+
+  const statementFinalBalance = calculateSupplierBalance;
+  const selectedSupplierBalance = calculateSupplierBalance;
+
+  const handleOpenManualTxModal = () => {
+    setManualTxType('DEBIT');
+    setManualTxAmount('');
+    setManualTxDescription('');
+    setManualTxDate(new Date().toISOString().split('T')[0]);
+    setIsManualTxModalOpen(true);
   };
 
-  const handleCancelEdit = () => {
-    setIsEditing(false);
-    setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', balance: 0 });
+  const handleCloseManualTxModal = () => {
+    setIsManualTxModalOpen(false);
+    setManualTxAmount('');
+    setManualTxDescription('');
+    setIsSavingManualTx(false);
   };
 
-  const selectedSupplier = suppliers.find(s => s.code === selectedSupplierCode);
+  const handleSelectQuickChip = (chip: string) => {
+    setManualTxDescription(chip);
+    const lower = chip.toLowerCase();
+    if (lower.includes('سداد') || lower.includes('دفعة') || lower.includes('خصم') || lower.includes('مرتجع')) {
+      setManualTxType('DEBIT');
+    } else if (lower.includes('بضاعة') || lower.includes('توريد') || lower.includes('شراء') || lower.includes('مصاريف') || lower.includes('فرق سعر')) {
+      setManualTxType('CREDIT');
+    }
+  };
+
+  const handleManualDescriptionChange = (val: string) => {
+    setManualTxDescription(val);
+    const lower = val.toLowerCase();
+    if (lower.includes('سداد') || lower.includes('دفعة') || lower.includes('خصم') || lower.includes('مرتجع')) {
+      setManualTxType('DEBIT');
+    } else if (lower.includes('بضاعة') || lower.includes('توريد') || lower.includes('بدون فاتورة')) {
+      setManualTxType('CREDIT');
+    }
+  };
+
+  const handleSaveManualTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSupplier) {
+      alert('يرجى اختيار مورد أولاً');
+      return;
+    }
+
+    const amt = parseNumberFromCommas(manualTxAmount);
+    if (isNaN(amt) || amt <= 0) {
+      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      return;
+    }
+
+    const desc = manualTxDescription.trim();
+    if (!desc) {
+      alert('يرجى كتابة البيان / سبب الحركة (مثال: سداد للمورد، خصم خاص، بضاعة بدون فاتورة، مرتجع بضاعة)');
+      return;
+    }
+
+    // Auto-direction:
+    // DEBIT (مدين / لنا عليه): سداد للمورد أو خصم أو مرتجع -> يقلل المديونية علينا (+amt)
+    // CREDIT (دائن / له علينا): بضاعة بدون فاتورة أو مستحقات إضافية -> يزيد المديونية علينا (-amt)
+    let finalType = manualTxType;
+
+    setIsSavingManualTx(true);
+    try {
+      const balanceChange = finalType === 'DEBIT' ? amt : -amt;
+      const currentBal = calculateSupplierBalance;
+      const newBal = currentBal + balanceChange;
+
+      const historyMovement: CustomerHistory = {
+        date: manualTxDate || new Date().toISOString().split('T')[0],
+        description: desc,
+        amount: balanceChange
+      };
+
+      const manualTxRecord: ManualSupplierTransaction = {
+        id: `SMTX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        date: manualTxDate || new Date().toISOString().split('T')[0],
+        type: finalType,
+        amount: amt,
+        description: desc,
+        createdAt: new Date().toISOString(),
+        createdBy: (currentUser as any)?.fullName || currentUser?.username || 'مستخدم'
+      };
+
+      const updatedHistory = [...(selectedSupplier.history || []), historyMovement];
+      const updatedManualTxs = [...(selectedSupplier.manualTransactions || []), manualTxRecord];
+
+      await updateSupplier(selectedSupplier.code, {
+        balance: newBal,
+        history: updatedHistory,
+        manualTransactions: updatedManualTxs
+      } as any);
+
+      handleCloseManualTxModal();
+    } catch (error) {
+      console.error('Error saving supplier manual transaction:', error);
+      alert('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
+    } finally {
+      setIsSavingManualTx(false);
+    }
+  };
+
+  // Handler to print supplier statement with optional custom dates
+  const handlePrintStatement = (sDate?: string, eDate?: string) => {
+    if (!selectedSupplier) return;
+    const res = getSupplierStatementTransactions(selectedSupplier, purchases, {
+      startDate: sDate,
+      endDate: eDate,
+      viewMode
+    });
+    const targetRows = res.rows;
+    const cred = res.totalCredit;
+    const deb = res.totalDebit;
+    const finalBal = res.finalBalance;
+
+    const dateLabel = (sDate || eDate) ? ` للفترة (${sDate ? `من ${sDate}` : ''} ${eDate ? `إلى ${eDate}` : ''})` : '';
+
+    printLedger({
+      title: viewMode === 'ITEMS' 
+        ? `بيان كشف حساب مورد تفصيلي بالأصناف والأسعار${dateLabel}` 
+        : `كشف حساب مورد مجمع بالفواتير${dateLabel}`,
+      entityName: selectedSupplier.name,
+      entityCode: selectedSupplier.code,
+      entityPhone: selectedSupplier.phone,
+      type: 'SUPPLIER',
+      dateRange: (sDate || eDate) ? { from: sDate, to: eDate } : undefined,
+      rows: targetRows,
+      totalDebit: deb,
+      totalCredit: cred,
+      finalBalance: finalBal
+    });
+    setIsPrintModalOpen(false);
+  };
+
+  // Handler to share supplier statement via WhatsApp as PDF
+  const handleShareWhatsAppStatement = async (sDate?: string, eDate?: string) => {
+    if (!selectedSupplier || isSharingPdf) return;
+    const fromDate = sDate !== undefined ? sDate : filterStartDate;
+    const toDate = eDate !== undefined ? eDate : filterEndDate;
+    const res = getSupplierStatementTransactions(selectedSupplier, purchases, {
+      startDate: fromDate,
+      endDate: toDate,
+      viewMode
+    });
+    const targetRows = res.rows;
+    const cred = res.totalCredit;
+    const deb = res.totalDebit;
+    const finalBal = res.finalBalance;
+
+    let syncTab: Window | null = null;
+    const isNative = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!isNative) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {}
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setIsSharingPdf(true);
+      // Failsafe timer so the button NEVER remains stuck on 'جاري التحويل'
+      safetyTimer = setTimeout(() => {
+        setIsSharingPdf(false);
+      }, 3500);
+
+      await shareSupplierStatementPdfViaWhatsApp({
+        supplierName: selectedSupplier.name,
+        supplierCode: selectedSupplier.code,
+        supplierPhone: selectedSupplier.phone,
+        dateRange: (fromDate || toDate) ? { from: fromDate, to: toDate } : undefined,
+        rows: targetRows,
+        totalDebit: deb,
+        totalCredit: cred,
+        finalBalance: finalBal
+      }, companyLogo || undefined, null, syncTab);
+    } catch (err: any) {
+      console.error("WhatsApp share failed:", err);
+      if (syncTab && !syncTab.closed) syncTab.close();
+      alert("حدث خطأ أثناء إعداد ومشاركة كشف الحساب.");
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsSharingPdf(false);
+      setIsPrintModalOpen(false);
+    }
+  };
+
+  const applyDatePreset = (preset: 'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_30' | 'TODAY') => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    if (preset === 'ALL') {
+      setPrintStartDate('');
+      setPrintEndDate('');
+    } else if (preset === 'THIS_MONTH') {
+      const first = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      setPrintStartDate(first);
+      setPrintEndDate(today);
+    } else if (preset === 'LAST_MONTH') {
+      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+      const last = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
+      setPrintStartDate(first);
+      setPrintEndDate(last);
+    } else if (preset === 'LAST_30') {
+      const prior = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      setPrintStartDate(prior);
+      setPrintEndDate(today);
+    } else if (preset === 'TODAY') {
+      setPrintStartDate(today);
+      setPrintEndDate(today);
+    }
+  };
 
   return (
-    <div className="space-y-8">
-      
-      {/* Add/Edit Supplier Section */}
-      <div className={`p-6 rounded-xl shadow-sm border transition-colors duration-300 ${isEditing ? 'bg-orange-50 border-orange-200' : 'bg-white border-brand-100'}`}>
-        <h3 className={`text-lg font-bold mb-4 flex items-center gap-2 ${isEditing ? 'text-orange-800' : 'text-brand-800'}`}>
-          {isEditing ? <Edit size={20} /> : <Truck size={20} />} 
-          {isEditing ? 'تعديل بيانات المورد' : 'إضافة مورد جديد'}
-        </h3>
-        <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-4 items-end">
-          <div className="flex-1 w-full">
-            <label className="block text-sm text-gray-600 mb-1">كود المورد</label>
+    <div className="flex flex-col gap-2.5 h-[calc(100dvh-60px)] md:h-[calc(100vh-85px)] min-h-0">
+
+      {/* Sleek Compact Action Toolbar (Hidden on mobile when viewing supplier details) */}
+      <div className={`bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex-wrap justify-between items-center gap-2 ${
+        mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
+      }`}>
+        <div className="flex items-center gap-2">
+          <button 
+            type="button" 
+            onClick={() => window.history.back()}
+            className="lg:hidden flex items-center gap-1 text-xs font-bold text-orange-950 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg border border-orange-200 transition-all shadow-2xs shrink-0"
+            title="العودة للصفحة السابقة"
+          >
+            <ArrowRight size={14} />
+            <span>العودة</span>
+          </button>
+
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold text-brand-900 text-base">الموردين</span>
+            <span className="bg-orange-50 text-orange-700 font-mono font-bold text-xs px-2 py-0.5 rounded-full border border-orange-200">
+              {filteredSuppliers.length}
+            </span>
+          </div>
+
+          {/* Real-time Search Input */}
+          <div className="relative">
+            <Search size={15} className="absolute right-2.5 top-2.5 text-gray-400" />
             <input 
-              type="text" 
-              required
-              className={`w-full p-2 border rounded-lg outline-none focus:border-brand-500 font-mono font-bold ${isEditing ? 'bg-white border-orange-300' : 'bg-gray-50'}`}
-              value={formData.code}
-              onChange={e => setFormData({...formData, code: e.target.value})}
-              placeholder="تلقائي"
+              type="text"
+              placeholder="بحث بالاسم أو الكود..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="pr-8 pl-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-orange-500 focus:bg-white w-48 sm:w-64 transition-all"
             />
-          </div>
-          <div className="flex-[2] w-full">
-            <label className="block text-sm text-gray-600 mb-1">اسم المورد</label>
-            <input 
-              type="text" 
-              required
-              className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-              placeholder="اسم المورد"
-            />
-          </div>
-          <div className="flex-1 w-full">
-             <label className="block text-sm text-gray-600 mb-1">{isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}</label>
-             <div className="relative">
-               <input 
-                type="number" 
-                className="w-full p-2 border rounded-lg outline-none focus:border-brand-500"
-                value={formData.balance}
-                onChange={e => setFormData({...formData, balance: Number(e.target.value)})}
-              />
-              <span className="absolute left-2 top-2 text-xs text-gray-400 pointer-events-none">
-                (سالب = عليه لنا)
-              </span>
-             </div>
-          </div>
-          <div className="flex gap-2 w-full md:w-auto">
-            <button type="submit" className={`flex-1 md:flex-auto px-6 py-2.5 rounded-lg font-bold text-white transition-colors shadow-sm ${isEditing ? 'bg-orange-600 hover:bg-orange-700' : 'bg-brand-600 hover:bg-brand-700'}`}>
-              {isEditing ? 'حفظ التعديلات' : 'إضافة'}
-            </button>
-            {isEditing && (
-              <button type="button" onClick={handleCancelEdit} className="bg-white text-gray-600 border border-gray-300 px-4 py-2.5 rounded-lg hover:bg-gray-50 transition-colors">
-                إلغاء
+            {searchTerm && (
+              <button 
+                onClick={() => setSearchTerm('')} 
+                className="absolute left-2.5 top-2 text-gray-400 hover:text-gray-600"
+              >
+                <X size={13} />
               </button>
             )}
           </div>
-        </form>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={handleOpenAddModal}
+            className="flex items-center gap-1.5 bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 transition-colors shadow-xs"
+          >
+            <PlusCircle size={15} /> إضافة مورد جديد
+          </button>
+          
+          <button 
+            onClick={() => {
+              setConsolidatedInitialTab('SUPPLIERS');
+              setIsConsolidatedModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 bg-orange-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-800 transition-colors shadow-xs"
+            title="عرض وطباعة كشف حساب مجمع لجميع الموردين"
+          >
+            <Layers size={15} /> كشف حساب مجمع للموردين
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* List */}
-        <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
-          <div className="p-4 bg-brand-50 border-b border-brand-100">
-            <h3 className="font-bold text-brand-800">قائمة الموردين</h3>
+      {/* Main Grid: Supplier List (col-3) + Statement Ledger (col-9) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 flex-1 min-h-0">
+        
+        {/* Supplier List Sidebar (Hidden on mobile when in DETAILS view) */}
+        <div className={`lg:col-span-3 bg-white rounded-xl shadow-xs border border-brand-100 flex-col min-h-0 overflow-hidden ${
+          mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
+        }`}>
+          <div className="p-2.5 bg-orange-50/60 border-b border-orange-100 flex justify-between items-center text-xs font-bold text-orange-950">
+            <span>قائمة الموردين</span>
+            <span className="text-gray-500 font-normal">اضغط لفتح الحساب</span>
           </div>
-          <div className="overflow-y-auto max-h-[500px]">
-            <ul className="divide-y divide-gray-100">
-              {suppliers.map(s => (
-                <li 
-                  key={s.code} 
-                  onClick={() => setSelectedSupplierCode(s.code)}
-                  className={`p-4 cursor-pointer hover:bg-brand-50 transition-colors flex justify-between items-center group
-                    ${selectedSupplierCode === s.code ? 'bg-brand-50 border-r-4 border-brand-500' : ''}
-                  `}
-                >
-                  <div className="flex-1">
-                    <p className="font-bold text-gray-800">{s.name}</p>
-                    <p className="text-xs text-gray-500">#{s.code}</p>
-                  </div>
-                  <div className="text-left flex items-center gap-3">
-                    <div>
-                      {/* Negative = We Owe Him (Red), Positive = He Owes Us (Green) */}
-                      <p className={`font-bold text-sm ${s.balance < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
-                        {s.balance.toLocaleString()}
-                      </p>
+
+          <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+            {filteredSuppliers.length === 0 ? (
+              <div className="p-6 text-center text-gray-400 text-xs">
+                {searchTerm ? 'لا توجد نتائج مطابقة للبحث' : 'لا يوجد موردين مسجلين'}
+              </div>
+            ) : (
+              filteredSuppliers.map((s, idx) => {
+                const isSelected = selectedSupplier?.code === s.code;
+                const currentBal = isSelected ? calculateSupplierBalance : (supplierBalancesMap.get(s.code) ?? getSupplierBalance(s, purchases));
+                const isDebtWeOwe = currentBal < 0;
+                const isCreditWeAreOwed = currentBal > 0;
+
+                return (
+                  <div 
+                    key={`${s.code}_${idx}`}
+                    onClick={() => {
+                      setSelectedSupplierCode(s.code);
+                      setMobileView('DETAILS');
+                    }}
+                    className={`p-2.5 hover:bg-orange-50/60 cursor-pointer transition-colors relative group flex items-center justify-between ${
+                      isSelected ? 'bg-orange-50/90 border-r-4 border-orange-600' : ''
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-gray-900 text-xs truncate">{s.name}</span>
+                        <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.2 rounded font-mono font-bold">
+                          {s.code}
+                        </span>
+                      </div>
+                      {s.phone && (
+                        <p className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-1" dir="ltr">
+                          <Phone size={10} /> {s.phone}
+                        </p>
+                      )}
                     </div>
-                    <button 
-                      onClick={(e) => handleEditClick(e, s)}
-                      className="opacity-0 group-hover:opacity-100 p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-all"
-                    >
-                      <Edit size={16} />
-                    </button>
+
+                    <div className="text-left flex items-center gap-1.5">
+                      <div className="text-left">
+                        <p className={`font-black text-xs font-mono ${isDebtWeOwe ? 'text-green-600' : isCreditWeAreOwed ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
+                          {currentBal.toLocaleString()}
+                        </p>
+                        <p className="text-[9px] text-gray-400">
+                          {isDebtWeOwe ? 'له (علينا)' : isCreditWeAreOwed ? 'لنا (عليه)' : 'متزن'}
+                        </p>
+                      </div>
+
+                      <button 
+                        onClick={(e) => handleOpenEditModal(e, s)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-blue-600 hover:bg-blue-50 rounded transition-all"
+                        title="تعديل بيانات المورد"
+                      >
+                        <Edit size={13} />
+                      </button>
+                      {canDeleteSuppliers && (
+                        <button 
+                          onClick={(e) => handleInitiateDelete(e, s)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all"
+                          title="حذف المورد"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </li>
-              ))}
-              {suppliers.length === 0 && (
-                <li className="p-4 text-center text-gray-400 text-sm">لا يوجد موردين</li>
-              )}
-            </ul>
+                );
+              })
+            )}
           </div>
         </div>
 
-        {/* Ledger Details */}
-        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-brand-100 p-6 min-h-[400px]">
-           {selectedSupplier ? (
-             <div className="space-y-6">
-                <div className="flex justify-between items-start border-b pb-4">
-                  <div>
-                    <h2 className="text-2xl font-bold text-brand-900 flex items-center gap-3">
-                      {selectedSupplier.name}
+        {/* Supplier Statement (بيان كشف الحساب) - Wide & Roomy (Hidden on mobile when in LIST view) */}
+        <div className={`lg:col-span-9 bg-white rounded-xl shadow-xs border border-brand-100 flex-col min-h-0 overflow-hidden ${
+          mobileView === 'LIST' ? 'hidden lg:flex' : 'flex'
+        }`}>
+          {selectedSupplier ? (
+            <div className="flex flex-col h-full min-h-0">
+              
+              {/* 1. Mobile-Only Compact Header (Minimal Vertical Space, 100% Focused on Statement Table) */}
+              <div className="lg:hidden p-2 bg-white border-b border-gray-200 flex flex-col gap-1.5 shrink-0">
+                {/* Row 1: Back + Name + Code + Compact Balance Badge */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <button 
+                      type="button"
+                      onClick={() => setMobileView('LIST')}
+                      className="flex items-center gap-1.5 text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 active:bg-orange-800 px-2.5 py-1.5 rounded-lg shadow-xs transition-all shrink-0 cursor-pointer"
+                      title="العودة لقائمة الموردين"
+                    >
+                      <ArrowRight size={14} />
+                      <span>العودة للقائمة</span>
+                    </button>
+                    <div className="min-w-0 flex items-center gap-1">
+                      <h2 className="text-xs font-black text-brand-900 truncate flex items-center gap-1">
+                        {selectedSupplier.name}
+                        <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.2 rounded font-mono">
+                          {selectedSupplier.code}
+                        </span>
+                      </h2>
                       <button 
-                        onClick={(e) => handleEditClick(e, selectedSupplier)}
-                        className="text-sm font-normal bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded flex items-center gap-1 transition-colors"
+                        onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
+                        className="p-1 text-gray-500 hover:text-orange-700 bg-gray-50 hover:bg-orange-50 border border-gray-200 rounded transition-colors shrink-0"
+                        title="تعديل بيانات المورد"
                       >
-                        <Edit size={14}/> تعديل
+                        <Edit size={11} />
                       </button>
-                    </h2>
-                    <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-mono">Code: {selectedSupplier.code}</span>
+                      {canDeleteSuppliers && (
+                        <button 
+                          onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
+                          className="p-1 text-red-500 hover:text-red-700 bg-red-50/50 hover:bg-red-50 border border-red-200 rounded transition-colors shrink-0"
+                          title="حذف المورد"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-left bg-brand-50 p-3 rounded-lg">
-                    <p className="text-sm text-gray-500">الرصيد الحالي</p>
-                    <p className={`text-2xl font-bold ${selectedSupplier.balance < 0 ? 'text-red-600' : 'text-green-600'}`} dir="ltr">
-                      {selectedSupplier.balance.toLocaleString()} ج.م
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      {selectedSupplier.balance < 0 ? '(مديونية علينا)' : '(رصيد لنا)'}
-                    </p>
+
+                  {/* Compact Balance Badge */}
+                  <div className={`px-2 py-0.5 rounded-lg border flex items-center gap-1 shrink-0 ${
+                    selectedSupplierBalance < 0 
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                      : selectedSupplierBalance > 0 
+                      ? 'bg-blue-50 border-blue-200 text-blue-700' 
+                      : 'bg-gray-50 border-gray-200 text-gray-700'
+                  }`}>
+                    <span className="text-[10px] font-bold text-gray-500">الرصيد:</span>
+                    <span className="text-xs font-black font-mono" dir="ltr">
+                      {selectedSupplierBalance.toLocaleString()}
+                    </span>
+                    <span className="text-[9px] font-bold">
+                      {selectedSupplierBalance < 0 ? 'له (علينا)' : selectedSupplierBalance > 0 ? 'لنا (عليه)' : '(متزن)'}
+                    </span>
                   </div>
+                </div>
+
+                {/* Active Date Filter Chip on Mobile (if filtered) */}
+                {(filterStartDate || filterEndDate) && (
+                  <div className="flex items-center justify-between bg-orange-50 text-orange-950 px-2 py-0.5 rounded text-[10px] border border-orange-200">
+                    <span className="font-bold flex items-center gap-1">
+                      <Calendar size={11} /> الفترة: {filterStartDate || 'البداية'} إلى {filterEndDate || 'الآن'}
+                    </span>
+                    <button 
+                      onClick={() => { setFilterStartDate(''); setFilterEndDate(''); }} 
+                      className="text-orange-700 hover:text-orange-900 font-bold"
+                    >
+                      <X size={11} /> إلغاء التصفية
+                    </button>
+                  </div>
+                )}
+
+                {/* Row 2: Controls (View Mode Toggle + Print by Date + Excel) */}
+                <div className="flex items-center justify-between gap-1 pt-1 border-t border-gray-100">
+                  <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('ITEMS')}
+                      className={`px-2 py-0.5 rounded font-bold transition-all ${
+                        viewMode === 'ITEMS' ? 'bg-orange-600 text-white shadow-xs' : 'text-gray-600'
+                      }`}
+                    >
+                      بالأصناف
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('INVOICES')}
+                      className={`px-2 py-0.5 rounded font-bold transition-all ${
+                        viewMode === 'INVOICES' ? 'bg-orange-600 text-white shadow-xs' : 'text-gray-600'
+                      }`}
+                    >
+                      مجمع
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={handleOpenManualTxModal}
+                      className="flex items-center gap-1 bg-emerald-700 hover:bg-emerald-800 text-white px-2 py-0.5 rounded text-[11px] font-bold shadow-2xs cursor-pointer"
+                      title="إضافة حركة / تسوية يدوية مباشرة لحساب المورد بدون فاتورة"
+                    >
+                      <PlusCircle size={11} /> + تسوية
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setPrintStartDate(filterStartDate);
+                        setPrintEndDate(filterEndDate);
+                        setIsPrintModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-blue-600 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-blue-700 shadow-2xs"
+                    >
+                      <Printer size={11} /> طباعة
+                    </button>
+
+                    <button 
+                      onClick={() => handleShareWhatsAppStatement()}
+                      disabled={isSharingPdf}
+                      className="flex items-center gap-1 bg-[#25D366] hover:bg-[#1ebc59] text-white px-2 py-0.5 rounded text-[11px] font-bold shadow-2xs disabled:opacity-50"
+                      title="إرسال كشف الحساب PDF عبر واتساب مباشرة"
+                    >
+                      <MessageCircle size={11} /> {isSharingPdf ? '...' : 'PDF واتساب'}
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setConsolidatedInitialTab('SUPPLIERS');
+                        setIsConsolidatedModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-slate-700 text-white px-2 py-0.5 rounded text-[11px] font-bold hover:bg-slate-800 shadow-2xs"
+                      title="فتح كشف الحساب المجمع"
+                    >
+                      <Layers size={11} /> كشف مجمع
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Desktop-Only Rich Header Banner */}
+              <div className="hidden lg:block p-3 border-b border-gray-200 bg-gradient-to-r from-slate-50 via-white to-orange-50/40 shrink-0">
+                <div className="flex flex-wrap justify-between items-center gap-3">
+                  
+                  {/* Right: Supplier Info + Secondary Metrics */}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h2 className="text-lg md:text-xl font-black text-brand-900 flex items-center gap-2">
+                        {selectedSupplier.name}
+                        <button 
+                          onClick={handleOpenManualTxModal}
+                          className="text-xs font-bold text-emerald-700 hover:text-white bg-emerald-50 hover:bg-emerald-700 border border-emerald-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                          title="إضافة حركة أو تسوية يدوية مباشرة لحساب المورد"
+                        >
+                          <PlusCircle size={12} className="stroke-[2.5]" /> + تسوية
+                        </button>
+                        <button 
+                          onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
+                          className="text-xs font-normal text-gray-500 hover:text-orange-700 bg-white border border-gray-200 hover:border-orange-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
+                          title="تعديل بيانات المورد"
+                        >
+                          <Edit size={12}/> تعديل
+                        </button>
+                        {canDeleteSuppliers && (
+                          <button 
+                            onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
+                            className="text-xs font-normal text-red-600 hover:text-red-800 bg-white border border-red-200 hover:border-red-300 hover:bg-red-50 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
+                            title="حذف المورد"
+                          >
+                            <Trash2 size={12}/> حذف
+                          </button>
+                        )}
+                      </h2>
+                      <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-gray-200">
+                        كود: {selectedSupplier.code}
+                      </span>
+                      {selectedSupplier.phone && (
+                        <span className="bg-orange-50 text-orange-700 px-2 py-0.5 rounded text-xs font-bold border border-orange-100 flex items-center gap-1" dir="ltr">
+                          <Phone size={11} /> {selectedSupplier.phone}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Secondary Metrics Chips */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="bg-white border border-amber-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
+                        <span className="text-gray-500 font-bold">كراتين البيض:</span>
+                        <span className="font-mono font-black text-amber-800">{totalEggQuantity.toLocaleString()}</span>
+                      </div>
+
+                      <div className="bg-white border border-green-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
+                        <span className="text-gray-500 font-bold">توريدات (علينا/دائن):</span>
+                        <span className="font-mono font-black text-green-600">{totalItemizedCredit.toLocaleString()} ج.م</span>
+                      </div>
+
+                      <div className="bg-white border border-red-200 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 shadow-2xs">
+                        <span className="text-gray-500 font-bold">سدادات (لنا/مدين):</span>
+                        <span className="font-mono font-black text-red-600">{totalItemizedDebit.toLocaleString()} ج.م</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Left: Prominent Balance Box with Large Font (خانة الرصيد في شمال الصفحة بخط أكبر) */}
+                  <div className={`mr-auto px-4 py-2.5 rounded-xl border flex flex-col items-center justify-center text-center shadow-xs transition-all min-w-[150px] ${
+                    selectedSupplierBalance < 0 
+                      ? 'bg-emerald-50/90 border-emerald-300' 
+                      : selectedSupplierBalance > 0 
+                      ? 'bg-blue-50/90 border-blue-300' 
+                      : 'bg-gray-50 border-gray-300'
+                  }`}>
+                    <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">الرصيد الحالي</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className={`text-2xl md:text-3xl font-black font-mono tracking-tight ${
+                        selectedSupplierBalance < 0 ? 'text-emerald-700' : selectedSupplierBalance > 0 ? 'text-blue-700' : 'text-gray-800'
+                      }`} dir="ltr">
+                        {selectedSupplierBalance.toLocaleString()}
+                      </span>
+                      <span className="text-xs font-bold text-gray-600">ج.م</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-1 ${
+                      selectedSupplierBalance < 0 
+                        ? 'bg-emerald-100 text-emerald-800' 
+                        : selectedSupplierBalance > 0 
+                        ? 'bg-blue-100 text-blue-800' 
+                        : 'bg-gray-200 text-gray-700'
+                    }`}>
+                      {selectedSupplierBalance < 0 ? 'له (علينا)' : selectedSupplierBalance > 0 ? 'لنا (عليه)' : 'حساب متزن'}
+                    </span>
+                  </div>
+
+                </div>
+
+                {/* Sub-toolbar: View Switch & Actions */}
+                <div className="flex flex-wrap justify-between items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-700 flex items-center gap-1">
+                        <FileText size={14} className="text-orange-600" /> شكل العرض:
+                      </span>
+                      <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('ITEMS')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
+                            viewMode === 'ITEMS' ? 'bg-orange-600 text-white shadow-xs' : 'text-gray-600 hover:text-orange-700'
+                          }`}
+                        >
+                          <Package size={13} /> بيان بالأصناف والأسعار (كالفاتورة)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('INVOICES')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
+                            viewMode === 'INVOICES' ? 'bg-orange-600 text-white shadow-xs' : 'text-gray-600 hover:text-orange-700'
+                          }`}
+                        >
+                          <Layers size={13} /> مجمع بالفواتير
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Active Date Filter Chip or Filter Button on Desktop */}
+                    {(filterStartDate || filterEndDate) ? (
+                      <div className="flex items-center gap-1.5 bg-orange-50 text-orange-950 px-2.5 py-1 rounded-lg text-xs font-bold border border-orange-200 shadow-2xs">
+                        <Calendar size={13} className="text-orange-600" />
+                        <span>الفترة: {filterStartDate || 'البداية'} إلى {filterEndDate || 'الآن'}</span>
+                        <button
+                          onClick={() => { setFilterStartDate(''); setFilterEndDate(''); }}
+                          className="hover:text-red-600 mr-1"
+                          title="إلغاء التصفية وعرض الكل"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setPrintStartDate('');
+                          setPrintEndDate('');
+                          setIsPrintModalOpen(true);
+                        }}
+                        className="flex items-center gap-1 text-xs text-gray-600 hover:text-orange-700 bg-gray-50 hover:bg-orange-50 px-2.5 py-1 rounded-lg border border-gray-200 hover:border-orange-300 transition-colors"
+                      >
+                        <Filter size={13} /> تصفية بالتاريخ
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {currentUser?.permissions.canDeleteLedgers && (
+                      showClearLedgerConfirm ? (
+                         <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
+                           <AlertTriangle size={14} className="text-red-500" />
+                           <span className="font-bold text-red-600">تأكيد التصفير؟</span>
+                           <button 
+                             onClick={handleClearLedger}
+                             className="bg-red-600 text-white px-2 py-0.5 rounded text-xs font-bold hover:bg-red-700"
+                           >
+                             نعم
+                           </button>
+                           <button 
+                             onClick={() => setShowClearLedgerConfirm(false)}
+                             className="bg-white text-gray-600 px-2 py-0.5 rounded border text-xs font-bold hover:bg-gray-100"
+                           >
+                             إلغاء
+                           </button>
+                         </div>
+                      ) : (
+                        <button 
+                          onClick={() => setShowClearLedgerConfirm(true)}
+                          className="flex items-center gap-1 bg-red-50 text-red-600 px-2 py-1 rounded-md text-xs font-bold hover:bg-red-100 transition-colors border border-red-200"
+                          title="مسح الحركات وتصفير الحساب"
+                        >
+                          <Trash2 size={13} /> تصفير
+                        </button>
+                      )
+                    )}
+
+                    <button 
+                      onClick={handleOpenManualTxModal}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white px-3 py-1 rounded-md text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      title="إضافة معاملة أو تسوية يدوية مباشرة في كشف حساب المورد بدون فاتورة"
+                    >
+                      <PlusCircle size={14} className="stroke-[2.5]" /> + إضافة حركة / تسوية يدوية
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setPrintStartDate(filterStartDate);
+                        setPrintEndDate(filterEndDate);
+                        setIsPrintModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-blue-600 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-blue-700 transition-colors shadow-2xs"
+                    >
+                      <Printer size={13} /> طباعة كشف الحساب
+                    </button>
+
+                    <button 
+                      onClick={() => handleShareWhatsAppStatement()}
+                      disabled={isSharingPdf}
+                      className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebc59] active:bg-[#199d4b] text-white px-3 py-1 rounded-md text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                      title="إرسال كشف الحساب كملف PDF عبر واتساب مباشرة بدون حفظه على الجهاز"
+                    >
+                      <MessageCircle size={14} className="fill-white/20" /> {isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setConsolidatedInitialTab('SUPPLIERS');
+                        setIsConsolidatedModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 bg-slate-700 text-white px-2.5 py-1 rounded-md text-xs font-bold hover:bg-slate-800 transition-colors shadow-2xs"
+                      title="فتح كشف الحساب المجمع"
+                    >
+                      <Layers size={13} /> كشف حساب مجمع
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Statement Table Area - Scrollable with Pinned Header & Footer */}
+              <div className="flex-1 min-h-0 overflow-auto">
+                {viewMode === 'ITEMS' ? (
+                  /* ITEM-BY-ITEM DETAILED STATEMENT TABLE (EXACTLY AS IN PURCHASE INVOICE) */
+                  <table className="w-full text-xs text-right border-collapse">
+                    <thead className="bg-gray-100 text-gray-800 font-bold sticky top-0 z-10 border-b border-gray-300 shadow-2xs">
+                      <tr>
+                        <th className="p-2 text-center w-8 border-l border-gray-200">م</th>
+                        <th className="p-2 text-center w-24 whitespace-nowrap border-l border-gray-200">التاريخ</th>
+                        <th className="p-2 text-center w-20 border-l border-gray-200">الفاتورة</th>
+                        <th className="p-2 border-l border-gray-200">الصنف / البيان</th>
+                        <th className="p-2 text-center w-16 border-l border-gray-200">الكمية</th>
+                        <th className="p-2 text-center w-16 border-l border-gray-200">السعر</th>
+                        <th className="p-2 text-center w-20 border-l border-gray-200 bg-amber-50/70 text-amber-900">الإجمالي</th>
+                        <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن</th>
+                        <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين</th>
+                        <th className="p-2 text-center w-24 border-l border-gray-200 bg-gray-50">الرصيد</th>
+                        <th className="p-2 text-center w-24 min-w-[90px] whitespace-nowrap">الحالة</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-150">
+                      {itemizedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={11} className="p-8 text-center text-gray-400 font-medium">
+                            لا توجد حركات مسجلة لهذا المورد حتى الآن
+                          </td>
+                        </tr>
+                      ) : (
+                        itemizedRows.map((r, idx) => (
+                          <tr 
+                            key={idx} 
+                            className={`transition-colors ${
+                              r.isOpeningBalance 
+                                ? 'bg-amber-50/70 border-r-4 border-r-amber-500 font-bold' 
+                                : r.isInvoiceItem 
+                                ? 'hover:bg-amber-50/50' 
+                                : 'bg-gray-50/40 hover:bg-gray-100/60'
+                            }`}
+                          >
+                            <td className="p-2 text-center text-gray-500 font-mono border-l border-gray-100">{r.num}</td>
+                            <td className="p-2 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{r.date}</td>
+                            <td className="p-2 text-center font-mono border-l border-gray-100">
+                              {r.purchaseId ? (
+                                <button 
+                                  onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId}`)}
+                                  className="text-orange-700 hover:text-orange-900 bg-orange-50 hover:bg-orange-100 px-1.5 py-0.5 rounded text-[11px] font-bold inline-flex items-center gap-0.5 border border-orange-200"
+                                  title="عرض تفاصيل الفاتورة"
+                                >
+                                  #{r.purchaseId}
+                                  <Eye size={11} />
+                                </button>
+                              ) : r.ref && r.ref !== '-' ? (
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                  r.ref === 'تسوية' 
+                                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                    : 'bg-gray-100 text-gray-700'
+                                }`}>
+                                  {r.ref}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300">-</span>
+                              )}
+                            </td>
+                            <td className="p-2 font-bold text-gray-800 border-l border-gray-100">
+                              {r.isOpeningBalance ? (
+                                <span className="inline-flex items-center gap-1.5 text-amber-950 font-black">
+                                  <span className="w-2 h-2 rounded-full bg-amber-600 shrink-0"></span>
+                                  رصيد افتتاحي
+                                </span>
+                              ) : r.isInvoiceItem ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></span>
+                                  {r.itemName}
+                                </span>
+                              ) : (
+                                <span className="text-gray-700 font-medium">{r.itemName}</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-center font-bold text-gray-800 border-l border-gray-100">
+                              {typeof r.quantity === 'number' ? (
+                                <span className="bg-amber-100/70 text-amber-950 px-1.5 py-0.5 rounded font-mono font-black text-xs">
+                                  {r.quantity.toLocaleString()}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300">-</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-center font-mono text-gray-700 border-l border-gray-100">
+                              {typeof r.price === 'number' ? r.price.toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2 text-center font-mono font-bold text-amber-900 bg-amber-50/40 border-l border-gray-100">
+                              {typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2 text-center font-mono font-black text-green-600 bg-green-50/30 border-l border-gray-100">
+                              {parseFloat(String(r.credit || 0)) > 0 ? parseFloat(String(r.credit)).toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2 text-center font-mono font-black text-red-600 bg-red-50/30 border-l border-gray-100">
+                              {parseFloat(String(r.debit || 0)) > 0 ? parseFloat(String(r.debit)).toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2 text-center font-mono font-black text-gray-900 bg-gray-50/60 border-l border-gray-100" dir="ltr">
+                              {parseFloat(String(r.runningBalance || 0)).toLocaleString()}
+                            </td>
+                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px]">
+                              {r.status === 'له (علينا)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200 text-[11px] font-bold">
+                                  له (علينا)
+                                </span>
+                              ) : r.status === 'لنا (عليه)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-[11px] font-bold">
+                                  لنا (عليه)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 text-[11px] font-bold">
+                                  متزن
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                    {itemizedRows.length > 0 && (
+                      <tfoot className="bg-gray-100 font-bold sticky bottom-0 z-10 border-t-2 border-gray-300 shadow-xs">
+                        <tr>
+                          <td colSpan={4} className="p-2 text-right font-black border-l border-gray-200">الإجماليات:</td>
+                          <td className="p-2 text-center text-amber-900 font-black font-mono border-l border-gray-200">
+                            {totalEggQuantity.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center text-gray-400 border-l border-gray-200">-</td>
+                          <td className="p-2 text-center text-amber-950 font-black font-mono border-l border-gray-200 bg-amber-100/60">
+                            {totalItemizedLineTotal.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center text-green-700 font-black font-mono border-l border-gray-200 bg-green-100/60">
+                            {totalItemizedCredit.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center text-red-700 font-black font-mono border-l border-gray-200 bg-red-100/60">
+                            {totalItemizedDebit.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
+                            {calculateSupplierBalance.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[90px]">
+                            {calculateSupplierBalance < 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 font-black">
+                                له (علينا)
+                              </span>
+                            ) : calculateSupplierBalance > 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 font-black">
+                                لنا (عليه)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-600 font-black">
+                                متزن
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                ) : (
+                  /* SUMMARY INVOICE VIEW */
+                  <table className="w-full text-xs text-right border-collapse">
+                    <thead className="bg-gray-50 text-gray-800 font-bold sticky top-0 z-10 border-b border-gray-300">
+                      <tr>
+                        <th className="p-2.5 text-center w-12 border-l border-gray-200">م</th>
+                        <th className="p-2.5 text-center w-24 border-l border-gray-200">التاريخ</th>
+                        <th className="p-2.5 border-l border-gray-200">البيان</th>
+                        <th className="p-2.5 text-center w-28 text-green-700 bg-green-50/50 border-l border-gray-200">دائن</th>
+                        <th className="p-2.5 text-center w-28 text-red-700 bg-red-50/50 border-l border-gray-200">مدين</th>
+                        <th className="p-2.5 text-center w-28 border-l border-gray-200">الرصيد</th>
+                        <th className="p-2.5 text-center w-24 min-w-[90px] whitespace-nowrap">الحالة</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {itemizedRows.length === 0 ? (
+                        <tr><td colSpan={7} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
+                      ) : (
+                        itemizedRows.map((r, idx) => (
+                          <tr key={idx} className={`hover:bg-gray-50 ${r.isOpeningBalance ? 'bg-amber-50/70 border-r-4 border-r-amber-500 font-bold' : ''}`}>
+                            <td className="p-2.5 text-center text-gray-500 font-mono border-l border-gray-100">{r.num}</td>
+                            <td className="p-2.5 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{r.date}</td>
+                            <td className="p-2.5 font-medium text-gray-800 border-l border-gray-100">
+                              <div className="flex justify-between items-center">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={r.isOpeningBalance ? 'font-black text-amber-950' : ''}>{r.itemName}</span>
+                                  {r.ref === 'تسوية' && (
+                                    <span className="text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                                      تسوية
+                                    </span>
+                                  )}
+                                </div>
+                                {r.purchaseId && (
+                                  <button 
+                                    onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId}`)}
+                                    className="text-orange-600 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 px-2 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
+                                    title="عرض تفاصيل الفاتورة"
+                                  >
+                                    عرض الفاتورة <Eye size={12} />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-2.5 text-center font-bold font-mono text-green-600 bg-green-50/30 border-l border-gray-100">
+                              {parseFloat(String(r.credit || 0)) > 0 ? parseFloat(String(r.credit)).toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2.5 text-center font-bold font-mono text-red-600 bg-red-50/30 border-l border-gray-100">
+                              {parseFloat(String(r.debit || 0)) > 0 ? parseFloat(String(r.debit)).toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2.5 text-center font-black font-mono text-gray-900 border-l border-gray-100" dir="ltr">
+                              {parseFloat(String(r.runningBalance || 0)).toLocaleString()}
+                            </td>
+                            <td className="p-2.5 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px]">
+                              {r.status === 'له (علينا)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200 text-[11px] font-bold">
+                                  له (علينا)
+                                </span>
+                              ) : r.status === 'لنا (عليه)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-[11px] font-bold">
+                                  لنا (عليه)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 text-[11px] font-bold">
+                                  متزن
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                    {itemizedRows.length > 0 && (
+                      <tfoot className="bg-gray-100 font-bold sticky bottom-0 z-10 border-t-2 border-gray-300 shadow-xs">
+                        <tr>
+                          <td colSpan={3} className="p-2.5 text-right font-black border-l border-gray-200">الإجماليات:</td>
+                          <td className="p-2.5 text-center text-green-700 font-black font-mono border-l border-gray-200 bg-green-100/60">
+                            {totalItemizedCredit.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-center text-red-700 font-black font-mono border-l border-gray-200 bg-red-100/60">
+                            {totalItemizedDebit.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
+                            {calculateSupplierBalance.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-center font-bold text-xs whitespace-nowrap min-w-[90px]">
+                            {calculateSupplierBalance < 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 font-black">
+                                له (علينا)
+                              </span>
+                            ) : calculateSupplierBalance > 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 font-black">
+                                لنا (عليه)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-600 font-black">
+                                متزن
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-gray-400 p-8">
+              <Truck size={44} className="mb-2 opacity-40 text-orange-500"/>
+              <p className="font-bold text-sm">اختر مورداً من القائمة لعرض بيان كشف الحساب</p>
+              <button 
+                type="button"
+                onClick={() => setMobileView('LIST')}
+                className="lg:hidden mt-3 flex items-center gap-1.5 text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 px-3 py-1.5 rounded-lg shadow-xs"
+              >
+                <ArrowRight size={14} /> العودة لقائمة الموردين
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Add / Edit Supplier Modal (Clean popup, frees up screen real estate) */}
+      {isSupplierModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in">
+            <div className={`p-4 flex justify-between items-center text-white ${isEditing ? 'bg-orange-600' : 'bg-orange-600'}`}>
+              <h3 className="text-base font-bold flex items-center gap-2">
+                {isEditing ? <Edit size={18} /> : <Truck size={18} />}
+                {isEditing ? 'تعديل بيانات المورد' : 'إضافة مورد جديد'}
+              </h3>
+              <button onClick={handleCloseModal} className="hover:bg-black/20 p-1 rounded-full transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitSupplier} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">كود المورد</label>
+                <input 
+                  type="text" 
+                  required
+                  className={`w-full p-2.5 border rounded-lg outline-none font-mono font-bold text-sm ${isEditing ? 'bg-white border-orange-300' : 'bg-gray-50 border-gray-300'}`}
+                  value={formData.code}
+                  onChange={e => setFormData({...formData, code: e.target.value})}
+                  placeholder="مثال: S001"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">اسم المورد</label>
+                <input 
+                  type="text" 
+                  required
+                  className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-orange-500 text-sm font-bold"
+                  value={formData.name}
+                  onChange={e => setFormData({...formData, name: e.target.value})}
+                  placeholder="اسم المورد أو المزرعة"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">رقم الهاتف</label>
+                <input 
+                  type="text" 
+                  className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-orange-500 text-sm font-mono"
+                  value={formData.phone}
+                  onChange={e => setFormData({...formData, phone: e.target.value})}
+                  placeholder="01xxxxxxxxx"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  {isEditing ? 'الرصيد الافتتاحي / الحالي' : 'الرصيد الافتتاحي'}
+                </label>
+                
+                <div className="relative mb-2">
+                  <input 
+                    type="text" 
+                    dir="ltr"
+                    placeholder="0"
+                    className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-orange-500 font-mono font-bold text-center text-sm"
+                    value={formData.balance}
+                    onFocus={e => e.target.select()}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), false)}
+                  />
+                  <span className="absolute left-2.5 top-2.5 text-xs text-gray-400 font-bold pointer-events-none">
+                    ج.م
+                  </span>
+                </div>
+
+                {/* Nature Selector: DEBT (له علينا) vs ADVANCE (لنا عليه) */}
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-bold text-gray-500">حالة الرصيد الافتتاحي:</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, balanceType: 'DEBT' }))}
+                      className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
+                        formData.balanceType === 'DEBT'
+                          ? 'bg-rose-50 border-rose-500 text-rose-700 shadow-xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span>له (علينا)</span>
+                      <span className="text-[10px] font-normal text-gray-500">مديونية علينا للمورد</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, balanceType: 'ADVANCE' }))}
+                      className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
+                        formData.balanceType === 'ADVANCE'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span>لنا (عليه)</span>
+                      <span className="text-[10px] font-normal text-gray-500">دفعة مقدمة للمورد</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Accounting Explanation */}
+                {(() => {
+                  const val = Math.abs(parseNumberFromCommas(formData.balance));
+                  if (val === 0) return null;
+                  return (
+                    <div className="mt-2.5 p-2.5 bg-amber-50/70 border border-amber-200/80 rounded-lg text-[11px] text-amber-900 space-y-1 leading-relaxed">
+                      <div className="font-bold flex items-center gap-1 text-amber-950">
+                        <span>💡 التوجيه المحاسبي:</span>
+                      </div>
+                      {formData.balanceType === 'DEBT' ? (
+                        <p>
+                          سيتم إدراج <strong className="font-mono text-xs text-rose-700">{val.toLocaleString()} ج.م</strong> كأول حركة في كشف الحساب باسم <strong>"رصيد افتتاحي"</strong> في خانة <strong>دائن (علينا / توريدات)</strong>، ويبدأ الرصيد التراكمي بالسالب بحالة <strong>له (علينا)</strong>.
+                        </p>
+                      ) : (
+                        <p>
+                          سيتم إدراج <strong className="font-mono text-xs text-emerald-700">{val.toLocaleString()} ج.م</strong> كأول حركة في كشف الحساب باسم <strong>"رصيد افتتاحي"</strong> في خانة <strong>مدين (لنا / سدادات)</strong>، ويبدأ الرصيد التراكمي بالموجب بحالة <strong>لنا (عليه)</strong>.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button 
+                  type="submit" 
+                  className="flex-1 text-white py-2.5 rounded-lg font-bold text-sm bg-orange-600 hover:bg-orange-700 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <Check size={16} /> {isEditing ? 'تحديث البيانات' : 'حفظ المورد'}
+                </button>
+                <button 
+                  type="button" 
+                  onClick={handleCloseModal}
+                  className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* View Purchase Invoice Modal */}
+      {viewPurchase && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-fade-in">
+            <div className="bg-orange-600 p-4 flex justify-between items-center text-white">
+              <h2 className="text-base font-bold flex items-center gap-2">
+                <FileText size={18}/> تفاصيل فاتورة مشتريات {viewPurchase.id}
+              </h2>
+              <button onClick={() => setViewPurchase(null)} className="hover:bg-orange-700 p-1 rounded-full transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto max-h-[70vh]">
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">
+                   <span className="block text-gray-400 text-[10px]">المورد</span>
+                   <span className="font-bold text-gray-800 text-sm">{viewPurchase.supplierName}</span>
+                   <span className="text-[10px] text-gray-400 block font-mono mt-0.5">({viewPurchase.supplierCode})</span>
+                </div>
+                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">
+                   <span className="block text-gray-400 text-[10px]">التاريخ</span>
+                   <span className="font-bold text-gray-800 text-sm font-mono">{viewPurchase.date}</span>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-gray-700 mb-2 flex items-center gap-1.5 text-xs">
+                  <Package size={14} className="text-orange-600" /> الأصناف المسجلة بالفاتورة
+                </h4>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-xs text-right">
+                    <thead className="bg-gray-100 text-gray-700 font-bold">
+                      <tr>
+                        <th className="p-2 border-l border-gray-200">الصنف</th>
+                        <th className="p-2 text-center border-l border-gray-200">الكمية</th>
+                        <th className="p-2 text-center border-l border-gray-200">السعر</th>
+                        <th className="p-2 text-center">الإجمالي</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {(viewPurchase.items || []).map((item, idx) => (
+                        <tr key={idx} className="hover:bg-gray-50">
+                          <td className="p-2 font-bold text-gray-800 border-l border-gray-100">{item.itemName}</td>
+                          <td className="p-2 text-center font-mono font-bold bg-amber-50/60 border-l border-gray-100">{item.quantity} كرتونة</td>
+                          <td className="p-2 text-center font-mono border-l border-gray-100">{item.price.toLocaleString()} ج.م</td>
+                          <td className="p-2 text-center font-mono font-bold text-green-700">{item.total.toLocaleString()} ج.م</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="bg-orange-50 p-3.5 rounded-xl space-y-1.5 border border-orange-200 text-xs">
+                <div className="flex justify-between items-center text-orange-950 font-bold">
+                  <span>إجمالي الفاتورة:</span>
+                  <span className="text-base font-black font-mono text-orange-700">{viewPurchase.total.toLocaleString()} ج.م</span>
+                </div>
+                {viewPurchase.previousBalance !== undefined && (
+                  <>
+                    <div className="flex justify-between items-center text-[11px] text-gray-600 border-t border-orange-200/60 pt-1.5">
+                      <span>رصيد سابق:</span>
+                      <span className="font-mono">{viewPurchase.previousBalance.toLocaleString()} ج.م</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs font-bold text-gray-900 border-t border-orange-200 pt-1.5">
+                      <span>الرصيد بعد الفاتورة:</span>
+                      <span className="font-mono font-bold">{viewPurchase.currentBalance?.toLocaleString()} ج.م</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
+              <button 
+                onClick={() => printPurchaseInvoice(viewPurchase)} 
+                className="bg-orange-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 flex items-center gap-1.5 shadow-sm"
+              >
+                <Printer size={14} /> طباعة الفاتورة
+              </button>
+              <button 
+                onClick={() => sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo || undefined, selectedSupplier?.phone || undefined)} 
+                className="bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs"
+                title="مشاركة الفاتورة عبر واتساب كملف PDF"
+              >
+                <MessageCircle size={14} /> مشاركة PDF واتساب
+              </button>
+              <button 
+                onClick={() => setViewPurchase(null)} 
+                className="bg-white border text-gray-700 px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-100"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print / Filter Statement by Custom Date Modal */}
+      {isPrintModalOpen && selectedSupplier && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in">
+            <div className="bg-orange-600 p-4 flex justify-between items-center text-white">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                <Printer size={18} /> طباعة كشف حساب: {selectedSupplier.name}
+              </h3>
+              <button onClick={() => setIsPrintModalOpen(false)} className="hover:bg-orange-700 p-1 rounded-full transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Quick Preset Buttons */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">فترات سريعة:</label>
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-xs">
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('ALL')}
+                    className={`py-1.5 px-2 rounded-lg font-bold border transition-colors ${
+                      !printStartDate && !printEndDate ? 'bg-orange-600 text-white border-orange-600' : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border-gray-200'
+                    }`}
+                  >
+                    كل التواريخ
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('THIS_MONTH')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    هذا الشهر
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('LAST_MONTH')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    الشهر الماضي
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('LAST_30')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    آخر 30 يوم
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => applyDatePreset('TODAY')}
+                    className="py-1.5 px-2 rounded-lg font-bold bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors"
+                  >
+                    اليوم
+                  </button>
+                </div>
+              </div>
+
+              {/* Date Inputs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">من تاريخ</label>
+                  <input 
+                    type="date"
+                    value={printStartDate}
+                    onChange={e => setPrintStartDate(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg outline-none focus:border-orange-500 text-xs font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">إلى تاريخ</label>
+                  <input 
+                    type="date"
+                    value={printEndDate}
+                    onChange={e => setPrintEndDate(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg outline-none focus:border-orange-500 text-xs font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              {/* Preview Box */}
+              {(() => {
+                const previewRes = getSupplierStatementTransactions(selectedSupplier, purchases, {
+                  startDate: printStartDate,
+                  endDate: printEndDate,
+                  viewMode: 'ITEMS'
+                });
+                const previewRows = previewRes.rows;
+                const prevCredit = previewRes.totalCredit;
+                const prevDebit = previewRes.totalDebit;
+                const previewBalance = previewRes.finalBalance;
+                const statusText = previewBalance < 0 ? 'له (علينا)' : previewBalance > 0 ? 'لنا (عليه)' : 'متزن';
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
+                    <div className="font-bold text-gray-700 flex justify-between border-b pb-1">
+                      <span>معاينة حركات الفترة:</span>
+                      <span className="font-mono text-orange-600 font-bold">{previewRows.length} حركة مسجلة</span>
+                    </div>
+                    <div className="flex justify-between text-gray-600">
+                      <span>إجمالي التوريدات (علينا):</span>
+                      <span className="font-mono font-bold text-rose-600">{prevCredit.toLocaleString()} ج.م</span>
+                    </div>
+                    <div className="flex justify-between text-gray-600">
+                      <span>إجمالي السدادات (لنا):</span>
+                      <span className="font-mono font-bold text-emerald-600">{prevDebit.toLocaleString()} ج.م</span>
+                    </div>
+                    <div className="flex justify-between font-black text-gray-900 border-t pt-1">
+                      <span>الرصيد بنهاية الفترة:</span>
+                      <span className={`font-mono text-sm ${previewBalance < 0 ? 'text-rose-600' : previewBalance > 0 ? 'text-emerald-600' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(previewBalance).toLocaleString()} ج.م ({statusText})
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handlePrintStatement(printStartDate, printEndDate)}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                >
+                  <Printer size={15} /> طباعة كشف الحساب
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleShareWhatsAppStatement(printStartDate, printEndDate)}
+                  disabled={isSharingPdf}
+                  className="bg-[#25D366] hover:bg-[#1ebc59] active:bg-[#199d4b] text-white py-2.5 px-4 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                  title="إرسال كشف الحساب كملف PDF عبر واتساب مباشرة بدون حفظه على الجهاز"
+                >
+                  <MessageCircle size={15} className="fill-white/20" /> {isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterStartDate(printStartDate);
+                    setFilterEndDate(printEndDate);
+                    setIsPrintModalOpen(false);
+                  }}
+                  className="bg-orange-50 hover:bg-orange-100 text-orange-950 border border-orange-200 py-2.5 px-3 rounded-lg font-bold text-xs transition-colors"
+                >
+                  تطبيق التصفية على الشاشة
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrintModalOpen(false)}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-3 rounded-lg font-bold text-xs transition-colors"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Consolidated Statement Modal */}
+      <ConsolidatedLedgerModal
+        isOpen={isConsolidatedModalOpen}
+        onClose={() => setIsConsolidatedModalOpen(false)}
+        initialTab={consolidatedInitialTab}
+        onSelectEntity={(type, code) => {
+          if (type === 'SUPPLIER') {
+            setSelectedSupplierCode(code);
+            setMobileView('DETAILS');
+          }
+        }}
+      />
+
+      {/* Supplier Delete Confirmation / Safety Check Modal */}
+      {supplierToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 text-right transform transition-all">
+            {deleteWarningReason ? (
+              // Safety Warning (Cannot Delete)
+              <div>
+                <div className="flex items-center gap-3 text-amber-600 mb-3 border-b border-amber-100 pb-3">
+                  <div className="p-2.5 bg-amber-50 rounded-xl">
+                    <AlertTriangle size={24} className="text-amber-600 shrink-0" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-gray-900">تعذر حذف المورد</h3>
+                    <p className="text-xs text-gray-500">تم إيقاف عملية الحذف لوجود قيود مالية</p>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3.5 mb-4 text-xs text-amber-950 leading-relaxed font-bold">
+                  {deleteWarningReason}
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 mb-4 text-xs space-y-1.5">
+                  <div className="flex justify-between text-gray-600">
+                    <span>اسم المورد:</span>
+                    <span className="font-bold text-gray-900">{supplierToDelete.name}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>كود المورد:</span>
+                    <span className="font-mono font-bold text-gray-900">{supplierToDelete.code}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>الرصيد الحالي:</span>
+                    <span className="font-mono font-bold text-gray-900" dir="ltr">
+                      {(supplierToDelete.balance || 0).toLocaleString()} ج.م
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const sup = supplierToDelete;
+                      setSupplierToDelete(null);
+                      setDeleteWarningReason(null);
+                      handleOpenEditModal(e, sup);
+                    }}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                  >
+                    <Edit size={14} /> تعديل بيانات المورد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSupplierToDelete(null);
+                      setDeleteWarningReason(null);
+                    }}
+                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Confirmation Modal (Safe to Delete)
+              <div>
+                <div className="flex items-center gap-3 text-red-600 mb-3 border-b border-red-100 pb-3">
+                  <div className="p-2.5 bg-red-50 rounded-xl">
+                    <Trash2 size={24} className="text-red-600 shrink-0" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-gray-900">تأكيد حذف المورد</h3>
+                    <p className="text-xs text-gray-500">لا يمكن التراجع عن هذا الإجراء</p>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <p className="text-sm font-bold text-gray-800 leading-relaxed mb-2">
+                    هل أنت متأكد من حذف المورد ({supplierToDelete.name})؟ لا يمكن التراجع عن هذا الإجراء.
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    تم التحقق من عدم وجود أي فواتير مشتريات أو رصيد مالي قائم أو حركات مسجلة بحساب المورد.
+                  </p>
+                </div>
+
+                <div className="bg-red-50/50 rounded-xl p-3 border border-red-100 mb-4 text-xs space-y-1.5">
+                  <div className="flex justify-between text-gray-600">
+                    <span>اسم المورد:</span>
+                    <span className="font-bold text-gray-900">{supplierToDelete.name}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>كود المورد:</span>
+                    <span className="font-mono font-bold text-gray-900">{supplierToDelete.code}</span>
+                  </div>
+                  {supplierToDelete.phone && (
+                    <div className="flex justify-between text-gray-600">
+                      <span>رقم الهاتف:</span>
+                      <span className="font-mono text-gray-900" dir="ltr">{supplierToDelete.phone}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    disabled={isDeletingSupplier}
+                    className="flex-1 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 size={14} /> {isDeletingSupplier ? 'جاري الحذف...' : 'تأكيد الحذف'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSupplierToDelete(null);
+                      setDeleteWarningReason(null);
+                    }}
+                    disabled={isDeletingSupplier}
+                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Manual Supplier Transaction / Adjustment Modal */}
+      {isManualTxModalOpen && selectedSupplier && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-gray-150 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-brand-900 to-slate-900 text-white p-4 flex justify-between items-center">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center border border-emerald-400/30">
+                  <Sliders size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">إضافة حركة / تسوية يدوية للمورد</h3>
+                  <p className="text-xs text-brand-200 mt-0.5">
+                    المورد: <span className="text-white font-bold">{selectedSupplier.name}</span> ({selectedSupplier.code})
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={handleCloseManualTxModal} 
+                className="text-gray-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveManualTransaction} className="p-4 sm:p-5 space-y-4 text-xs">
+              
+              {/* 1. Transaction Type Toggle */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">نوع الحركة / المعاملة</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setManualTxType('DEBIT')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      manualTxType === 'DEBIT'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-400 ring-2 ring-emerald-500/20 shadow-xs'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ArrowDownCircle size={16} className={manualTxType === 'DEBIT' ? 'text-emerald-600' : 'text-gray-400'} />
+                    <span>مدين (سداد لنا / خصم / مرتجع)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setManualTxType('CREDIT')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      manualTxType === 'CREDIT'
+                        ? 'bg-amber-50 text-amber-900 border-amber-400 ring-2 ring-amber-500/20 shadow-xs'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ArrowUpCircle size={16} className={manualTxType === 'CREDIT' ? 'text-amber-600' : 'text-gray-400'} />
+                    <span>دائن (توريد له / بضاعة / مستحقات)</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  {manualTxType === 'DEBIT' 
+                    ? '✅ حركة مدين تخفض من مديونية المورد علينا (سداد خارجي، خصم مالي، مرتجع بضاعة، إلخ).' 
+                    : '⚠️ حركة دائن تزيد من مستحقات المورد علينا (بضاعة بدون فاتورة، فرق سعر له، مصاريف نقل، إلخ).'}
+                </p>
+              </div>
+
+              {/* 2. Amount and Date in Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">المبلغ (ج.م) *</label>
+                  <input
+                    type="text"
+                    required
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={manualTxAmount}
+                    onChange={(e) => handleNumericChangeWithCommas(e.target.value, setManualTxAmount)}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-mono font-bold text-sm bg-gray-50 focus:bg-white"
+                  />
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
-                    <FileText size={18} /> كشف حساب
-                  </h4>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-right">
-                      <thead className="bg-gray-50 text-gray-600 border-y">
-                        <tr>
-                          <th className="p-3">التاريخ</th>
-                          <th className="p-3 w-1/3">البيان</th>
-                          <th className="p-3 text-red-600">علينا (مدين)</th>
-                          <th className="p-3 text-green-600">لنا (دائن)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {selectedSupplier.history.length === 0 ? (
-                          <tr><td colSpan={4} className="p-4 text-center text-gray-400">لا توجد حركات مسجلة</td></tr>
-                        ) : (
-                          selectedSupplier.history.map((h, idx) => {
-                            // For Supplier:
-                            // Negative Amount = Debt Increased (We owe more) -> Red Column
-                            // Positive Amount = Debt Decreased (We paid) -> Green Column
-                            const isDebtIncrease = h.amount < 0;
-                            const isDebtDecrease = h.amount > 0;
-
-                            return (
-                              <tr key={idx}>
-                                <td className="p-3 text-gray-600 whitespace-nowrap">{h.date}</td>
-                                <td className="p-3 font-medium text-gray-800">{h.description}</td>
-                                <td className="p-3 font-bold text-red-600 bg-red-50/30">
-                                  {isDebtIncrease ? Math.abs(h.amount).toLocaleString() : '-'}
-                                </td>
-                                <td className="p-3 font-bold text-green-600 bg-green-50/30">
-                                  {isDebtDecrease ? h.amount.toLocaleString() : '-'}
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">التاريخ *</label>
+                  <input
+                    type="date"
+                    required
+                    value={manualTxDate}
+                    onChange={(e) => setManualTxDate(e.target.value)}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-mono font-bold text-xs bg-gray-50 focus:bg-white"
+                  />
                 </div>
-             </div>
-           ) : (
-             <div className="h-full flex flex-col items-center justify-center text-gray-400">
-               <Truck size={48} className="mb-4 opacity-50"/>
-               <p>اختر مورد لعرض التفاصيل</p>
-             </div>
-           )}
+              </div>
+
+              {/* 3. Description & Quick Chips */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">البيان / سبب المعاملة *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="اكتب بيان الحركة (مثال: سداد للمورد، خصم خاص، بضاعة بدون فاتورة، مرتجع بضاعة)..."
+                  value={manualTxDescription}
+                  onChange={(e) => handleManualDescriptionChange(e.target.value)}
+                  className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-bold text-xs bg-gray-50 focus:bg-white"
+                />
+
+                {/* Quick Suggestion Chips */}
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {[
+                    'سداد للمورد',
+                    'دفعة مسددة',
+                    'سداد خارجي',
+                    'خصم خاص',
+                    'مرتجع بضاعة',
+                    'بضاعة بدون فاتورة',
+                    'فرق سعر',
+                    'مصاريف نقل',
+                    'تسوية رصيد'
+                  ].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => handleSelectQuickChip(chip)}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all cursor-pointer ${
+                        chip === 'سداد للمورد' || chip === 'دفعة مسددة' || chip === 'خصم خاص'
+                          ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : chip === 'بضاعة بدون فاتورة' || chip === 'فرق سعر'
+                          ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                          : 'bg-gray-100 hover:bg-brand-100 text-gray-700 hover:text-brand-900 border-gray-200'
+                      }`}
+                    >
+                      + {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 4. Live Balance Impact Preview */}
+              {(() => {
+                const parsed = parseNumberFromCommas(manualTxAmount) || 0;
+                const change = manualTxType === 'DEBIT' ? parsed : -parsed;
+                const currentBal = calculateSupplierBalance;
+                const projectedBal = currentBal + change;
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
+                    <div className="flex justify-between items-center text-gray-600">
+                      <span>الرصيد الحالي قبل الحركة:</span>
+                      <span className={`font-mono font-bold ${currentBal < 0 ? 'text-emerald-700' : currentBal > 0 ? 'text-blue-700' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(currentBal).toLocaleString()} ج.م {currentBal < 0 ? '(له / علينا)' : currentBal > 0 ? '(لنا / عليه)' : '(متزن)'}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-gray-600">
+                      <span>قيمة الحركة ({manualTxType === 'DEBIT' ? 'مدين / تخفيض مستحقات المورد' : 'دائن / زيادة مستحقات المورد'}):</span>
+                      <span className={`font-mono font-bold ${manualTxType === 'DEBIT' ? 'text-emerald-700' : 'text-amber-800'}`} dir="ltr">
+                        {manualTxType === 'DEBIT' ? '+' : '-'}{parsed.toLocaleString()} ج.م
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center font-black text-gray-900 border-t border-slate-200 pt-1.5">
+                      <span>الرصيد الجديد بعد الحفظ:</span>
+                      <span className={`font-mono text-sm ${projectedBal < 0 ? 'text-emerald-700 font-black' : projectedBal > 0 ? 'text-blue-700 font-black' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(projectedBal).toLocaleString()} ج.م {projectedBal < 0 ? '(له / علينا)' : projectedBal > 0 ? '(لنا / عليه)' : '(متزن)'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingManualTx}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Check size={16} />
+                  <span>{isSavingManualTx ? 'جاري الحفظ...' : 'حفظ وإدراج في كشف حساب المورد'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloseManualTxModal}
+                  disabled={isSavingManualTx}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+
+            </form>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

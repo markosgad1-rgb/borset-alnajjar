@@ -73,6 +73,16 @@ export interface ManualCustomerTransaction {
   createdBy?: string;
 }
 
+export interface ManualSupplierTransaction {
+  id: string;
+  date: string;
+  type: 'DEBIT' | 'CREDIT';
+  amount: number;
+  description: string;
+  createdAt: string;
+  createdBy?: string;
+}
+
 export interface Customer {
   code: string;
   name: string;
@@ -91,9 +101,29 @@ export interface Supplier {
   name: string;
   phone?: string; // New Field
   balance: number; // Negative = We Owe Him (Liability), Positive = He Owes Us (Asset)
+  openingBalance?: number; // Opening balance upon creation (negative = debt to supplier / له علينا, positive = advance payment / لنا عليه)
+  createdAt?: string; // Creation date for opening movement
   history: CustomerHistory[];
+  manualTransactions?: ManualSupplierTransaction[];
   isDeleted?: boolean;
   deletedAt?: string;
+}
+
+export interface SupplierStatementRow {
+  num: number;
+  date: string;
+  ref: string;
+  itemName: string;
+  quantity: number | string;
+  price: number | string;
+  lineTotal: number | string;
+  credit: number; // دائن (علينا / توريدات)
+  debit: number;  // مدين (لنا / سدادات)
+  runningBalance: number;
+  status: 'له (علينا)' | 'لنا (عليه)' | 'متزن';
+  isInvoiceItem: boolean;
+  purchaseId?: string;
+  isOpeningBalance?: boolean;
 }
 
 export interface Employee {
