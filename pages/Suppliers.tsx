@@ -3,18 +3,19 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, Truck, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Package, Layers, X, Search, PlusCircle, Check, ArrowRight,
-  Calendar, Filter, MessageCircle
+  Calendar, Filter, MessageCircle, Sliders, ArrowUpCircle, ArrowDownCircle
 } from 'lucide-react';
-import { Purchase } from '../types';
+import { Purchase, CustomerHistory, ManualSupplierTransaction } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
+import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
 
 export const Suppliers: React.FC = () => {
   const { 
     suppliers, addSupplier, updateSupplier, deleteSupplier,
-    clearLedger, 
+    clearLedger, cleanCorruptedSupplierOpeningBalance,
     currentUser, purchases, printLedger, printPurchaseInvoice,
     companyLogo
   } = useERP();
@@ -34,7 +35,13 @@ export const Suppliers: React.FC = () => {
 
   // Supplier Add/Edit Modal state
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
-  const [formData, setFormData] = useState({ code: '', name: '', phone: '', balance: '' });
+  const [formData, setFormData] = useState<{
+    code: string;
+    name: string;
+    phone: string;
+    balance: string;
+    balanceType: 'DEBT' | 'ADVANCE';
+  }>({ code: '', name: '', phone: '', balance: '', balanceType: 'DEBT' });
   const [isEditing, setIsEditing] = useState(false);
   const [editingOldCode, setEditingOldCode] = useState<string | null>(null);
 
@@ -58,6 +65,14 @@ export const Suppliers: React.FC = () => {
   // Clear Ledger confirmation state
   const [showClearLedgerConfirm, setShowClearLedgerConfirm] = useState(false);
 
+  // Manual Supplier Transaction / Adjustment Modal state
+  const [isManualTxModalOpen, setIsManualTxModalOpen] = useState(false);
+  const [manualTxType, setManualTxType] = useState<'DEBIT' | 'CREDIT'>('DEBIT');
+  const [manualTxAmount, setManualTxAmount] = useState('');
+  const [manualTxDate, setManualTxDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [manualTxDescription, setManualTxDescription] = useState('');
+  const [isSavingManualTx, setIsSavingManualTx] = useState(false);
+
   // View Purchase Modal State
   const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
 
@@ -66,6 +81,7 @@ export const Suppliers: React.FC = () => {
 
   // Mobile Back Button handlers for modals & sub-views
   useBackHandler(() => setIsSupplierModalOpen(false), isSupplierModalOpen, 'suppliers-add-edit-modal');
+  useBackHandler(() => setIsManualTxModalOpen(false), isManualTxModalOpen, 'suppliers-manual-tx-modal');
   useBackHandler(() => setIsConsolidatedModalOpen(false), isConsolidatedModalOpen, 'suppliers-consolidated-modal');
   useBackHandler(() => setIsPrintModalOpen(false), isPrintModalOpen, 'suppliers-print-modal');
   useBackHandler(() => setViewPurchase(null), !!viewPurchase, 'suppliers-view-purchase-modal');
@@ -107,10 +123,19 @@ export const Suppliers: React.FC = () => {
     return activeSuppliers.find(s => s.code === selectedSupplierCode) || (activeSuppliers.length > 0 ? activeSuppliers[0] : null);
   }, [activeSuppliers, selectedSupplierCode]);
 
+  // Single Source of Truth: live authoritative balance map for all active suppliers
+  const supplierBalancesMap = useMemo(() => {
+    const map = new Map<string, number>();
+    activeSuppliers.forEach(s => {
+      map.set(s.code, getSupplierBalance(s, purchases));
+    });
+    return map;
+  }, [activeSuppliers, purchases]);
+
   const handleOpenAddModal = () => {
     setIsEditing(false);
     setEditingOldCode(null);
-    setFormData({ code: generateNextCode(), name: '', phone: '', balance: '' });
+    setFormData({ code: generateNextCode(), name: '', phone: '', balance: '', balanceType: 'DEBT' });
     setIsSupplierModalOpen(true);
   };
 
@@ -118,11 +143,18 @@ export const Suppliers: React.FC = () => {
     e.stopPropagation();
     setIsEditing(true);
     setEditingOldCode(supplier.code);
+    const isS005 = (supplier.code || '').trim().toUpperCase() === 'S005' || (supplier.name && supplier.name.includes('أحمد تعيلب'));
+    const rawOp = !isS005 && typeof supplier.openingBalance === 'number' && !isNaN(supplier.openingBalance)
+      ? supplier.openingBalance 
+      : 0;
+    const existingOp = Math.abs(rawOp) > 100000000 ? 0 : rawOp;
+    const isDebt = existingOp < 0;
     setFormData({
       code: supplier.code,
       name: supplier.name,
       phone: supplier.phone || '',
-      balance: formatWithCommas(supplier.balance)
+      balance: formatWithCommas(Math.abs(existingOp)),
+      balanceType: isDebt ? 'DEBT' : 'ADVANCE'
     });
     setIsSupplierModalOpen(true);
   };
@@ -136,13 +168,20 @@ export const Suppliers: React.FC = () => {
   const handleSubmitSupplier = (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.code && formData.name) {
-      const parsedBal = parseNumberFromCommas(formData.balance);
+      const rawNum = parseNumberFromCommas(formData.balance);
+      const absNum = Math.abs(rawNum);
+      // إذا كان سالباً (مديونية علينا للمورد): يدرج بالسالب
+      // إذا كان موجباً (مبلغ لنا عنده / دفعة مقدمة): يدرج بالموجب
+      const signedBal = absNum === 0 ? 0 : (formData.balanceType === 'DEBT' || rawNum < 0 ? -absNum : absNum);
+      const today = new Date().toISOString().split('T')[0];
+
       if (isEditing && editingOldCode) {
         updateSupplier(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
           phone: formData.phone, 
-          balance: parsedBal 
+          balance: signedBal,
+          openingBalance: signedBal
         });
         handleCloseModal();
       } else {
@@ -150,12 +189,24 @@ export const Suppliers: React.FC = () => {
           alert('هذا الكود مستخدم بالفعل لمورد آخر!');
           return;
         }
+
+        const initialHistory: any[] = [];
+        if (signedBal !== 0) {
+          initialHistory.push({
+            date: today,
+            description: 'رصيد افتتاحي',
+            amount: signedBal
+          });
+        }
+
         addSupplier({ 
           code: formData.code, 
           name: formData.name, 
           phone: formData.phone, 
-          balance: parsedBal, 
-          history: [] 
+          balance: signedBal,
+          openingBalance: signedBal,
+          createdAt: today,
+          history: initialHistory 
         });
         setSelectedSupplierCode(formData.code);
         handleCloseModal();
@@ -254,209 +305,169 @@ export const Suppliers: React.FC = () => {
     return desc;
   };
 
-  // Helper to compute itemized ledger rows by expanding purchase invoices into egg items with optional date filtering
-  const getItemizedRowsForRange = (startDate?: string, endDate?: string) => {
-    if (!selectedSupplier || !selectedSupplier.history) return [];
+  // Primary unified statement calculation for selected supplier
+  const statementResult = useMemo(() => {
+    return getSupplierStatementTransactions(selectedSupplier, purchases, {
+      startDate: filterStartDate,
+      endDate: filterEndDate,
+      viewMode
+    });
+  }, [selectedSupplier, purchases, filterStartDate, filterEndDate, viewMode]);
 
-    let priorBalance = 0;
+  const itemizedRows = statementResult.rows;
+  const totalEggQuantity = statementResult.totalQuantity;
+  const totalItemizedLineTotal = statementResult.totalLineTotal;
+  const totalItemizedCredit = statementResult.totalCredit;
+  const totalItemizedDebit = statementResult.totalDebit;
+  // دالة calculateSupplierBalance تعمل كـ useMemo وتعتمد على مصفوفة الحركات المفلترة للمورد الحالي فقط
+  const calculateSupplierBalance = useMemo((): number => {
+    if (!selectedSupplier) return 0;
 
-    // 1. Calculate prior balance if startDate is specified
-    if (startDate) {
-      for (const h of selectedSupplier.history) {
-        if (h.description.includes('تعديل')) continue;
-        if (h.date < startDate) {
-          const isPurchaseInvoice = h.description.includes('فاتورة مشتريات');
-          const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-          const pId = pMatch ? pMatch[1] : null;
-          const purchase = pId ? purchases.find(p => p.id === pId) : null;
+    const isS005 = (selectedSupplier.code || '').trim().toUpperCase() === 'S005' || 
+                   (selectedSupplier.name && selectedSupplier.name.includes('أحمد تعيلب'));
 
-          if (isPurchaseInvoice && purchase && purchase.items && purchase.items.length > 0) {
-            purchase.items.forEach((item) => {
-              priorBalance += (item.quantity * item.price);
-            });
-          } else {
-            priorBalance += h.amount;
-          }
-        }
-      }
-    }
+    // قراءة الرصيد الافتتاحي فقط من openingBalance بدون استخدام balance كبديل لمنع التكرار التلقائي
+    const rawOpening = !isS005 && typeof selectedSupplier.openingBalance === 'number' && !isNaN(selectedSupplier.openingBalance)
+      ? selectedSupplier.openingBalance
+      : 0;
+    const openingBal = Math.abs(rawOpening) > 100000000 ? 0 : (parseFloat(String(rawOpening)) || 0);
 
-    const rows: Array<{
-      num: number;
-      date: string;
-      ref: string;
-      itemName: string;
-      quantity: number | string;
-      price: number | string;
-      lineTotal: number | string; // الإجمالي
-      credit: number; // علينا (له)
-      debit: number; // لنا (سداد)
-      runningBalance: number;
-      status: 'علينا' | 'لنا' | 'متزن';
-      isInvoiceItem: boolean;
-      purchaseId?: string;
-    }> = [];
-
-    let running = startDate ? priorBalance : 0;
-    let counter = 1;
-
-    // Insert opening balance row if there is a prior balance before start date
-    if (startDate && priorBalance !== 0) {
-      rows.push({
-        num: counter++,
-        date: startDate,
-        ref: '-',
-        itemName: 'رصيد سابق ما قبل الفترة',
-        quantity: '-',
-        price: '-',
-        lineTotal: '-',
-        credit: priorBalance > 0 ? priorBalance : 0,
-        debit: priorBalance < 0 ? Math.abs(priorBalance) : 0,
-        runningBalance: running,
-        status: running > 0 ? 'علينا' : running < 0 ? 'لنا' : 'متزن',
-        isInvoiceItem: false
-      });
-    }
-
-    for (const h of selectedSupplier.history) {
-      if (h.description.includes('تعديل')) continue;
-      if (startDate && h.date < startDate) continue;
-      if (endDate && h.date > endDate) continue;
-
-      const isPurchaseInvoice = h.description.includes('فاتورة مشتريات');
-      const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-      const pId = pMatch ? pMatch[1] : null;
-      const purchase = pId ? purchases.find(p => p.id === pId) : null;
-
-      if (isPurchaseInvoice && purchase && purchase.items && purchase.items.length > 0) {
-        // Expand into each item
-        purchase.items.forEach((item) => {
-          const lineTotal = item.quantity * item.price;
-          running += lineTotal; // increases debt to supplier (we owe more)
-          rows.push({
-            num: counter++,
-            date: purchase.date || h.date,
-            ref: purchase.id,
-            itemName: item.itemName,
-            quantity: item.quantity,
-            price: item.price,
-            lineTotal: lineTotal,
-            credit: lineTotal,
-            debit: 0,
-            runningBalance: running,
-            status: running > 0 ? 'علينا' : running < 0 ? 'لنا' : 'متزن',
-            isInvoiceItem: true,
-            purchaseId: purchase.id
-          });
-        });
-      } else {
-        // Other movements (payments, transfers, opening balance)
-        const isDebtIncrease = h.amount > 0;
-        const credit = isDebtIncrease ? h.amount : 0;
-        const debit = !isDebtIncrease ? Math.abs(h.amount) : 0;
-        running += h.amount;
-
-        const displayName = formatSupplierMovementDesc(h.description);
-
-        rows.push({
-          num: counter++,
-          date: h.date,
-          ref: pId || '-',
-          itemName: displayName,
-          quantity: '-',
-          price: '-',
-          lineTotal: '-',
-          credit,
-          debit,
-          runningBalance: running,
-          status: running > 0 ? 'علينا' : running < 0 ? 'لنا' : 'متزن',
-          isInvoiceItem: false,
-          purchaseId: pId || undefined
-        });
-      }
-    }
-
-    return rows;
-  };
-
-  const itemizedRows = useMemo(() => {
-    return getItemizedRowsForRange(filterStartDate, filterEndDate);
-  }, [selectedSupplier, purchases, filterStartDate, filterEndDate]);
-
-  // Invoice Mode rows with date range
-  const invoiceRows = useMemo(() => {
-    if (!selectedSupplier || !selectedSupplier.history) return [];
-    let prior = 0;
-    if (filterStartDate) {
-      selectedSupplier.history.forEach(h => {
-        if (h.description.includes('تعديل')) return;
-        if (h.date < filterStartDate) {
-          const isPurch = h.description.includes('فاتورة مشتريات');
-          const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-          const pId = pMatch ? pMatch[1] : null;
-          const purchase = pId ? purchases.find(p => p.id === pId) : null;
-          if (isPurch && purchase) {
-            prior += purchase.total;
-          } else {
-            prior += h.amount;
-          }
-        }
-      });
-    }
-
-    const list: typeof selectedSupplier.history = [];
-    if (filterStartDate && prior !== 0) {
-      list.push({
-        date: filterStartDate,
-        description: 'رصيد سابق ما قبل الفترة',
-        amount: prior
-      });
-    }
-
-    selectedSupplier.history.forEach(h => {
-      if (h.description.includes('تعديل')) return;
-      if (filterStartDate && h.date < filterStartDate) return;
-      if (filterEndDate && h.date > filterEndDate) return;
-
-      const isPurch = h.description.includes('فاتورة مشتريات');
-      const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-      const pId = pMatch ? pMatch[1] : null;
-      const purchase = pId ? purchases.find(p => p.id === pId) : null;
-
-      list.push({
-        ...h,
-        amount: (isPurch && purchase) ? purchase.total : h.amount,
-        description: formatSupplierMovementDesc(h.description)
-      });
+    // تصفية الحركات: استبعاد سطر الرصيد الافتتاحي لأن openingBal هو القيمة الابتدائية للـ reduce
+    // واستبعاد أي حركات تالفة تتجاوز 100M
+    const filteredMovements = itemizedRows.filter(r => {
+      if (r.isOpeningBalance) return false;
+      const cred = Math.abs(parseFloat(String(r.credit || 0)) || 0);
+      const deb = Math.abs(parseFloat(String(r.debit || 0)) || 0);
+      if (cred > 100000000 || deb > 100000000) return false;
+      return true;
     });
 
-    return list;
-  }, [selectedSupplier, purchases, filterStartDate, filterEndDate]);
+    // استخدام reduce لحساب الرصيد التراكمي مع تحويل كافة قيم الدائن والمدين إلى float عبر parseFloat
+    const totalBalance = filteredMovements.reduce((acc: number, row) => {
+      const credit = parseFloat(String(row.credit || 0)) || 0;
+      const debit = parseFloat(String(row.debit || 0)) || 0;
+      // المعادلة المحاسبية المعتمدة: الرصيد = الرصيد الافتتاحي + السدادات (مدين/لنا) - التوريدات (دائن/علينا)
+      return acc + debit - credit;
+    }, openingBal);
 
-  const totalEggQuantity = useMemo(() => {
-    return itemizedRows.reduce((sum, r) => typeof r.quantity === 'number' ? sum + r.quantity : sum, 0);
-  }, [itemizedRows]);
+    // التأكد التام من إعادة قيمة عددية (number) وليس نصاً
+    return Math.round(Number(totalBalance) * 100) / 100;
+  }, [selectedSupplier, itemizedRows]);
 
-  const totalItemizedLineTotal = useMemo(() => {
-    return itemizedRows.reduce((sum, r) => typeof r.lineTotal === 'number' ? sum + r.lineTotal : sum, 0);
-  }, [itemizedRows]);
+  const statementFinalBalance = calculateSupplierBalance;
+  const selectedSupplierBalance = calculateSupplierBalance;
 
-  const totalItemizedCredit = useMemo(() => {
-    return itemizedRows.reduce((sum, r) => sum + r.credit, 0);
-  }, [itemizedRows]);
+  const handleOpenManualTxModal = () => {
+    setManualTxType('DEBIT');
+    setManualTxAmount('');
+    setManualTxDescription('');
+    setManualTxDate(new Date().toISOString().split('T')[0]);
+    setIsManualTxModalOpen(true);
+  };
 
-  const totalItemizedDebit = useMemo(() => {
-    return itemizedRows.reduce((sum, r) => sum + r.debit, 0);
-  }, [itemizedRows]);
+  const handleCloseManualTxModal = () => {
+    setIsManualTxModalOpen(false);
+    setManualTxAmount('');
+    setManualTxDescription('');
+    setIsSavingManualTx(false);
+  };
+
+  const handleSelectQuickChip = (chip: string) => {
+    setManualTxDescription(chip);
+    const lower = chip.toLowerCase();
+    if (lower.includes('سداد') || lower.includes('دفعة') || lower.includes('خصم') || lower.includes('مرتجع')) {
+      setManualTxType('DEBIT');
+    } else if (lower.includes('بضاعة') || lower.includes('توريد') || lower.includes('شراء') || lower.includes('مصاريف') || lower.includes('فرق سعر')) {
+      setManualTxType('CREDIT');
+    }
+  };
+
+  const handleManualDescriptionChange = (val: string) => {
+    setManualTxDescription(val);
+    const lower = val.toLowerCase();
+    if (lower.includes('سداد') || lower.includes('دفعة') || lower.includes('خصم') || lower.includes('مرتجع')) {
+      setManualTxType('DEBIT');
+    } else if (lower.includes('بضاعة') || lower.includes('توريد') || lower.includes('بدون فاتورة')) {
+      setManualTxType('CREDIT');
+    }
+  };
+
+  const handleSaveManualTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSupplier) {
+      alert('يرجى اختيار مورد أولاً');
+      return;
+    }
+
+    const amt = parseNumberFromCommas(manualTxAmount);
+    if (isNaN(amt) || amt <= 0) {
+      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      return;
+    }
+
+    const desc = manualTxDescription.trim();
+    if (!desc) {
+      alert('يرجى كتابة البيان / سبب الحركة (مثال: سداد للمورد، خصم خاص، بضاعة بدون فاتورة، مرتجع بضاعة)');
+      return;
+    }
+
+    // Auto-direction:
+    // DEBIT (مدين / لنا عليه): سداد للمورد أو خصم أو مرتجع -> يقلل المديونية علينا (+amt)
+    // CREDIT (دائن / له علينا): بضاعة بدون فاتورة أو مستحقات إضافية -> يزيد المديونية علينا (-amt)
+    let finalType = manualTxType;
+
+    setIsSavingManualTx(true);
+    try {
+      const balanceChange = finalType === 'DEBIT' ? amt : -amt;
+      const currentBal = calculateSupplierBalance;
+      const newBal = currentBal + balanceChange;
+
+      const historyMovement: CustomerHistory = {
+        date: manualTxDate || new Date().toISOString().split('T')[0],
+        description: desc,
+        amount: balanceChange
+      };
+
+      const manualTxRecord: ManualSupplierTransaction = {
+        id: `SMTX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        date: manualTxDate || new Date().toISOString().split('T')[0],
+        type: finalType,
+        amount: amt,
+        description: desc,
+        createdAt: new Date().toISOString(),
+        createdBy: (currentUser as any)?.fullName || currentUser?.username || 'مستخدم'
+      };
+
+      const updatedHistory = [...(selectedSupplier.history || []), historyMovement];
+      const updatedManualTxs = [...(selectedSupplier.manualTransactions || []), manualTxRecord];
+
+      await updateSupplier(selectedSupplier.code, {
+        balance: newBal,
+        history: updatedHistory,
+        manualTransactions: updatedManualTxs
+      } as any);
+
+      handleCloseManualTxModal();
+    } catch (error) {
+      console.error('Error saving supplier manual transaction:', error);
+      alert('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
+    } finally {
+      setIsSavingManualTx(false);
+    }
+  };
 
   // Handler to print supplier statement with optional custom dates
   const handlePrintStatement = (sDate?: string, eDate?: string) => {
     if (!selectedSupplier) return;
-    const targetRows = getItemizedRowsForRange(sDate, eDate);
-    const cred = targetRows.reduce((sum, r) => sum + r.credit, 0);
-    const deb = targetRows.reduce((sum, r) => sum + r.debit, 0);
-    const lastRow = targetRows[targetRows.length - 1];
-    const finalBal = lastRow ? lastRow.runningBalance : selectedSupplier.balance;
+    const res = getSupplierStatementTransactions(selectedSupplier, purchases, {
+      startDate: sDate,
+      endDate: eDate,
+      viewMode
+    });
+    const targetRows = res.rows;
+    const cred = res.totalCredit;
+    const deb = res.totalDebit;
+    const finalBal = res.finalBalance;
 
     const dateLabel = (sDate || eDate) ? ` للفترة (${sDate ? `من ${sDate}` : ''} ${eDate ? `إلى ${eDate}` : ''})` : '';
 
@@ -482,11 +493,15 @@ export const Suppliers: React.FC = () => {
     if (!selectedSupplier || isSharingPdf) return;
     const fromDate = sDate !== undefined ? sDate : filterStartDate;
     const toDate = eDate !== undefined ? eDate : filterEndDate;
-    const targetRows = getItemizedRowsForRange(fromDate, toDate);
-    const cred = targetRows.reduce((sum, r) => sum + r.credit, 0);
-    const deb = targetRows.reduce((sum, r) => sum + r.debit, 0);
-    const lastRow = targetRows[targetRows.length - 1];
-    const finalBal = lastRow ? lastRow.runningBalance : selectedSupplier.balance;
+    const res = getSupplierStatementTransactions(selectedSupplier, purchases, {
+      startDate: fromDate,
+      endDate: toDate,
+      viewMode
+    });
+    const targetRows = res.rows;
+    const cred = res.totalCredit;
+    const deb = res.totalDebit;
+    const finalBal = res.finalBalance;
 
     let syncTab: Window | null = null;
     const isNative = typeof navigator !== 'undefined' &&
@@ -516,18 +531,11 @@ export const Suppliers: React.FC = () => {
         totalDebit: deb,
         totalCredit: cred,
         finalBalance: finalBal
-      }, companyLogo, null, syncTab);
+      }, companyLogo || undefined, null, syncTab);
     } catch (err: any) {
+      console.error("WhatsApp share failed:", err);
       if (syncTab && !syncTab.closed) syncTab.close();
-      if (
-        err?.name !== 'AbortError' &&
-        err?.name !== 'NotAllowedError' &&
-        !err?.message?.includes?.('AbortError') &&
-        !err?.message?.includes?.('canceled') &&
-        !err?.message?.includes?.('cancelled')
-      ) {
-        console.error(err);
-      }
+      alert("حدث خطأ أثناء إعداد ومشاركة كشف الحساب.");
     } finally {
       if (safetyTimer) clearTimeout(safetyTimer);
       setIsSharingPdf(false);
@@ -567,7 +575,17 @@ export const Suppliers: React.FC = () => {
       <div className={`bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex-wrap justify-between items-center gap-2 ${
         mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
       }`}>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <button 
+            type="button" 
+            onClick={() => window.history.back()}
+            className="lg:hidden flex items-center gap-1 text-xs font-bold text-orange-950 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg border border-orange-200 transition-all shadow-2xs shrink-0"
+            title="العودة للصفحة السابقة"
+          >
+            <ArrowRight size={14} />
+            <span>العودة</span>
+          </button>
+
           <div className="flex items-center gap-1.5">
             <span className="font-bold text-brand-900 text-base">الموردين</span>
             <span className="bg-orange-50 text-orange-700 font-mono font-bold text-xs px-2 py-0.5 rounded-full border border-orange-200">
@@ -637,8 +655,9 @@ export const Suppliers: React.FC = () => {
             ) : (
               filteredSuppliers.map((s, idx) => {
                 const isSelected = selectedSupplier?.code === s.code;
-                const isDebtWeOwe = s.balance > 0;
-                const isCreditWeAreOwed = s.balance < 0;
+                const currentBal = isSelected ? calculateSupplierBalance : (supplierBalancesMap.get(s.code) ?? getSupplierBalance(s, purchases));
+                const isDebtWeOwe = currentBal < 0;
+                const isCreditWeAreOwed = currentBal > 0;
 
                 return (
                   <div 
@@ -668,7 +687,7 @@ export const Suppliers: React.FC = () => {
                     <div className="text-left flex items-center gap-1.5">
                       <div className="text-left">
                         <p className={`font-black text-xs font-mono ${isDebtWeOwe ? 'text-green-600' : isCreditWeAreOwed ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
-                          {s.balance.toLocaleString()}
+                          {currentBal.toLocaleString()}
                         </p>
                         <p className="text-[9px] text-gray-400">
                           {isDebtWeOwe ? 'له (علينا)' : isCreditWeAreOwed ? 'لنا (عليه)' : 'متزن'}
@@ -714,9 +733,11 @@ export const Suppliers: React.FC = () => {
                     <button 
                       type="button"
                       onClick={() => setMobileView('LIST')}
-                      className="flex items-center gap-1 text-[11px] font-bold text-orange-950 bg-orange-50 hover:bg-orange-100 px-2 py-1 rounded-lg border border-orange-200 transition-colors shrink-0"
+                      className="flex items-center gap-1.5 text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 active:bg-orange-800 px-2.5 py-1.5 rounded-lg shadow-xs transition-all shrink-0 cursor-pointer"
+                      title="العودة لقائمة الموردين"
                     >
-                      <ArrowRight size={13} /> العودة
+                      <ArrowRight size={14} />
+                      <span>العودة للقائمة</span>
                     </button>
                     <div className="min-w-0 flex items-center gap-1">
                       <h2 className="text-xs font-black text-brand-900 truncate flex items-center gap-1">
@@ -746,18 +767,18 @@ export const Suppliers: React.FC = () => {
 
                   {/* Compact Balance Badge */}
                   <div className={`px-2 py-0.5 rounded-lg border flex items-center gap-1 shrink-0 ${
-                    selectedSupplier.balance > 0 
+                    selectedSupplierBalance < 0 
                       ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
-                      : selectedSupplier.balance < 0 
-                      ? 'bg-red-50 border-red-200 text-red-700' 
+                      : selectedSupplierBalance > 0 
+                      ? 'bg-blue-50 border-blue-200 text-blue-700' 
                       : 'bg-gray-50 border-gray-200 text-gray-700'
                   }`}>
                     <span className="text-[10px] font-bold text-gray-500">الرصيد:</span>
                     <span className="text-xs font-black font-mono" dir="ltr">
-                      {selectedSupplier.balance.toLocaleString()}
+                      {selectedSupplierBalance.toLocaleString()}
                     </span>
                     <span className="text-[9px] font-bold">
-                      {selectedSupplier.balance > 0 ? '(له)' : selectedSupplier.balance < 0 ? '(لنا)' : '(متزن)'}
+                      {selectedSupplierBalance < 0 ? 'له (علينا)' : selectedSupplierBalance > 0 ? 'لنا (عليه)' : '(متزن)'}
                     </span>
                   </div>
                 </div>
@@ -802,6 +823,14 @@ export const Suppliers: React.FC = () => {
 
                   <div className="flex items-center gap-1">
                     <button 
+                      onClick={handleOpenManualTxModal}
+                      className="flex items-center gap-1 bg-emerald-700 hover:bg-emerald-800 text-white px-2 py-0.5 rounded text-[11px] font-bold shadow-2xs cursor-pointer"
+                      title="إضافة حركة / تسوية يدوية مباشرة لحساب المورد بدون فاتورة"
+                    >
+                      <PlusCircle size={11} /> + تسوية
+                    </button>
+
+                    <button 
                       onClick={() => {
                         setPrintStartDate(filterStartDate);
                         setPrintEndDate(filterEndDate);
@@ -844,6 +873,13 @@ export const Suppliers: React.FC = () => {
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <h2 className="text-lg md:text-xl font-black text-brand-900 flex items-center gap-2">
                         {selectedSupplier.name}
+                        <button 
+                          onClick={handleOpenManualTxModal}
+                          className="text-xs font-bold text-emerald-700 hover:text-white bg-emerald-50 hover:bg-emerald-700 border border-emerald-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                          title="إضافة حركة أو تسوية يدوية مباشرة لحساب المورد"
+                        >
+                          <PlusCircle size={12} className="stroke-[2.5]" /> + تسوية
+                        </button>
                         <button 
                           onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
                           className="text-xs font-normal text-gray-500 hover:text-orange-700 bg-white border border-gray-200 hover:border-orange-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
@@ -892,29 +928,29 @@ export const Suppliers: React.FC = () => {
 
                   {/* Left: Prominent Balance Box with Large Font (خانة الرصيد في شمال الصفحة بخط أكبر) */}
                   <div className={`mr-auto px-4 py-2.5 rounded-xl border flex flex-col items-center justify-center text-center shadow-xs transition-all min-w-[150px] ${
-                    selectedSupplier.balance > 0 
+                    selectedSupplierBalance < 0 
                       ? 'bg-emerald-50/90 border-emerald-300' 
-                      : selectedSupplier.balance < 0 
-                      ? 'bg-red-50/90 border-red-300' 
+                      : selectedSupplierBalance > 0 
+                      ? 'bg-blue-50/90 border-blue-300' 
                       : 'bg-gray-50 border-gray-300'
                   }`}>
                     <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">الرصيد الحالي</span>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <span className={`text-2xl md:text-3xl font-black font-mono tracking-tight ${
-                        selectedSupplier.balance > 0 ? 'text-emerald-600' : selectedSupplier.balance < 0 ? 'text-red-600' : 'text-gray-800'
+                        selectedSupplierBalance < 0 ? 'text-emerald-700' : selectedSupplierBalance > 0 ? 'text-blue-700' : 'text-gray-800'
                       }`} dir="ltr">
-                        {selectedSupplier.balance.toLocaleString()}
+                        {selectedSupplierBalance.toLocaleString()}
                       </span>
                       <span className="text-xs font-bold text-gray-600">ج.م</span>
                     </div>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-1 ${
-                      selectedSupplier.balance > 0 
+                      selectedSupplierBalance < 0 
                         ? 'bg-emerald-100 text-emerald-800' 
-                        : selectedSupplier.balance < 0 
-                        ? 'bg-red-100 text-red-700' 
+                        : selectedSupplierBalance > 0 
+                        ? 'bg-blue-100 text-blue-800' 
                         : 'bg-gray-200 text-gray-700'
                     }`}>
-                      {selectedSupplier.balance > 0 ? 'له (علينا)' : selectedSupplier.balance < 0 ? 'لنا (عليه)' : 'حساب متزن'}
+                      {selectedSupplierBalance < 0 ? 'له (علينا)' : selectedSupplierBalance > 0 ? 'لنا (عليه)' : 'حساب متزن'}
                     </span>
                   </div>
 
@@ -1007,6 +1043,14 @@ export const Suppliers: React.FC = () => {
                     )}
 
                     <button 
+                      onClick={handleOpenManualTxModal}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white px-3 py-1 rounded-md text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      title="إضافة معاملة أو تسوية يدوية مباشرة في كشف حساب المورد بدون فاتورة"
+                    >
+                      <PlusCircle size={14} className="stroke-[2.5]" /> + إضافة حركة / تسوية يدوية
+                    </button>
+
+                    <button 
                       onClick={() => {
                         setPrintStartDate(filterStartDate);
                         setPrintEndDate(filterEndDate);
@@ -1057,7 +1101,7 @@ export const Suppliers: React.FC = () => {
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن</th>
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين</th>
                         <th className="p-2 text-center w-24 border-l border-gray-200 bg-gray-50">الرصيد</th>
-                        <th className="p-2 text-center w-16">الحالة</th>
+                        <th className="p-2 text-center w-24 min-w-[90px] whitespace-nowrap">الحالة</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-150">
@@ -1072,7 +1116,11 @@ export const Suppliers: React.FC = () => {
                           <tr 
                             key={idx} 
                             className={`transition-colors ${
-                              r.isInvoiceItem ? 'hover:bg-amber-50/50' : 'bg-gray-50/40 hover:bg-gray-100/60'
+                              r.isOpeningBalance 
+                                ? 'bg-amber-50/70 border-r-4 border-r-amber-500 font-bold' 
+                                : r.isInvoiceItem 
+                                ? 'hover:bg-amber-50/50' 
+                                : 'bg-gray-50/40 hover:bg-gray-100/60'
                             }`}
                           >
                             <td className="p-2 text-center text-gray-500 font-mono border-l border-gray-100">{r.num}</td>
@@ -1087,12 +1135,25 @@ export const Suppliers: React.FC = () => {
                                   #{r.purchaseId}
                                   <Eye size={11} />
                                 </button>
+                              ) : r.ref && r.ref !== '-' ? (
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                  r.ref === 'تسوية' 
+                                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                    : 'bg-gray-100 text-gray-700'
+                                }`}>
+                                  {r.ref}
+                                </span>
                               ) : (
                                 <span className="text-gray-300">-</span>
                               )}
                             </td>
                             <td className="p-2 font-bold text-gray-800 border-l border-gray-100">
-                              {r.isInvoiceItem ? (
+                              {r.isOpeningBalance ? (
+                                <span className="inline-flex items-center gap-1.5 text-amber-950 font-black">
+                                  <span className="w-2 h-2 rounded-full bg-amber-600 shrink-0"></span>
+                                  رصيد افتتاحي
+                                </span>
+                              ) : r.isInvoiceItem ? (
                                 <span className="inline-flex items-center gap-1.5">
                                   <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></span>
                                   {r.itemName}
@@ -1117,21 +1178,27 @@ export const Suppliers: React.FC = () => {
                               {typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : '-'}
                             </td>
                             <td className="p-2 text-center font-mono font-black text-green-600 bg-green-50/30 border-l border-gray-100">
-                              {r.credit > 0 ? r.credit.toLocaleString() : '-'}
+                              {parseFloat(String(r.credit || 0)) > 0 ? parseFloat(String(r.credit)).toLocaleString() : '-'}
                             </td>
                             <td className="p-2 text-center font-mono font-black text-red-600 bg-red-50/30 border-l border-gray-100">
-                              {r.debit > 0 ? r.debit.toLocaleString() : '-'}
+                              {parseFloat(String(r.debit || 0)) > 0 ? parseFloat(String(r.debit)).toLocaleString() : '-'}
                             </td>
                             <td className="p-2 text-center font-mono font-black text-gray-900 bg-gray-50/60 border-l border-gray-100" dir="ltr">
-                              {r.runningBalance.toLocaleString()}
+                              {parseFloat(String(r.runningBalance || 0)).toLocaleString()}
                             </td>
-                            <td className="p-2 text-center font-bold text-[11px]">
-                              {r.status === 'علينا' ? (
-                                <span className="text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">له</span>
-                              ) : r.status === 'لنا' ? (
-                                <span className="text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200">لنا</span>
+                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px]">
+                              {r.status === 'له (علينا)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200 text-[11px] font-bold">
+                                  له (علينا)
+                                </span>
+                              ) : r.status === 'لنا (عليه)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-[11px] font-bold">
+                                  لنا (عليه)
+                                </span>
                               ) : (
-                                <span className="text-gray-500">متزن</span>
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 text-[11px] font-bold">
+                                  متزن
+                                </span>
                               )}
                             </td>
                           </tr>
@@ -1156,15 +1223,21 @@ export const Suppliers: React.FC = () => {
                             {totalItemizedDebit.toLocaleString()}
                           </td>
                           <td className="p-2 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
-                            {selectedSupplier.balance.toLocaleString()}
+                            {calculateSupplierBalance.toLocaleString()}
                           </td>
-                          <td className="p-2 text-center font-bold text-xs">
-                            {selectedSupplier.balance > 0 ? (
-                              <span className="text-green-700 font-black">له (علينا)</span>
-                            ) : selectedSupplier.balance < 0 ? (
-                              <span className="text-red-700 font-black">لنا (عليه)</span>
+                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[90px]">
+                            {calculateSupplierBalance < 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 font-black">
+                                له (علينا)
+                              </span>
+                            ) : calculateSupplierBalance > 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 font-black">
+                                لنا (عليه)
+                              </span>
                             ) : (
-                              <span className="text-gray-600 font-black">متزن</span>
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-600 font-black">
+                                متزن
+                              </span>
                             )}
                           </td>
                         </tr>
@@ -1182,53 +1255,97 @@ export const Suppliers: React.FC = () => {
                         <th className="p-2.5 text-center w-28 text-green-700 bg-green-50/50 border-l border-gray-200">دائن</th>
                         <th className="p-2.5 text-center w-28 text-red-700 bg-red-50/50 border-l border-gray-200">مدين</th>
                         <th className="p-2.5 text-center w-28 border-l border-gray-200">الرصيد</th>
+                        <th className="p-2.5 text-center w-24 min-w-[90px] whitespace-nowrap">الحالة</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {invoiceRows.length === 0 ? (
-                        <tr><td colSpan={6} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
+                      {itemizedRows.length === 0 ? (
+                        <tr><td colSpan={7} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
                       ) : (
-                        (() => {
-                          let runBal = 0;
-                          return invoiceRows.map((h, idx) => {
-                            runBal += h.amount;
-                            const isDebtIncrease = h.amount > 0;
-                            const isDebtDecrease = h.amount < 0;
-                            const pMatch = h.description.match(/#([A-Za-z0-9-]+)/);
-
-                            return (
-                              <tr key={idx} className="hover:bg-gray-50">
-                                <td className="p-2.5 text-center text-gray-500 font-mono border-l border-gray-100">{idx + 1}</td>
-                                <td className="p-2.5 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{h.date}</td>
-                                <td className="p-2.5 font-medium text-gray-800 border-l border-gray-100">
-                                  <div className="flex justify-between items-center">
-                                    <span>{h.description}</span>
-                                    {pMatch && (
-                                      <button 
-                                        onClick={() => handleViewPurchaseDetails(h.description)}
-                                        className="text-orange-600 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 px-2 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
-                                        title="عرض تفاصيل الفاتورة"
-                                      >
-                                        عرض الفاتورة <Eye size={12} />
-                                      </button>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="p-2.5 text-center font-bold font-mono text-green-600 bg-green-50/30 border-l border-gray-100">
-                                  {isDebtIncrease ? h.amount.toLocaleString() : '-'}
-                                </td>
-                                <td className="p-2.5 text-center font-bold font-mono text-red-600 bg-red-50/30 border-l border-gray-100">
-                                  {isDebtDecrease ? Math.abs(h.amount).toLocaleString() : '-'}
-                                </td>
-                                <td className="p-2.5 text-center font-black font-mono text-gray-900" dir="ltr">
-                                  {runBal.toLocaleString()}
-                                </td>
-                              </tr>
-                            );
-                          });
-                        })()
+                        itemizedRows.map((r, idx) => (
+                          <tr key={idx} className={`hover:bg-gray-50 ${r.isOpeningBalance ? 'bg-amber-50/70 border-r-4 border-r-amber-500 font-bold' : ''}`}>
+                            <td className="p-2.5 text-center text-gray-500 font-mono border-l border-gray-100">{r.num}</td>
+                            <td className="p-2.5 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{r.date}</td>
+                            <td className="p-2.5 font-medium text-gray-800 border-l border-gray-100">
+                              <div className="flex justify-between items-center">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={r.isOpeningBalance ? 'font-black text-amber-950' : ''}>{r.itemName}</span>
+                                  {r.ref === 'تسوية' && (
+                                    <span className="text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                                      تسوية
+                                    </span>
+                                  )}
+                                </div>
+                                {r.purchaseId && (
+                                  <button 
+                                    onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId}`)}
+                                    className="text-orange-600 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 px-2 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
+                                    title="عرض تفاصيل الفاتورة"
+                                  >
+                                    عرض الفاتورة <Eye size={12} />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-2.5 text-center font-bold font-mono text-green-600 bg-green-50/30 border-l border-gray-100">
+                              {parseFloat(String(r.credit || 0)) > 0 ? parseFloat(String(r.credit)).toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2.5 text-center font-bold font-mono text-red-600 bg-red-50/30 border-l border-gray-100">
+                              {parseFloat(String(r.debit || 0)) > 0 ? parseFloat(String(r.debit)).toLocaleString() : '-'}
+                            </td>
+                            <td className="p-2.5 text-center font-black font-mono text-gray-900 border-l border-gray-100" dir="ltr">
+                              {parseFloat(String(r.runningBalance || 0)).toLocaleString()}
+                            </td>
+                            <td className="p-2.5 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px]">
+                              {r.status === 'له (علينا)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200 text-[11px] font-bold">
+                                  له (علينا)
+                                </span>
+                              ) : r.status === 'لنا (عليه)' ? (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-[11px] font-bold">
+                                  لنا (عليه)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 text-[11px] font-bold">
+                                  متزن
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
                       )}
                     </tbody>
+                    {itemizedRows.length > 0 && (
+                      <tfoot className="bg-gray-100 font-bold sticky bottom-0 z-10 border-t-2 border-gray-300 shadow-xs">
+                        <tr>
+                          <td colSpan={3} className="p-2.5 text-right font-black border-l border-gray-200">الإجماليات:</td>
+                          <td className="p-2.5 text-center text-green-700 font-black font-mono border-l border-gray-200 bg-green-100/60">
+                            {totalItemizedCredit.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-center text-red-700 font-black font-mono border-l border-gray-200 bg-red-100/60">
+                            {totalItemizedDebit.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
+                            {calculateSupplierBalance.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-center font-bold text-xs whitespace-nowrap min-w-[90px]">
+                            {calculateSupplierBalance < 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 font-black">
+                                له (علينا)
+                              </span>
+                            ) : calculateSupplierBalance > 0 ? (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-blue-700 font-black">
+                                لنا (عليه)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-600 font-black">
+                                متزن
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 )}
               </div>
@@ -1237,6 +1354,13 @@ export const Suppliers: React.FC = () => {
             <div className="h-full flex flex-col items-center justify-center text-gray-400 p-8">
               <Truck size={44} className="mb-2 opacity-40 text-orange-500"/>
               <p className="font-bold text-sm">اختر مورداً من القائمة لعرض بيان كشف الحساب</p>
+              <button 
+                type="button"
+                onClick={() => setMobileView('LIST')}
+                className="lg:hidden mt-3 flex items-center gap-1.5 text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 px-3 py-1.5 rounded-lg shadow-xs"
+              >
+                <ArrowRight size={14} /> العودة لقائمة الموردين
+              </button>
             </div>
           )}
         </div>
@@ -1296,9 +1420,10 @@ export const Suppliers: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">
-                  {isEditing ? 'تعديل الرصيد الحالي' : 'رصيد افتتاحي'}
+                  {isEditing ? 'الرصيد الافتتاحي / الحالي' : 'الرصيد الافتتاحي'}
                 </label>
-                <div className="relative">
+                
+                <div className="relative mb-2">
                   <input 
                     type="text" 
                     dir="ltr"
@@ -1306,12 +1431,66 @@ export const Suppliers: React.FC = () => {
                     className="w-full p-2.5 border border-gray-300 rounded-lg outline-none focus:border-orange-500 font-mono font-bold text-center text-sm"
                     value={formData.balance}
                     onFocus={e => e.target.select()}
-                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), true)}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setFormData({...formData, balance: val}), false)}
                   />
-                  <span className="absolute left-2.5 top-2.5 text-[11px] text-gray-400 pointer-events-none">
-                    (موجب = علينا)
+                  <span className="absolute left-2.5 top-2.5 text-xs text-gray-400 font-bold pointer-events-none">
+                    ج.م
                   </span>
                 </div>
+
+                {/* Nature Selector: DEBT (له علينا) vs ADVANCE (لنا عليه) */}
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-bold text-gray-500">حالة الرصيد الافتتاحي:</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, balanceType: 'DEBT' }))}
+                      className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
+                        formData.balanceType === 'DEBT'
+                          ? 'bg-rose-50 border-rose-500 text-rose-700 shadow-xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span>له (علينا)</span>
+                      <span className="text-[10px] font-normal text-gray-500">مديونية علينا للمورد</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, balanceType: 'ADVANCE' }))}
+                      className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
+                        formData.balanceType === 'ADVANCE'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-xs'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span>لنا (عليه)</span>
+                      <span className="text-[10px] font-normal text-gray-500">دفعة مقدمة للمورد</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Accounting Explanation */}
+                {(() => {
+                  const val = Math.abs(parseNumberFromCommas(formData.balance));
+                  if (val === 0) return null;
+                  return (
+                    <div className="mt-2.5 p-2.5 bg-amber-50/70 border border-amber-200/80 rounded-lg text-[11px] text-amber-900 space-y-1 leading-relaxed">
+                      <div className="font-bold flex items-center gap-1 text-amber-950">
+                        <span>💡 التوجيه المحاسبي:</span>
+                      </div>
+                      {formData.balanceType === 'DEBT' ? (
+                        <p>
+                          سيتم إدراج <strong className="font-mono text-xs text-rose-700">{val.toLocaleString()} ج.م</strong> كأول حركة في كشف الحساب باسم <strong>"رصيد افتتاحي"</strong> في خانة <strong>دائن (علينا / توريدات)</strong>، ويبدأ الرصيد التراكمي بالسالب بحالة <strong>له (علينا)</strong>.
+                        </p>
+                      ) : (
+                        <p>
+                          سيتم إدراج <strong className="font-mono text-xs text-emerald-700">{val.toLocaleString()} ج.م</strong> كأول حركة في كشف الحساب باسم <strong>"رصيد افتتاحي"</strong> في خانة <strong>مدين (لنا / سدادات)</strong>، ويبدأ الرصيد التراكمي بالموجب بحالة <strong>لنا (عليه)</strong>.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="flex gap-2 pt-2">
@@ -1416,7 +1595,7 @@ export const Suppliers: React.FC = () => {
                 <Printer size={14} /> طباعة الفاتورة
               </button>
               <button 
-                onClick={() => sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo, selectedSupplier.phone)} 
+                onClick={() => sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo || undefined, selectedSupplier?.phone || undefined)} 
                 className="bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs"
                 title="مشاركة الفاتورة عبر واتساب كملف PDF"
               >
@@ -1515,11 +1694,16 @@ export const Suppliers: React.FC = () => {
 
               {/* Preview Box */}
               {(() => {
-                const previewRows = getItemizedRowsForRange(printStartDate, printEndDate);
-                const prevCredit = previewRows.reduce((sum, r) => sum + r.credit, 0);
-                const prevDebit = previewRows.reduce((sum, r) => sum + r.debit, 0);
-                const lastRow = previewRows[previewRows.length - 1];
-                const previewBalance = lastRow ? lastRow.runningBalance : selectedSupplier.balance;
+                const previewRes = getSupplierStatementTransactions(selectedSupplier, purchases, {
+                  startDate: printStartDate,
+                  endDate: printEndDate,
+                  viewMode: 'ITEMS'
+                });
+                const previewRows = previewRes.rows;
+                const prevCredit = previewRes.totalCredit;
+                const prevDebit = previewRes.totalDebit;
+                const previewBalance = previewRes.finalBalance;
+                const statusText = previewBalance < 0 ? 'له (علينا)' : previewBalance > 0 ? 'لنا (عليه)' : 'متزن';
 
                 return (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
@@ -1529,16 +1713,16 @@ export const Suppliers: React.FC = () => {
                     </div>
                     <div className="flex justify-between text-gray-600">
                       <span>إجمالي التوريدات (علينا):</span>
-                      <span className="font-mono font-bold text-green-600">{prevCredit.toLocaleString()} ج.م</span>
+                      <span className="font-mono font-bold text-rose-600">{prevCredit.toLocaleString()} ج.م</span>
                     </div>
                     <div className="flex justify-between text-gray-600">
                       <span>إجمالي السدادات (لنا):</span>
-                      <span className="font-mono font-bold text-red-600">{prevDebit.toLocaleString()} ج.م</span>
+                      <span className="font-mono font-bold text-emerald-600">{prevDebit.toLocaleString()} ج.م</span>
                     </div>
                     <div className="flex justify-between font-black text-gray-900 border-t pt-1">
                       <span>الرصيد بنهاية الفترة:</span>
-                      <span className={`font-mono text-sm ${previewBalance > 0 ? 'text-emerald-600' : previewBalance < 0 ? 'text-red-600' : 'text-gray-700'}`} dir="ltr">
-                        {previewBalance.toLocaleString()} ج.م {previewBalance > 0 ? '(له علينا)' : previewBalance < 0 ? '(لنا عليه)' : '(متزن)'}
+                      <span className={`font-mono text-sm ${previewBalance < 0 ? 'text-rose-600' : previewBalance > 0 ? 'text-emerald-600' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(previewBalance).toLocaleString()} ج.م ({statusText})
                       </span>
                     </div>
                   </div>
@@ -1724,6 +1908,200 @@ export const Suppliers: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Manual Supplier Transaction / Adjustment Modal */}
+      {isManualTxModalOpen && selectedSupplier && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-gray-150 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-brand-900 to-slate-900 text-white p-4 flex justify-between items-center">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center border border-emerald-400/30">
+                  <Sliders size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">إضافة حركة / تسوية يدوية للمورد</h3>
+                  <p className="text-xs text-brand-200 mt-0.5">
+                    المورد: <span className="text-white font-bold">{selectedSupplier.name}</span> ({selectedSupplier.code})
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={handleCloseManualTxModal} 
+                className="text-gray-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveManualTransaction} className="p-4 sm:p-5 space-y-4 text-xs">
+              
+              {/* 1. Transaction Type Toggle */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">نوع الحركة / المعاملة</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setManualTxType('DEBIT')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      manualTxType === 'DEBIT'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-400 ring-2 ring-emerald-500/20 shadow-xs'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ArrowDownCircle size={16} className={manualTxType === 'DEBIT' ? 'text-emerald-600' : 'text-gray-400'} />
+                    <span>مدين (سداد لنا / خصم / مرتجع)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setManualTxType('CREDIT')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer ${
+                      manualTxType === 'CREDIT'
+                        ? 'bg-amber-50 text-amber-900 border-amber-400 ring-2 ring-amber-500/20 shadow-xs'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ArrowUpCircle size={16} className={manualTxType === 'CREDIT' ? 'text-amber-600' : 'text-gray-400'} />
+                    <span>دائن (توريد له / بضاعة / مستحقات)</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  {manualTxType === 'DEBIT' 
+                    ? '✅ حركة مدين تخفض من مديونية المورد علينا (سداد خارجي، خصم مالي، مرتجع بضاعة، إلخ).' 
+                    : '⚠️ حركة دائن تزيد من مستحقات المورد علينا (بضاعة بدون فاتورة، فرق سعر له، مصاريف نقل، إلخ).'}
+                </p>
+              </div>
+
+              {/* 2. Amount and Date in Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">المبلغ (ج.م) *</label>
+                  <input
+                    type="text"
+                    required
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={manualTxAmount}
+                    onChange={(e) => handleNumericChangeWithCommas(e.target.value, setManualTxAmount)}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-mono font-bold text-sm bg-gray-50 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">التاريخ *</label>
+                  <input
+                    type="date"
+                    required
+                    value={manualTxDate}
+                    onChange={(e) => setManualTxDate(e.target.value)}
+                    className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-mono font-bold text-xs bg-gray-50 focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* 3. Description & Quick Chips */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">البيان / سبب المعاملة *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="اكتب بيان الحركة (مثال: سداد للمورد، خصم خاص، بضاعة بدون فاتورة، مرتجع بضاعة)..."
+                  value={manualTxDescription}
+                  onChange={(e) => handleManualDescriptionChange(e.target.value)}
+                  className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-bold text-xs bg-gray-50 focus:bg-white"
+                />
+
+                {/* Quick Suggestion Chips */}
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {[
+                    'سداد للمورد',
+                    'دفعة مسددة',
+                    'سداد خارجي',
+                    'خصم خاص',
+                    'مرتجع بضاعة',
+                    'بضاعة بدون فاتورة',
+                    'فرق سعر',
+                    'مصاريف نقل',
+                    'تسوية رصيد'
+                  ].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => handleSelectQuickChip(chip)}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all cursor-pointer ${
+                        chip === 'سداد للمورد' || chip === 'دفعة مسددة' || chip === 'خصم خاص'
+                          ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : chip === 'بضاعة بدون فاتورة' || chip === 'فرق سعر'
+                          ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                          : 'bg-gray-100 hover:bg-brand-100 text-gray-700 hover:text-brand-900 border-gray-200'
+                      }`}
+                    >
+                      + {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 4. Live Balance Impact Preview */}
+              {(() => {
+                const parsed = parseNumberFromCommas(manualTxAmount) || 0;
+                const change = manualTxType === 'DEBIT' ? parsed : -parsed;
+                const currentBal = calculateSupplierBalance;
+                const projectedBal = currentBal + change;
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
+                    <div className="flex justify-between items-center text-gray-600">
+                      <span>الرصيد الحالي قبل الحركة:</span>
+                      <span className={`font-mono font-bold ${currentBal < 0 ? 'text-emerald-700' : currentBal > 0 ? 'text-blue-700' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(currentBal).toLocaleString()} ج.م {currentBal < 0 ? '(له / علينا)' : currentBal > 0 ? '(لنا / عليه)' : '(متزن)'}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-gray-600">
+                      <span>قيمة الحركة ({manualTxType === 'DEBIT' ? 'مدين / تخفيض مستحقات المورد' : 'دائن / زيادة مستحقات المورد'}):</span>
+                      <span className={`font-mono font-bold ${manualTxType === 'DEBIT' ? 'text-emerald-700' : 'text-amber-800'}`} dir="ltr">
+                        {manualTxType === 'DEBIT' ? '+' : '-'}{parsed.toLocaleString()} ج.م
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center font-black text-gray-900 border-t border-slate-200 pt-1.5">
+                      <span>الرصيد الجديد بعد الحفظ:</span>
+                      <span className={`font-mono text-sm ${projectedBal < 0 ? 'text-emerald-700 font-black' : projectedBal > 0 ? 'text-blue-700 font-black' : 'text-gray-700'}`} dir="ltr">
+                        {Math.abs(projectedBal).toLocaleString()} ج.م {projectedBal < 0 ? '(له / علينا)' : projectedBal > 0 ? '(لنا / عليه)' : '(متزن)'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingManualTx}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Check size={16} />
+                  <span>{isSavingManualTx ? 'جاري الحفظ...' : 'حفظ وإدراج في كشف حساب المورد'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloseManualTxModal}
+                  disabled={isSavingManualTx}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+
+            </form>
           </div>
         </div>
       )}

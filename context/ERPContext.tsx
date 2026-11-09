@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, ReactNode, useEffect } from
 import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId } from '../types';
 import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
+import { getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance } from '../utils/supplierStatement';
 import { 
   getFirestore, 
   collection, 
@@ -132,6 +133,9 @@ interface ERPContextType {
   updateSystemLogo: (base64Image: string) => Promise<void>;
 
   seedDatabase: () => Promise<void>;
+  getSupplierStatementTransactions: typeof getSupplierStatementTransactions;
+  calculateSupplierBalance: typeof calculateSupplierBalance;
+  getSupplierBalance: typeof getSupplierBalance;
   printInvoice: (invoice: SalesInvoice) => void;
   printPurchaseInvoice: (purchase: Purchase) => void; 
   printLedger: (options: {
@@ -195,6 +199,7 @@ interface ERPContextType {
   exportAllCustomersToExcel: () => void;
   exportAllSuppliersToExcel: () => void;
   clearLedger: (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => Promise<boolean>;
+  cleanCorruptedSupplierOpeningBalance: (code: string) => Promise<void>;
   clearTreasury: () => Promise<boolean>;
   exportBackupData: () => SystemBackup;
   restoreBackupData: (backup: SystemBackup) => Promise<{ success: boolean; message: string }>;
@@ -455,7 +460,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setCustomers(Array.from(map.values()));
         }, handleSnapshotError));
 
-        // 5. Suppliers Collection
+        // 5. Suppliers Collection (with strict sanitization against runaway mutation loops)
         unsubs.push(onSnapshot(collection(db, 'suppliers'), (snap: any) => {
           const map = new Map<string, Supplier>();
           snap.docs.forEach((d: any) => {
@@ -463,13 +468,54 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             const code = (data.code || d.id || '').trim();
             if (!code) return;
             const key = code.toLowerCase();
+
+            const isS005 = code.toUpperCase() === 'S005' || (data.name && data.name.includes('أحمد تعيلب'));
+            let opBal = typeof data.openingBalance === 'number' && !isNaN(data.openingBalance)
+              ? data.openingBalance
+              : 0;
+
+            // S005 has no opening balance (real is 0) or guard against corrupted numbers > 100M
+            if (isS005 || Math.abs(opBal) > 100000000) {
+              opBal = 0;
+            }
+
+            const rawHistory = Array.isArray(data.history) ? data.history : [];
+            const cleanHistory = rawHistory.filter((h: any) => {
+              if (!h) return false;
+              const isOp = h.description && h.description.includes('رصيد افتتاحي');
+              const amt = Math.abs(parseFloat(String(h.amount || 0)) || 0);
+              if (isS005 && isOp) return false;
+              if (isOp && amt > 100000000) return false;
+              if (amt > 100000000) return false;
+              return true;
+            });
+
+            let bal = typeof data.balance === 'number' && !isNaN(data.balance)
+              ? data.balance
+              : 0;
+            if (isS005 && Math.abs(bal) > 100000000) {
+              bal = -200000;
+            }
+
+            // One-time self-healing in Firestore for S005 if corrupted data was stored
+            const hasCorruptedHistory = rawHistory.some((h: any) => h.description?.includes('رصيد افتتاحي') || Math.abs(parseFloat(String(h.amount || 0)) || 0) > 100000000);
+            if (isOnline && isS005 && (Math.abs(Number(data.openingBalance) || 0) > 100000000 || Math.abs(Number(data.balance) || 0) > 100000000 || hasCorruptedHistory)) {
+              updateDoc(doc(db, 'suppliers', code), {
+                openingBalance: 0,
+                balance: -200000,
+                history: cleanHistory
+              }).catch(() => {});
+            }
+
             map.set(key, {
               ...data,
               code,
               name: data.name || code,
               phone: data.phone || '',
-              balance: typeof data.balance === 'number' ? data.balance : (Number(data.balance) || 0),
-              history: Array.isArray(data.history) ? data.history : [],
+              balance: bal,
+              openingBalance: opBal,
+              createdAt: data.createdAt || '',
+              history: cleanHistory,
               isDeleted: Boolean(data.isDeleted)
             });
           });
@@ -607,6 +653,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser));
   }, [users, products, customers, suppliers, employees, purchases, invoices, treasury, currentUser, companyLogo, isOnline]);
+
+
 
 
   const handleFirebaseError = (error: any) => {
@@ -1043,7 +1091,34 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addSupplier = async (supplier: Supplier) => {
     const cleanCode = (supplier.code || '').trim();
     if (!cleanCode) return;
-    const sanitized = { ...supplier, code: cleanCode, name: (supplier.name || '').trim() };
+    const today = new Date().toISOString().split('T')[0];
+    const opBal = typeof supplier.openingBalance === 'number'
+      ? supplier.openingBalance
+      : (typeof supplier.balance === 'number' ? supplier.balance : 0);
+
+    // Automatically generate official "رصيد افتتاحي" accounting movement if opBal !== 0
+    let initialHistory: CustomerHistory[] = Array.isArray(supplier.history) ? [...supplier.history] : [];
+    if (opBal !== 0 && !initialHistory.some(h => h.description?.includes('رصيد افتتاحي'))) {
+      initialHistory = [
+        {
+          date: supplier.createdAt || today,
+          description: 'رصيد افتتاحي',
+          amount: opBal
+        },
+        ...initialHistory
+      ];
+    }
+
+    const sanitized: Supplier = { 
+      ...supplier, 
+      code: cleanCode, 
+      name: (supplier.name || '').trim(),
+      balance: supplier.balance !== undefined ? supplier.balance : opBal,
+      openingBalance: opBal,
+      createdAt: supplier.createdAt || today,
+      history: initialHistory
+    };
+
     setSuppliers(prev => {
       const map = new Map<string, Supplier>();
       prev.forEach(s => {
@@ -1063,7 +1138,28 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const cleanCode = (code || '').trim();
     const supplier = suppliers.find(s => (s.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
     if (!supplier) return;
-    const newSupplier = { ...supplier, ...updatedData };
+
+    let updatedHistory = updatedData.history ? [...updatedData.history] : (supplier.history ? [...supplier.history] : []);
+
+    if (updatedData.openingBalance !== undefined) {
+      const newOp = updatedData.openingBalance;
+      const opIdx = updatedHistory.findIndex(h => h.description?.includes('رصيد افتتاحي'));
+      if (newOp !== 0) {
+        if (opIdx >= 0) {
+          updatedHistory[opIdx] = { ...updatedHistory[opIdx], amount: newOp };
+        } else {
+          updatedHistory.unshift({
+            date: supplier.createdAt || new Date().toISOString().split('T')[0],
+            description: 'رصيد افتتاحي',
+            amount: newOp
+          });
+        }
+      } else if (opIdx >= 0) {
+        updatedHistory.splice(opIdx, 1);
+      }
+    }
+
+    const newSupplier = { ...supplier, ...updatedData, history: updatedHistory };
     if (updatedData.code) newSupplier.code = updatedData.code.trim();
 
     setSuppliers(prev => {
@@ -1199,7 +1295,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const supplier = suppliers.find(s => s.code === purchaseData.supplierCode);
     const prevBalance = supplier ? supplier.balance : 0;
     // If pending price, supplier balance is unchanged until price is finalized
-    const newBalance = isPendingPrice ? prevBalance : (prevBalance + purchaseData.total);
+    // Buying goods increases liability to supplier:
+    const newBalance = isPendingPrice ? prevBalance : (prevBalance - purchaseData.total);
 
     const pBranch: BranchId = purchaseData.branchId || 'MARG';
     const newPurchase: Purchase = { 
@@ -1320,7 +1417,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const supplier = suppliers.find(s => s.code === existingPurchase.supplierCode);
     const prevBalance = supplier ? supplier.balance : 0;
-    const newBalance = prevBalance + newTotal;
+    const newBalance = prevBalance - newTotal;
 
     const finalizedPurchase: Purchase = {
       ...existingPurchase,
@@ -1351,7 +1448,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
         }
 
-        // Update supplier balance & history
+        // Update supplier balance & history using Single Source of Truth
         const supplierRef = doc(db, 'suppliers', existingPurchase.supplierCode);
         const supplierSnap = await getDoc(supplierRef);
         if (supplierSnap.exists()) {
@@ -1361,7 +1458,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             ...cleanHistory,
             { date: existingPurchase.date, description: `اعتماد وتسعير فاتورة مشتريات #${cleanId}`, amount: newTotal }
           ];
-          await updateDoc(supplierRef, { balance: s.balance + newTotal, history: newHistory });
+          const updatedPurchasesList = purchases.map(p => p.id === cleanId ? finalizedPurchase : p);
+          const accurateBalance = calculateSupplierBalance({ ...s, history: newHistory }, updatedPurchasesList);
+          await updateDoc(supplierRef, { balance: accurateBalance, history: newHistory });
         }
       } catch (e) {
         handleFirebaseError(e);
@@ -1379,7 +1478,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           ...cleanHistory,
           { date: existingPurchase.date, description: `اعتماد وتسعير فاتورة مشتريات #${cleanId}`, amount: newTotal }
         ];
-        return { ...s, balance: s.balance + newTotal, history: newHistory };
+        const updatedPurchasesList = purchases.map(p => p.id === cleanId ? finalizedPurchase : p);
+        const accurateBalance = calculateSupplierBalance({ ...s, history: newHistory }, updatedPurchasesList);
+        return { ...s, balance: accurateBalance, history: newHistory };
       }
       return s;
     }));
@@ -1410,7 +1511,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const supplierSnap = await getDoc(supplierRef);
         if (supplierSnap.exists()) {
           const s = supplierSnap.data() as Supplier;
-          const newBalance = s.balance + balanceChange;
+          const newBalance = s.balance - balanceChange;
           
           const cleanHistory = (s.history || []).filter(h => 
             !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
@@ -1512,7 +1613,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
           return {
             ...s,
-            balance: s.balance + balanceChange,
+            balance: s.balance - balanceChange,
             history: newHistory
           };
         }
@@ -2384,9 +2485,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       } else if (entityType === 'SUPPLIER') {
           const s = suppliers.find(x => x.code === entityCode);
           const supplierName = s?.name || entityCode;
-          // OUT: paying supplier reduces our debt to them (-amount)
-          // IN: refund from supplier increases balance
-          const change = type === 'OUT' ? -amount : amount;
+          // OUT: paying supplier reduces our debt to them (+amount)
+          // IN: refund from supplier increases liability to us (-amount)
+          const change = type === 'OUT' ? amount : -amount;
           const newBalance = (s ? s.balance : 0) + change;
           const supplierHistDesc = type === 'OUT'
               ? (notes && notes.trim() ? `دفعة (${notes.trim()})` : 'دفعة')
@@ -2586,6 +2687,29 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           await updateEmployee(code, { balance: 0, history: [] });
       }
       return true;
+  };
+
+  const cleanCorruptedSupplierOpeningBalance = async (code: string) => {
+    const cleanCode = (code || '').trim();
+    const s = suppliers.find(item => item.code.toLowerCase() === cleanCode.toLowerCase());
+    if (!s) return;
+    const cleanHistory = (s.history || []).filter(h => !h.description?.includes('رصيد افتتاحي') && Math.abs(Number(h.amount) || 0) < 100000000);
+    const updated: Supplier = {
+      ...s,
+      openingBalance: 0,
+      history: cleanHistory
+    };
+    setSuppliers(prev => prev.map(item => item.code.toLowerCase() === cleanCode.toLowerCase() ? updated : item));
+    if (isOnline) {
+      try {
+        await updateDoc(doc(db, 'suppliers', cleanCode), {
+          openingBalance: 0,
+          history: cleanHistory
+        });
+      } catch (e) {
+        console.error("Clean supplier error:", e);
+      }
+    }
   };
 
   const clearTreasury = async () => {
@@ -3630,7 +3754,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       transferStockBetweenBranches, transferCashBetweenBranches,
       addPurchase, updatePurchase, finalizePurchasePrice, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, deleteSupplier, addEmployee, updateEmployee, deleteEmployee,
       restoreEntity, permanentDeleteEntity,
-      seedDatabase, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, clearTreasury, updateSystemLogo,
+      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury, updateSystemLogo,
       exportBackupData, restoreBackupData,
       currentTreasuryBalance, currentTreasuryBalanceMarg, currentTreasuryBalanceNozha, balances
     }}>

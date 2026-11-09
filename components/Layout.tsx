@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, Truck, Briefcase, LogOut, Shield, Download, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2 } from 'lucide-react';
 import { PageView, UserPermissions } from '../types';
 import { useERP } from '../context/ERPContext';
 import { BackupModal } from './BackupModal';
@@ -19,43 +19,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   
   const canManageBackup = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
 
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-
   const pendingPurchasesCount = purchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
 
   // Back Button integration for mobile sidebar menu & backup modal
   useBackHandler(() => setIsSidebarOpen(false), isSidebarOpen, 'layout-mobile-sidebar');
   useBackHandler(() => setIsBackupModalOpen(false), isBackupModalOpen, 'layout-backup-modal');
-
-  // Listen for the beforeinstallprompt event
-  useEffect(() => {
-    const handler = (e: any) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handler);
-    return () => window.removeEventListener('beforeinstallprompt', handler);
-  }, []);
-
-  const handleInstallClick = async () => {
-    // Check if running in an iframe/preview environment
-    const isInFrame = window.self !== window.top;
-    
-    if (isInFrame) {
-      alert('يرجى فتح التطبيق في نافذة جديدة (New Tab) أولاً لتتمكن من تثبيته.');
-      return;
-    }
-
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setDeferredPrompt(null);
-      }
-    } else {
-      alert('للتثبيت، يرجى الضغط على أيقونة التثبيت (+) في شريط عنوان المتصفح، أو استخدام خيار "Add to Home Screen" من القائمة.');
-    }
-  };
 
   const navItems: { id: PageView; label: string; icon: React.ReactNode; permission?: keyof UserPermissions }[] = [
     { id: 'dashboard', label: 'الرئيسية', icon: <LayoutDashboard size={20} /> },
@@ -112,10 +80,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
         </div>
       )}
 
-      {/* Mobile Header */}
-      <div className="md:hidden print:hidden bg-brand-600 text-white p-3 flex justify-between items-center shadow-md z-20 sticky top-0">
-        <h1 className="text-lg font-bold">بورصة النجار</h1>
-        <div className="flex items-center gap-1.5">
+      {/* Mobile Header with Home/Back Navigation */}
+      <div className="md:hidden print:hidden bg-brand-600 text-white p-2.5 flex justify-between items-center shadow-md z-20 sticky top-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {activePage !== 'dashboard' && (
+            <button 
+              onClick={() => onNavigate('dashboard')}
+              className="flex items-center gap-1 bg-brand-700 hover:bg-brand-800 text-white px-2 py-1 rounded-lg text-xs font-bold transition-all border border-brand-500/40 shrink-0"
+              title="العودة للرئيسية"
+            >
+              <ArrowRight size={15} />
+              <span>الرئيسية</span>
+            </button>
+          )}
+          <h1 className="text-base font-bold truncate">بورصة النجار</h1>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
           {canManageBackup && (
             <button 
               onClick={() => setIsBackupModalOpen(true)}
@@ -123,10 +103,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
               title="نسخ احتياطي واسترجاع البيانات"
             >
               <Database size={14} />
-              <span>نسخ احتياطي</span>
+              <span className="hidden sm:inline">نسخ احتياطي</span>
             </button>
           )}
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1 rounded-lg hover:bg-brand-700">
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1 rounded-lg hover:bg-brand-700" title="القائمة">
             {isSidebarOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
@@ -195,14 +175,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                <Database size={15} /> نسخ احتياطي واسترجاع
              </button>
            )}
-
-           {/* Install Button */}
-           <button 
-             onClick={handleInstallClick}
-             className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg transition-colors text-xs font-bold shadow-sm"
-           >
-             <Download size={15} /> تثبيت التطبيق
-           </button>
 
            <div className="flex items-center gap-3 px-2 pt-1">
              <div className="w-8 h-8 bg-brand-600 rounded-full flex items-center justify-center font-bold">
@@ -296,6 +268,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
         isOpen={isBackupModalOpen} 
         onClose={() => setIsBackupModalOpen(false)} 
       />
+
 
       {/* Overlay for mobile */}
       {isSidebarOpen && (

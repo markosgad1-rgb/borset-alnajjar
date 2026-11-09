@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
-import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet, MessageCircle, Phone, Send, MapPin, Building, Check, Search } from 'lucide-react';
+import { FileText, Package, PlusCircle, Trash2, Save, ShoppingCart, CheckCircle, Printer, X, RefreshCcw, User, Calendar, Clock, CreditCard, Banknote, Coins, Wallet, MessageCircle, Phone, Send, MapPin, Building, Check, Search, Image as ImageIcon } from 'lucide-react';
 import { InvoiceItem, SalesInvoice, PaymentMethod, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas, Customer } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
-import { shareSalesInvoicePdfViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
+import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
 import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
 
@@ -483,6 +483,55 @@ export const Sales: React.FC = () => {
   };
 
   const [isSharingPdf, setIsSharingPdf] = useState(false);
+  const [isSharingImage, setIsSharingImage] = useState(false);
+
+  const handleShareWhatsAppImage = async () => {
+    if (!lastSavedInvoice || isSharingImage) return;
+
+    let syncTab: Window | null = null;
+    const isNativeShareSupported = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!isNativeShareSupported) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {
+        // ignore popup error
+      }
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setIsSharingImage(true);
+      safetyTimer = setTimeout(() => {
+        setIsSharingImage(false);
+      }, 4000);
+
+      const targetPhone = modalCustomerPhone || lastSavedInvoice.customerPhone;
+      await shareSalesInvoiceImageViaWhatsApp(
+        { ...lastSavedInvoice, customerPhone: targetPhone },
+        companyLogo,
+        targetPhone,
+        syncTab
+      );
+    } catch (e: any) {
+      if (syncTab && !syncTab.closed) syncTab.close();
+      if (
+        e?.name !== 'AbortError' &&
+        e?.name !== 'NotAllowedError' &&
+        !e?.message?.includes?.('AbortError') &&
+        !e?.message?.includes?.('canceled') &&
+        !e?.message?.includes?.('cancelled')
+      ) {
+        console.error(e);
+        alert('حدث خطأ أثناء مشاركة الصورة عبر واتساب');
+      }
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsSharingImage(false);
+    }
+  };
 
   const handleShareWhatsApp = async () => {
     if (!lastSavedInvoice || isSharingPdf) return;
@@ -1312,34 +1361,44 @@ export const Sales: React.FC = () => {
                 />
               </div>
               <div className="text-[11px] text-emerald-700">
-                ⚡ يتم التحويل لتطبيق واتساب مباشرة لإرسال الفاتورة بصيغة PDF الرسمية بدون حفظها على جهازك.
+                ⚡ يمكنك مشاركة الفاتورة كصورة عالية الدقة أو إرسالها بصيغة PDF الرسمية عبر واتساب مباشرة.
               </div>
             </div>
             
-            {/* Action Buttons: Print, WhatsApp PDF, New Invoice */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-2">
-              <button 
-                onClick={handlePrint}
-                className="bg-gray-800 hover:bg-gray-900 active:bg-black text-white py-3.5 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all text-sm shadow-md cursor-pointer"
-              >
-                <Printer size={18} /> طباعة
-              </button>
-              
+            {/* Action Buttons: WhatsApp PDF, WhatsApp Image, Print, New Invoice */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
               <button 
                 onClick={handleShareWhatsApp}
                 disabled={isSharingPdf}
-                className="bg-[#25D366] hover:bg-[#20ba5a] active:bg-[#1da851] text-white py-3.5 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer"
+                className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer order-1 sm:order-2"
                 title="إرسال الفاتورة PDF عبر واتساب مباشرة"
               >
-                <MessageCircle size={18} className="fill-white/20" /> 
-                <span>{isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF عبر واتساب'}</span>
+                <MessageCircle size={16} /> 
+                <span>{isSharingPdf ? 'جاري التحويل...' : 'مشاركة PDF'}</span>
+              </button>
+
+              <button 
+                onClick={handleShareWhatsAppImage}
+                disabled={isSharingImage}
+                className="bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer order-2 sm:order-3"
+                title="مشاركة الفاتورة كصورة عبر واتساب"
+              >
+                <ImageIcon size={16} /> 
+                <span>{isSharingImage ? 'جاري التحضير...' : 'مشاركة كصورة'}</span>
+              </button>
+
+              <button 
+                onClick={handlePrint}
+                className="bg-gray-800 hover:bg-gray-900 active:bg-black text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md cursor-pointer order-3 sm:order-1"
+              >
+                <Printer size={16} /> <span>طباعة الفاتورة</span>
               </button>
               
               <button 
                 onClick={handleCloseModal}
-                className="bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white py-3.5 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all text-sm shadow-md cursor-pointer"
+                className="bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md cursor-pointer order-4 sm:order-4"
               >
-                <RefreshCcw size={18} /> فاتورة جديدة
+                <RefreshCcw size={16} /> <span>فاتورة جديدة</span>
               </button>
             </div>
           </div>

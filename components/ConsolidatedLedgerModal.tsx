@@ -152,7 +152,19 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       let prior = 0;
       let periodDebit = 0; // سداد للمورد
       let periodCredit = 0; // مشتريات من المورد (علينا)
-      const history = supp.history || [];
+      const history = [...(supp.history || [])];
+      const hasOpening = history.some(h => h.description?.includes('رصيد افتتاحي'));
+      const opVal = Number((supp as any).openingBalance !== undefined ? (supp as any).openingBalance : 0);
+      if (!hasOpening && opVal !== 0) {
+        const isDebtWeOwe = (supp as any).openingBalanceType === 'CREDIT' || ((supp as any).openingBalanceType !== 'DEBIT' && opVal < 0);
+        const absVal = Math.abs(opVal);
+        const historyAmount = isDebtWeOwe ? absVal : -absVal;
+        history.unshift({
+          date: history[0]?.date || new Date().toISOString().split('T')[0],
+          description: 'رصيد افتتاحي',
+          amount: historyAmount
+        });
+      }
 
       // Calculate prior balance if startDate is active
       if (filterStartDate) {
@@ -197,9 +209,10 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       });
 
       // For supplier: positive balance means we owe supplier (دائن/له), negative means supplier owes us (مدين/لنا)
-      const finalBal = filterStartDate || filterEndDate
-        ? (prior + periodCredit - periodDebit)
-        : supp.balance;
+      const dynamicBal = prior + periodCredit - periodDebit;
+      const finalBal = (supp.history && supp.history.length > 0)
+        ? dynamicBal
+        : ((supp as any).currentBalance !== undefined ? (supp as any).currentBalance : supp.balance);
 
       const status: 'مدين' | 'دائن' | 'متزن' = finalBal > 0 ? 'دائن' : finalBal < 0 ? 'مدين' : 'متزن';
 

@@ -248,7 +248,7 @@ export const Transfers: React.FC = () => {
       if (currentBalance !== null) {
         let delta = 0;
         if (entityType === 'CUSTOMER') delta = formData.type === 'IN' ? amount : -amount;
-        else if (entityType === 'SUPPLIER') delta = formData.type === 'OUT' ? -amount : amount;
+        else if (entityType === 'SUPPLIER') delta = formData.type === 'OUT' ? amount : -amount;
         else delta = formData.type === 'OUT' ? amount : -amount;
         setCurrentBalance(currentBalance + delta);
       }
@@ -757,8 +757,10 @@ export const Transfers: React.FC = () => {
                     {currentBalance.toLocaleString()} ج.م 
                     <span className="text-xs mr-2 text-gray-600">
                         {entityType === 'EMPLOYEE' 
-                            ? (currentBalance < 0 ? '(مستحقات له)' : '(سلف عليه)') 
-                            : (currentBalance < 0 ? '(عليه/مديونية)' : '(له/رصيد)')
+                            ? (currentBalance < 0 ? '(مستحقات له)' : currentBalance > 0 ? '(سلف عليه)' : '(متزن)') 
+                            : entityType === 'SUPPLIER'
+                            ? (currentBalance < 0 ? '(له / مديونية علينا)' : currentBalance > 0 ? '(لنا عليه / رصيد)' : '(متزن)')
+                            : (currentBalance < 0 ? '(عليه / مديونية)' : currentBalance > 0 ? '(له / رصيد)' : '(متزن)')
                         }
                     </span>
                   </p>
@@ -783,10 +785,28 @@ export const Transfers: React.FC = () => {
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
                 {parseNumberFromCommas(formData.amount) > 0 && (
-                  <p className="text-xs font-bold text-purple-700 bg-purple-50 p-2 rounded border border-purple-100 flex justify-between">
-                    <span>المبلغ المحدد:</span>
-                    <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
-                  </p>
+                  <div className="space-y-1 mt-1">
+                    <p className="text-xs font-bold text-purple-700 bg-purple-50 p-2 rounded border border-purple-100 flex justify-between">
+                      <span>المبلغ المحدد:</span>
+                      <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
+                    </p>
+                    {currentBalance !== null && (() => {
+                      const enteredAmt = parseNumberFromCommas(formData.amount);
+                      let projectedDelta = 0;
+                      if (entityType === 'CUSTOMER') projectedDelta = formData.type === 'IN' ? enteredAmt : -enteredAmt;
+                      else if (entityType === 'SUPPLIER') projectedDelta = formData.type === 'OUT' ? enteredAmt : -enteredAmt;
+                      else projectedDelta = formData.type === 'OUT' ? enteredAmt : -enteredAmt;
+                      const projectedBal = currentBalance + projectedDelta;
+                      return (
+                        <p className="text-xs font-bold text-gray-700 bg-gray-50 p-2 rounded border border-gray-200 flex justify-between items-center">
+                          <span>الرصيد المتوقع بعد التحويل:</span>
+                          <span className={`font-mono font-bold ${projectedBal < 0 ? 'text-red-600' : projectedBal > 0 ? 'text-green-700' : 'text-gray-800'}`} dir="ltr">
+                            {projectedBal.toLocaleString()} ج.م
+                          </span>
+                        </p>
+                      );
+                    })()}
+                  </div>
                 )}
               </div>
 

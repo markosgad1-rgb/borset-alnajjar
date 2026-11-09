@@ -343,6 +343,74 @@ export function buildWhatsAppUrl(phone?: string, text?: string): string {
 }
 
 /**
+ * Shared renderer: draws invoice HTML into a canvas.
+ * Used by BOTH the PDF and the Image paths so the text centering is identical
+ * (the print CSS compensates html2canvas font baseline with asymmetric padding).
+ * Always uses the npm-imported html2canvas (never window.html2canvas, which can be a different version).
+ */
+async function renderHtmlToCanvas(
+  htmlContent: string,
+  containerWidth: number,
+  windowWidth: number,
+  extraHead = ''
+): Promise<HTMLCanvasElement> {
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.top = '0';
+  container.style.left = '0';
+  container.style.zIndex = '-99999';
+  container.style.pointerEvents = 'none';
+  container.style.width = `${containerWidth}px`;
+  container.style.backgroundColor = '#ffffff';
+  container.style.direction = 'rtl';
+  container.style.margin = '0';
+  container.style.padding = '0';
+  container.style.fontFamily = "'Cairo', 'Segoe UI', Tahoma, sans-serif";
+  (container.style as any).webkitFontSmoothing = 'antialiased';
+  container.style.textRendering = 'optimizeLegibility';
+  container.innerHTML = extraHead + htmlContent;
+
+  document.body.appendChild(container);
+
+  try {
+    if (typeof document !== 'undefined' && document.fonts) {
+      // Force Cairo weights to load before measuring/painting
+      try {
+        await Promise.all([
+          document.fonts.load("600 14px 'Cairo'"),
+          document.fonts.load("700 14px 'Cairo'"),
+          document.fonts.load("800 14px 'Cairo'"),
+          document.fonts.load("900 14px 'Cairo'"),
+        ]);
+      } catch {
+        // ignore font loading errors
+      }
+      await document.fonts.ready;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (typeof document !== 'undefined' && document.fonts) {
+      await document.fonts.ready;
+    }
+
+    return await html2canvas(container, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      scrollX: 0,
+      scrollY: 0,
+      windowWidth,
+      imageTimeout: 15000,
+    });
+  } finally {
+    if (container.parentNode) {
+      container.parentNode.removeChild(container);
+    }
+  }
+}
+
+/**
  * Generates an actual PDF File object in-memory from HTML
  * using html2canvas and jsPDF with exact pixel fidelity matching invoice printout.
  */
@@ -351,100 +419,61 @@ export async function generatePdfFileFromHtml(
   fileName: string,
   orientation: 'portrait' | 'landscape' = 'portrait'
 ): Promise<File> {
-  const container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.top = '0';
-  container.style.left = '0';
-  container.style.zIndex = '-99999';
-  container.style.pointerEvents = 'none';
-  container.style.width = orientation === 'landscape' ? '1080px' : '880px';
-  container.style.backgroundColor = '#ffffff';
-  container.style.direction = 'rtl';
-  container.style.margin = '0';
-  container.style.padding = '0';
-  container.style.fontFamily = "'Cairo', 'Segoe UI', Tahoma, sans-serif";
-  container.style.webkitFontSmoothing = 'antialiased';
-  container.style.textRendering = 'optimizeLegibility';
-  container.innerHTML = htmlContent;
+  const canvas = await renderHtmlToCanvas(
+    htmlContent,
+    orientation === 'landscape' ? 1080 : 880,
+    orientation === 'landscape' ? 1200 : 960
+  );
 
-  document.body.appendChild(container);
-
+  // Best-effort: Copy rendered invoice image to system clipboard
   try {
-    // Explicitly wait for Cairo and Arabic fonts to be fully loaded
-    if (typeof document !== 'undefined' && document.fonts) {
-      await document.fonts.ready;
+    if (typeof window !== 'undefined' && 'ClipboardItem' in window && navigator.clipboard && navigator.clipboard.write) {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]).catch(() => {
+            // Ignore clipboard errors
+          });
+        }
+      }, 'image/png');
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    if (typeof document !== 'undefined' && document.fonts) {
-      await document.fonts.ready;
-    }
-
-    const canvas = await html2canvas(container, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: true,
-      backgroundColor: '#ffffff',
-      logging: false,
-      scrollX: 0,
-      scrollY: 0,
-      windowWidth: orientation === 'landscape' ? 1200 : 960,
-      imageTimeout: 15000,
-    });
-
-    // Best-effort: Copy rendered invoice image to system clipboard
-    try {
-      if (typeof window !== 'undefined' && 'ClipboardItem' in window && navigator.clipboard && navigator.clipboard.write) {
-        canvas.toBlob((blob) => {
-          if (blob) {
-            navigator.clipboard.write([
-              new ClipboardItem({ 'image/png': blob })
-            ]).catch(() => {
-              // Ignore clipboard errors
-            });
-          }
-        }, 'image/png');
-      }
-    } catch {
-      // Ignore clipboard write errors
-    }
-
-    const imgData = canvas.toDataURL('image/jpeg', 0.95);
-
-    const pdf = new jsPDF({
-      orientation: orientation === 'landscape' ? 'landscape' : 'portrait',
-      unit: 'mm',
-      format: 'a4',
-      compress: true,
-    });
-
-    pdf.setDisplayMode(1, 'continuous', 'UseNone');
-
-    const pageWidth = orientation === 'landscape' ? 297 : 210;
-    const pageHeight = orientation === 'landscape' ? 210 : 297;
-
-    const margin = 6;
-    const printableWidth = pageWidth - (margin * 2);
-    const printableHeight = pageHeight - (margin * 2);
-
-    const imgHeight = (canvas.height * printableWidth) / canvas.width;
-
-    if (imgHeight <= printableHeight) {
-      pdf.addImage(imgData, 'JPEG', margin, margin, printableWidth, imgHeight);
-    } else {
-      const scaleFactor = printableHeight / imgHeight;
-      const scaledWidth = printableWidth * scaleFactor;
-      const xOffset = margin + ((printableWidth - scaledWidth) / 2);
-      pdf.addImage(imgData, 'JPEG', xOffset, margin, scaledWidth, printableHeight);
-    }
-
-    const pdfBlob = pdf.output('blob');
-    const safeName = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
-    return new File([pdfBlob], safeName, { type: 'application/pdf' });
-  } finally {
-    if (container.parentNode) {
-      container.parentNode.removeChild(container);
-    }
+  } catch {
+    // Ignore clipboard write errors
   }
+
+  const imgData = canvas.toDataURL('image/jpeg', 0.95);
+
+  const pdf = new jsPDF({
+    orientation: orientation === 'landscape' ? 'landscape' : 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true,
+  });
+
+  pdf.setDisplayMode(1, 'continuous', 'UseNone');
+
+  const pageWidth = orientation === 'landscape' ? 297 : 210;
+  const pageHeight = orientation === 'landscape' ? 210 : 297;
+
+  const margin = 6;
+  const printableWidth = pageWidth - (margin * 2);
+  const printableHeight = pageHeight - (margin * 2);
+
+  const imgHeight = (canvas.height * printableWidth) / canvas.width;
+
+  if (imgHeight <= printableHeight) {
+    pdf.addImage(imgData, 'JPEG', margin, margin, printableWidth, imgHeight);
+  } else {
+    const scaleFactor = printableHeight / imgHeight;
+    const scaledWidth = printableWidth * scaleFactor;
+    const xOffset = margin + ((printableWidth - scaledWidth) / 2);
+    pdf.addImage(imgData, 'JPEG', xOffset, margin, scaledWidth, printableHeight);
+  }
+
+  const pdfBlob = pdf.output('blob');
+  const safeName = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
+  return new File([pdfBlob], safeName, { type: 'application/pdf' });
 }
 
 /**
@@ -714,6 +743,408 @@ export async function shareSalesInvoicePdfViaWhatsApp(
 }
 
 /**
+ * Generates an in-memory PNG Image File object from HTML template.
+ * Uses the exact same renderer (container width, windowWidth, scale, fonts wait)
+ * as the PDF path so cell text is centered identically.
+ */
+export async function generateImageFileFromHtml(
+  htmlContent: string,
+  fileName: string = 'Invoice.png'
+): Promise<{ file: File; blob: Blob; dataUrl: string }> {
+  const canvas = await renderHtmlToCanvas(
+    htmlContent,
+    880,
+    960,
+    `<style>.invoice-container { min-height: auto !important; height: auto !important; }</style>`
+  );
+
+  // Best-effort: copy image to clipboard
+  try {
+    if (typeof window !== 'undefined' && 'ClipboardItem' in window && navigator.clipboard && navigator.clipboard.write) {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]).catch(() => {});
+        }
+      }, 'image/png');
+    }
+  } catch {}
+
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error('Failed to convert canvas to blob'));
+    }, 'image/png');
+  });
+
+  const safeName = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
+  const file = new File([blob], safeName, { type: 'image/png' });
+  const dataUrl = canvas.toDataURL('image/png');
+
+  return { file, blob, dataUrl };
+}
+
+/**
+ * Toast notification for Image Sharing
+ */
+function showImageShareToast(fileName: string, isSharedNative: boolean) {
+  const existing = document.getElementById('image-share-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'image-share-toast';
+  toast.style.position = 'fixed';
+  toast.style.bottom = '24px';
+  toast.style.right = '24px';
+  toast.style.zIndex = '99999';
+  toast.style.backgroundColor = '#064e3b';
+  toast.style.color = '#ffffff';
+  toast.style.padding = '14px 18px';
+  toast.style.borderRadius = '14px';
+  toast.style.boxShadow = '0 10px 30px -5px rgba(0, 0, 0, 0.45)';
+  toast.style.direction = 'rtl';
+  toast.style.fontFamily = "'Cairo', sans-serif";
+  toast.style.fontSize = '13px';
+  toast.style.fontWeight = '700';
+  toast.style.display = 'flex';
+  toast.style.flexDirection = 'column';
+  toast.style.gap = '8px';
+  toast.style.maxWidth = '420px';
+  toast.style.border = '1.5px solid #10b981';
+
+  let msgHtml = '';
+  if (isSharedNative) {
+    msgHtml = `
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 22px;">🖼️</span>
+        <div>
+          <div>تمت مشاركة صورة الفاتورة عبر واتساب بنجاح!</div>
+          <div style="font-size: 11px; opacity: 0.9; margin-top: 2px;">
+            الصورة: <strong style="color: #6ee7b7; direction: ltr; display: inline-block;">${fileName}</strong>
+          </div>
+          <div style="font-size: 10px; opacity: 0.8; margin-top: 1px;">تم الإرسال بدقة وضوح عالية (PNG).</div>
+        </div>
+      </div>
+    `;
+  } else {
+    msgHtml = `
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 22px;">📥</span>
+        <div>
+          <div>تم تنزيل صورة الفاتورة وفتح واتساب!</div>
+          <div style="font-size: 11px; opacity: 0.9; margin-top: 2px;">
+            الملف: <strong style="color: #6ee7b7; direction: ltr; display: inline-block;">${fileName}</strong>
+          </div>
+          <div style="font-size: 10px; opacity: 0.85; margin-top: 2px;">
+            تم نسخ الصورة للحافظة، يمكنك الضغط على <strong style="color: #6ee7b7; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 4px;">Ctrl + V</strong> في المحادثة للصقها فوراً أو إرفاق الملف الذي تم تنزيله.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  toast.innerHTML = msgHtml;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    setTimeout(() => toast.remove(), 400);
+  }, 6000);
+}
+
+/**
+ * Share Sales Invoice as High-Resolution PNG Image via WhatsApp:
+ * 1. Captures invoice template with scale: 2 and crisp typography.
+ * 2. If navigator.canShare with files is supported (Mobile):
+ *    Shares via native share drawer with title & text.
+ * 3. Desktop / Unsupported:
+ *    Automatically downloads Invoice_NUM.png to device,
+ *    and opens WhatsApp Web directly (https://wa.me/20XXXXXXXXXX?text=مرفق+فاتورة+البيع).
+ */
+export async function shareSalesInvoiceImageViaWhatsApp(
+  invoice: SalesInvoice,
+  companyLogo?: string,
+  customerPhone?: string,
+  openWhatsAppTabSync?: Window | null,
+  customCaption?: string
+): Promise<void> {
+  const html = getSalesInvoiceHtml(invoice, companyLogo);
+  const safeId = (invoice.id || 'N001').replace(/[^A-Za-z0-9_-]/g, '_');
+  const fileName = `Invoice_${safeId}.png`;
+  const phone = customerPhone || invoice.customerPhone;
+  const cleanPhone = cleanPhoneNumber(phone);
+  const partyName = invoice.customerName?.trim() || 'عميل';
+
+  const { file, blob } = await generateImageFileFromHtml(html, fileName);
+
+  const shareTitle = `فاتورة #${invoice.id} - ${partyName}`;
+  const shareText = customCaption || `فاتورة مبيعات - ${partyName}`;
+
+  // 1. Check Native Web Share API support for image files
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.canShare === 'function' &&
+    typeof navigator.share === 'function'
+  ) {
+    try {
+      const shareData: ShareData = {
+        files: [file],
+        title: shareTitle,
+        text: shareText,
+      };
+
+      if (navigator.canShare(shareData) || navigator.canShare({ files: [file] })) {
+        if (openWhatsAppTabSync && !openWhatsAppTabSync.closed) {
+          openWhatsAppTabSync.close();
+        }
+
+        const sharePromise = navigator.share(shareData);
+
+        await Promise.race([
+          sharePromise.catch((err: any) => {
+            if (
+              err?.name === 'AbortError' ||
+              err?.name === 'NotAllowedError' ||
+              err?.message?.includes?.('AbortError') ||
+              err?.message?.includes?.('canceled') ||
+              err?.message?.includes?.('cancelled')
+            ) {
+              return 'aborted';
+            }
+            throw err;
+          }),
+          new Promise<void>((resolve) => {
+            const onReturn = () => {
+              window.removeEventListener('focus', onReturn);
+              window.removeEventListener('blur', onReturn);
+              document.removeEventListener('visibilitychange', onReturn);
+              resolve();
+            };
+            window.addEventListener('focus', onReturn, { once: true });
+            window.addEventListener('blur', onReturn, { once: true });
+            document.addEventListener('visibilitychange', onReturn, { once: true });
+            setTimeout(() => {
+              onReturn();
+            }, 2500);
+          })
+        ]);
+
+        showImageShareToast(file.name, true);
+        return;
+      }
+    } catch (err: any) {
+      if (
+        err?.name === 'AbortError' ||
+        err?.name === 'NotAllowedError' ||
+        err?.message?.includes?.('AbortError') ||
+        err?.message?.includes?.('canceled') ||
+        err?.message?.includes?.('cancelled')
+      ) {
+        if (openWhatsAppTabSync && !openWhatsAppTabSync.closed) {
+          openWhatsAppTabSync.close();
+        }
+        return;
+      }
+      console.warn('Native image share failed or unsupported, falling back to download + WhatsApp Web:', err);
+    }
+  }
+
+  // 2. Fallback for Desktop / non-supported browsers:
+  // Automatically download Invoice_NUM.png
+  try {
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
+  } catch (dlErr) {
+    console.warn('Failed to trigger automatic download:', dlErr);
+  }
+
+  // Open direct WhatsApp Web link with dynamic caption
+  const waDirectUrl = cleanPhone
+    ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(shareText)}`
+    : `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+
+  if (openWhatsAppTabSync && !openWhatsAppTabSync.closed) {
+    openWhatsAppTabSync.location.href = waDirectUrl;
+  } else {
+    try {
+      const opened = window.open(waDirectUrl, '_blank');
+      if (!opened || opened.closed || typeof opened.closed === 'undefined') {
+        window.location.href = waDirectUrl;
+      }
+    } catch {
+      window.location.href = waDirectUrl;
+    }
+  }
+
+  showImageShareToast(file.name, false);
+}
+
+/**
+ * Share Purchase Invoice as High-Resolution PNG Image via WhatsApp:
+ */
+export async function sharePurchaseInvoiceImageViaWhatsApp(
+  purchase: Purchase,
+  companyLogo?: string,
+  supplierPhone?: string,
+  openWhatsAppTabSync?: Window | null,
+  customCaption?: string
+): Promise<void> {
+  const html = getPurchaseInvoiceHtml(purchase, companyLogo);
+  const safeId = (purchase.id || 'R001').replace(/[^A-Za-z0-9_-]/g, '_');
+  const fileName = `Purchase_${safeId}.png`;
+  const phone = supplierPhone || (purchase as any).supplierPhone;
+  const cleanPhone = cleanPhoneNumber(phone);
+  const partyName = purchase.supplierName?.trim() || 'مورد';
+
+  const { file, blob } = await generateImageFileFromHtml(html, fileName);
+
+  const shareTitle = `فاتورة مشتريات #${purchase.id} - ${partyName}`;
+  const shareText = customCaption || `فاتورة مشتريات - ${partyName}`;
+
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.canShare === 'function' &&
+    typeof navigator.share === 'function'
+  ) {
+    try {
+      const shareData: ShareData = {
+        files: [file],
+        title: shareTitle,
+        text: shareText,
+      };
+
+      if (navigator.canShare(shareData) || navigator.canShare({ files: [file] })) {
+        if (openWhatsAppTabSync && !openWhatsAppTabSync.closed) {
+          openWhatsAppTabSync.close();
+        }
+
+        const sharePromise = navigator.share(shareData);
+
+        await Promise.race([
+          sharePromise.catch((err: any) => {
+            if (
+              err?.name === 'AbortError' ||
+              err?.name === 'NotAllowedError' ||
+              err?.message?.includes?.('AbortError') ||
+              err?.message?.includes?.('canceled') ||
+              err?.message?.includes?.('cancelled')
+            ) {
+              return 'aborted';
+            }
+            throw err;
+          }),
+          new Promise<void>((resolve) => {
+            const onReturn = () => {
+              window.removeEventListener('focus', onReturn);
+              window.removeEventListener('blur', onReturn);
+              document.removeEventListener('visibilitychange', onReturn);
+              resolve();
+            };
+            window.addEventListener('focus', onReturn, { once: true });
+            window.addEventListener('blur', onReturn, { once: true });
+            document.addEventListener('visibilitychange', onReturn, { once: true });
+            setTimeout(() => {
+              onReturn();
+            }, 2500);
+          })
+        ]);
+
+        showImageShareToast(file.name, true);
+        return;
+      }
+    } catch (err: any) {
+      if (
+        err?.name === 'AbortError' ||
+        err?.name === 'NotAllowedError' ||
+        err?.message?.includes?.('AbortError') ||
+        err?.message?.includes?.('canceled') ||
+        err?.message?.includes?.('cancelled')
+      ) {
+        if (openWhatsAppTabSync && !openWhatsAppTabSync.closed) {
+          openWhatsAppTabSync.close();
+        }
+        return;
+      }
+      console.warn('Native purchase image share failed, falling back:', err);
+    }
+  }
+
+  try {
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
+  } catch (dlErr) {
+    console.warn('Failed to trigger automatic download:', dlErr);
+  }
+
+  const waDirectUrl = cleanPhone
+    ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(shareText)}`
+    : `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+
+  if (openWhatsAppTabSync && !openWhatsAppTabSync.closed) {
+    openWhatsAppTabSync.location.href = waDirectUrl;
+  } else {
+    try {
+      const opened = window.open(waDirectUrl, '_blank');
+      if (!opened || opened.closed || typeof opened.closed === 'undefined') {
+        window.location.href = waDirectUrl;
+      }
+    } catch {
+      window.location.href = waDirectUrl;
+    }
+  }
+
+  showImageShareToast(file.name, false);
+}
+
+/**
+ * Generic helper / alias to share any invoice as image
+ */
+export async function shareInvoiceAsImage(
+  invoice: any,
+  options: {
+    type?: 'sales' | 'purchase';
+    companyLogo?: string;
+    phone?: string;
+    caption?: string;
+    syncTab?: Window | null;
+  } = {}
+): Promise<void> {
+  const isPurchase = options.type === 'purchase' || ('supplierName' in invoice);
+  if (isPurchase) {
+    return sharePurchaseInvoiceImageViaWhatsApp(
+      invoice,
+      options.companyLogo,
+      options.phone,
+      options.syncTab,
+      options.caption
+    );
+  } else {
+    return shareSalesInvoiceImageViaWhatsApp(
+      invoice,
+      options.companyLogo,
+      options.phone,
+      options.syncTab,
+      options.caption
+    );
+  }
+}
+
+/**
  * Share Purchase Invoice directly as PDF via WhatsApp
  * Example filename: Moshtrayat_Mazraat_AlBaraka_R001.pdf
  * Text message: فاتورة مشتريات - [اسم_المورد]
@@ -972,4 +1403,3 @@ export function printHtmlDocument(htmlContent: string): void {
   // Last resort
   window.print();
 }
-

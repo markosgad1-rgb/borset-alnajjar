@@ -3,12 +3,13 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle, ArrowRight,
-  Calendar, Filter, MessageCircle, MapPin, Building, Sliders, ArrowUpCircle, ArrowDownCircle
+  Calendar, Filter, MessageCircle, MapPin, Building, Sliders, ArrowUpCircle, ArrowDownCircle,
+  Image as ImageIcon
 } from 'lucide-react';
 import { SalesInvoice, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas, ManualCustomerTransaction, CustomerHistory } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
-import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
 
 export const Customers: React.FC = () => {
@@ -23,6 +24,7 @@ export const Customers: React.FC = () => {
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
   const [isSharingPdf, setIsSharingPdf] = useState(false);
+  const [isSharingImage, setIsSharingImage] = useState(false);
 
   // Search & Branch Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -309,6 +311,24 @@ export const Customers: React.FC = () => {
     setIsSavingManualTx(false);
   };
 
+  const handleSelectQuickChip = (chip: string) => {
+    setManualTxDescription(chip);
+    const lower = chip.toLowerCase();
+    if (lower.includes('مرتجع') || lower.includes('دفعة') || lower.includes('سداد') || lower.includes('خصم')) {
+      setManualTxType('CREDIT');
+    } else if (lower.includes('بضاعة') || lower.includes('مسحوبات') || lower.includes('مصاريف') || lower.includes('فرق سعر')) {
+      setManualTxType('DEBIT');
+    }
+  };
+
+  const handleManualDescriptionChange = (val: string) => {
+    setManualTxDescription(val);
+    const lower = val.toLowerCase();
+    if (lower.includes('مرتجع') || lower.includes('دفعة') || lower.includes('سداد') || lower.includes('خصم')) {
+      setManualTxType('CREDIT');
+    }
+  };
+
   const handleSaveManualTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCustomer) {
@@ -324,19 +344,21 @@ export const Customers: React.FC = () => {
 
     const desc = manualTxDescription.trim();
     if (!desc) {
-      alert('يرجى كتابة البيان / سبب الحركة (مثال: بضاعة بدون فاتورة، خصم خاص، سداد خارجي، تسوية قديمة)');
+      alert('يرجى كتابة البيان / سبب الحركة (مثال: مرتجع بضاعة، دفعة مسددة، بضاعة بدون فاتورة، خصم خاص)');
       return;
+    }
+
+    // Auto-direction: مرتجع بضاعة أو دفعة مسددة تنزل تلقائياً في خانة دائن
+    let finalType = manualTxType;
+    const lowerDesc = desc.toLowerCase();
+    if (lowerDesc.includes('مرتجع') || lowerDesc.includes('دفعة') || lowerDesc.includes('سداد') || lowerDesc.includes('خصم')) {
+      finalType = 'CREDIT';
     }
 
     setIsSavingManualTx(true);
     try {
-      // Balance convention in customer ledger:
-      // Negative (< 0) = Debt (مدين / عليه)
-      // Positive (> 0) = Credit (دائن / له)
-      // DEBIT (مدين / مسحوبات عليه): increases customer debt, so balance decreases (change is negative: -amt)
-      // CREDIT (دائن / دفعة له / سداد): decreases debt or credits customer, so balance increases (change is positive: +amt)
-      const balanceChange = manualTxType === 'DEBIT' ? -amt : amt;
-      const currentBal = Number(selectedCustomer.balance || 0);
+      const balanceChange = finalType === 'DEBIT' ? -amt : amt;
+      const currentBal = finalItemizedBalance;
       const newBal = currentBal + balanceChange;
 
       const historyMovement: CustomerHistory = {
@@ -348,7 +370,7 @@ export const Customers: React.FC = () => {
       const manualTxRecord: ManualCustomerTransaction = {
         id: `MTX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         date: manualTxDate || new Date().toISOString().split('T')[0],
-        type: manualTxType,
+        type: finalType,
         amount: amt,
         description: desc,
         createdAt: new Date().toISOString(),
@@ -737,11 +759,11 @@ export const Customers: React.FC = () => {
 
   const finalItemizedBalance = useMemo(() => {
     if (!selectedCustomer) return 0;
-    if ((filterStartDate || filterEndDate) && itemizedRows.length > 0) {
-      return itemizedRows[itemizedRows.length - 1].runningBalance;
+    if (itemizedRows.length > 0) {
+      return totalItemizedCredit - totalItemizedDebit;
     }
-    return selectedCustomer.balance;
-  }, [selectedCustomer, filterStartDate, filterEndDate, itemizedRows]);
+    return Number(selectedCustomer.balance) || 0;
+  }, [selectedCustomer, itemizedRows.length, totalItemizedCredit, totalItemizedDebit]);
 
   // Handler to print statement with optional custom dates
   const handlePrintStatement = (sDate?: string, eDate?: string) => {
@@ -866,7 +888,17 @@ export const Customers: React.FC = () => {
       <div className={`bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex-wrap justify-between items-center gap-2 ${
         mobileView === 'DETAILS' ? 'hidden lg:flex' : 'flex'
       }`}>
-        <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button 
+            type="button" 
+            onClick={() => window.history.back()}
+            className="lg:hidden flex items-center gap-1 text-xs font-bold text-brand-950 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg border border-brand-200 transition-all shadow-2xs shrink-0"
+            title="العودة للصفحة السابقة"
+          >
+            <ArrowRight size={14} />
+            <span>العودة</span>
+          </button>
+
           <div className="flex items-center gap-1.5">
             <span className="font-bold text-brand-900 text-base">العملاء</span>
             <span className="bg-brand-50 text-brand-700 font-mono font-bold text-xs px-2 py-0.5 rounded-full border border-brand-200">
@@ -1092,9 +1124,11 @@ export const Customers: React.FC = () => {
                     <button 
                       type="button"
                       onClick={() => setMobileView('LIST')}
-                      className="flex items-center gap-1 text-[11px] font-bold text-brand-800 bg-brand-50 hover:bg-brand-100 px-2 py-1 rounded-lg border border-brand-200 transition-colors shrink-0"
+                      className="flex items-center gap-1.5 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 active:bg-brand-800 px-2.5 py-1.5 rounded-lg shadow-xs transition-all shrink-0 cursor-pointer"
+                      title="العودة لقائمة العملاء"
                     >
-                      <ArrowRight size={13} /> العودة
+                      <ArrowRight size={14} />
+                      <span>العودة للقائمة</span>
                     </button>
                     <div className="min-w-0">
                       <h2 className="text-xs font-black text-brand-900 truncate flex items-center gap-1">
@@ -1263,31 +1297,31 @@ export const Customers: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Left: Prominent Balance Box with Large Font (خانة الرصيد في شمال الصفحة بخط أكبر) */}
+                  {/* Left: Prominent Balance Box with Large Font (خانة الرصيد في شمال الصفحة بخط أكبر - مربوطة بصافي الإجماليات) */}
                   <div className={`mr-auto px-4 py-2.5 rounded-xl border flex flex-col items-center justify-center text-center shadow-xs transition-all min-w-[150px] ${
-                    selectedCustomer.balance < 0 
+                    finalItemizedBalance < 0 
                       ? 'bg-red-50/90 border-red-300' 
-                      : selectedCustomer.balance > 0 
+                      : finalItemizedBalance > 0 
                       ? 'bg-emerald-50/90 border-emerald-300' 
                       : 'bg-gray-50 border-gray-300'
                   }`}>
                     <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">الرصيد الحالي</span>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <span className={`text-2xl md:text-3xl font-black font-mono tracking-tight ${
-                        selectedCustomer.balance < 0 ? 'text-red-600' : selectedCustomer.balance > 0 ? 'text-emerald-600' : 'text-gray-800'
+                        finalItemizedBalance < 0 ? 'text-red-600' : finalItemizedBalance > 0 ? 'text-emerald-600' : 'text-gray-800'
                       }`} dir="ltr">
-                        {selectedCustomer.balance.toLocaleString()}
+                        {finalItemizedBalance.toLocaleString()}
                       </span>
                       <span className="text-xs font-bold text-gray-600">ج.م</span>
                     </div>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full mt-1 ${
-                      selectedCustomer.balance < 0 
+                      finalItemizedBalance < 0 
                         ? 'bg-red-100 text-red-700' 
-                        : selectedCustomer.balance > 0 
+                        : finalItemizedBalance > 0 
                         ? 'bg-emerald-100 text-emerald-800' 
                         : 'bg-gray-200 text-gray-700'
                     }`}>
-                      {selectedCustomer.balance < 0 ? 'مدين (عليه لنا)' : selectedCustomer.balance > 0 ? 'دائن (له علينا)' : 'خالص'}
+                      {finalItemizedBalance < 0 ? 'مدين (عليه لنا)' : finalItemizedBalance > 0 ? 'دائن (له علينا)' : 'خالص'}
                     </span>
                   </div>
 
@@ -1438,7 +1472,7 @@ export const Customers: React.FC = () => {
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين</th>
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن</th>
                         <th className="p-2 text-center w-24 border-l border-gray-200 bg-gray-50">الرصيد</th>
-                        <th className="p-2 text-center w-16">الحالة</th>
+                        <th className="p-2 text-center w-24 min-w-[85px] whitespace-nowrap">الحالة</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-150">
@@ -1510,13 +1544,13 @@ export const Customers: React.FC = () => {
                             <td className="p-2 text-center font-mono font-black text-gray-900 bg-gray-50/60 border-l border-gray-100" dir="ltr">
                               {r.runningBalance.toLocaleString()}
                             </td>
-                            <td className="p-2 text-center font-bold text-[11px]">
+                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[85px]">
                               {r.status === 'مدين' ? (
-                                <span className="text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200">عليه</span>
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-200">عليه</span>
                               ) : r.status === 'دائن' ? (
-                                <span className="text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">له</span>
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-600 bg-green-50 px-2 py-0.5 rounded border border-green-200">له</span>
                               ) : (
-                                <span className="text-gray-500">متزن</span>
+                                <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-500">متزن</span>
                               )}
                             </td>
                           </tr>
@@ -1543,13 +1577,13 @@ export const Customers: React.FC = () => {
                           <td className="p-2 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
                             {finalItemizedBalance.toLocaleString()}
                           </td>
-                          <td className="p-2 text-center font-bold text-xs">
+                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[85px]">
                             {finalItemizedBalance < 0 ? (
-                              <span className="text-red-700 font-black">مدين (عليه)</span>
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-red-700 font-black">مدين (عليه)</span>
                             ) : finalItemizedBalance > 0 ? (
-                              <span className="text-green-700 font-black">دائن (له)</span>
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 font-black">دائن (له)</span>
                             ) : (
-                              <span className="text-gray-600 font-black">خالص</span>
+                              <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-600 font-black">خالص</span>
                             )}
                           </td>
                         </tr>
@@ -1623,6 +1657,13 @@ export const Customers: React.FC = () => {
             <div className="h-full flex flex-col items-center justify-center text-gray-400 p-8">
               <UserPlus size={44} className="mb-2 opacity-40 text-brand-500"/>
               <p className="font-bold text-sm">اختر عميلاً من القائمة لعرض بيان كشف الحساب</p>
+              <button 
+                type="button"
+                onClick={() => setMobileView('LIST')}
+                className="lg:hidden mt-3 flex items-center gap-1.5 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 px-3 py-1.5 rounded-lg shadow-xs"
+              >
+                <ArrowRight size={14} /> العودة لقائمة العملاء
+              </button>
             </div>
           )}
         </div>
@@ -1988,39 +2029,80 @@ export const Customers: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
-              <button 
-                onClick={() => {
-                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
-                  printInvoice({
-                    ...viewInvoice,
-                    currentBalance: curBal,
-                    liveCustomerBalance: curBal
-                  });
-                }} 
-                className="px-3.5 py-1.5 bg-gray-200 text-gray-800 rounded-lg text-xs font-bold hover:bg-gray-300 flex items-center gap-1.5 cursor-pointer"
-              >
-                <Printer size={14}/> طباعة الفاتورة
-              </button>
-              <button 
-                onClick={() => {
-                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
-                  shareSalesInvoicePdfViaWhatsApp({
-                    ...viewInvoice,
-                    currentBalance: curBal,
-                    liveCustomerBalance: curBal
-                  }, companyLogo, selectedCustomer.phone);
-                }} 
-                className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
-              >
-                <MessageCircle size={14}/> مشاركة PDF واتساب
-              </button>
-              <button 
-                onClick={() => setViewInvoice(null)} 
-                className="px-5 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-bold hover:bg-brand-700"
-              >
-                إغلاق
-              </button>
+            <div className="bg-gray-50 p-3 sm:p-3.5 border-t border-gray-200 shrink-0">
+              <div className="grid grid-cols-2 sm:flex sm:justify-end sm:items-center sm:flex-wrap gap-2">
+                {/* 1. مشاركة PDF */}
+                <button 
+                  onClick={async () => {
+                    if (!selectedCustomer) return;
+                    const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                    try {
+                      setIsSharingPdf(true);
+                      await shareSalesInvoicePdfViaWhatsApp({
+                        ...viewInvoice,
+                        currentBalance: curBal,
+                        liveCustomerBalance: curBal
+                      } as any, companyLogo, selectedCustomer.phone);
+                    } finally {
+                      setIsSharingPdf(false);
+                    }
+                  }} 
+                  disabled={isSharingPdf}
+                  className="w-full sm:w-auto px-3 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-60 text-white rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-1"
+                  title="مشاركة الفاتورة PDF عبر واتساب"
+                >
+                  <MessageCircle size={15}/>
+                  <span>{isSharingPdf ? 'جاري التحويل...' : 'مشاركة PDF'}</span>
+                </button>
+
+                {/* 2. مشاركة كصورة */}
+                <button 
+                  onClick={async () => {
+                    if (!selectedCustomer) return;
+                    const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                    try {
+                      setIsSharingImage(true);
+                      await shareSalesInvoiceImageViaWhatsApp({
+                        ...viewInvoice,
+                        currentBalance: curBal,
+                        liveCustomerBalance: curBal
+                      } as any, companyLogo, selectedCustomer.phone);
+                    } finally {
+                      setIsSharingImage(false);
+                    }
+                  }}
+                  disabled={isSharingImage}
+                  className="w-full sm:w-auto px-3 py-2 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 disabled:opacity-60 text-white rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-2"
+                  title="مشاركة الفاتورة كصورة عبر واتساب"
+                >
+                  <ImageIcon size={15} />
+                  <span>{isSharingImage ? 'جاري التحضير...' : 'مشاركة كصورة'}</span>
+                </button>
+
+                {/* 3. طباعة الفاتورة */}
+                <button 
+                  onClick={() => {
+                    const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                    printInvoice({
+                      ...viewInvoice,
+                      currentBalance: curBal,
+                      liveCustomerBalance: curBal
+                    } as any);
+                  }} 
+                  className="w-full sm:w-auto px-3 py-2 bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 cursor-pointer order-3"
+                >
+                  <Printer size={15}/>
+                  <span>طباعة الفاتورة</span>
+                </button>
+
+                {/* 4. إغلاق */}
+                <button 
+                  onClick={() => setViewInvoice(null)} 
+                  className="w-full sm:w-auto px-3 py-2 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 border border-gray-300 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center cursor-pointer order-4"
+                >
+                  <span>إغلاق</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2278,29 +2360,34 @@ export const Customers: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="اكتب بيان الحركة (مثال: بضاعة بدون فاتورة، خصم خاص، سداد خارجي)..."
+                  placeholder="اكتب بيان الحركة (مثال: مرتجع بضاعة، دفعة مسددة، بضاعة بدون فاتورة، خصم خاص)..."
                   value={manualTxDescription}
-                  onChange={(e) => setManualTxDescription(e.target.value)}
+                  onChange={(e) => handleManualDescriptionChange(e.target.value)}
                   className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-brand-600 font-bold text-xs bg-gray-50 focus:bg-white"
                 />
 
-                {/* Quick Suggestion Chips */}
+                {/* Quick Suggestion Chips with Auto-Direction */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {[
-                    'بضاعة بدون فاتورة',
-                    'خصم خاص',
+                    'مرتجع بضاعة',
+                    'دفعة مسددة',
                     'سداد خارجي',
+                    'خصم خاص',
+                    'بضاعة بدون فاتورة',
                     'تسوية قديمة',
                     'فرق سعر',
                     'مصاريف نقل',
-                    'مرتجع بضاعة',
                     'تسوية رصيد'
                   ].map((chip) => (
                     <button
                       key={chip}
                       type="button"
-                      onClick={() => setManualTxDescription(chip)}
-                      className="px-2 py-1 rounded-lg bg-gray-100 hover:bg-brand-100 text-gray-700 hover:text-brand-900 border border-gray-200 text-[11px] font-bold transition-colors cursor-pointer"
+                      onClick={() => handleSelectQuickChip(chip)}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all cursor-pointer ${
+                        chip === 'مرتجع بضاعة' || chip === 'دفعة مسددة'
+                          ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-gray-100 hover:bg-brand-100 text-gray-700 hover:text-brand-900 border-gray-200'
+                      }`}
                     >
                       + {chip}
                     </button>
@@ -2312,7 +2399,7 @@ export const Customers: React.FC = () => {
               {(() => {
                 const parsed = parseNumberFromCommas(manualTxAmount) || 0;
                 const change = manualTxType === 'DEBIT' ? -parsed : parsed;
-                const currentBal = selectedCustomer.balance || 0;
+                const currentBal = finalItemizedBalance;
                 const projectedBal = currentBal + change;
 
                 return (

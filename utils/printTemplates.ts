@@ -288,7 +288,7 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
   return `
-    <div style="font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; width: 860px; padding: 20px; background: #fff; color: #000; box-sizing: border-box; margin: 0 auto;">
+    <div style="font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; width: 860px; padding: 0; background: #ffffff; color: #0f172a; box-sizing: border-box; margin: 0 auto;">
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
@@ -412,7 +412,7 @@ export function getPurchaseInvoiceHtml(purchase: Purchase, companyLogo?: string)
              <div class="info-item"><span class="info-label">المورد</span><span class="info-value">${purchase.supplierName}</span></div>
              <div class="info-item"><span class="info-label">كود المورد</span><span class="info-value">${purchase.supplierCode}</span></div>
              <div class="info-item"><span class="info-label">رقم الفاتورة</span><span class="info-value">${purchase.id}</span></div>
-             <div class="info-item"><span class="info-label">التالتاريخ</span><span class="info-value">${purchase.date}</span></div>
+             <div class="info-item"><span class="info-label">التاريخ</span><span class="info-value">${purchase.date}</span></div>
           </div>
 
           <table>
@@ -1115,4 +1115,3 @@ export function getGeneralReportHtml(options: GeneralReportPrintOptions, company
     </div>
   `;
 }
-

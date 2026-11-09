@@ -18,11 +18,12 @@ import {
   Banknote, 
   MessageCircle,
   Building,
-  MapPin
+  MapPin,
+  Image as ImageIcon
 } from 'lucide-react';
 import { SalesInvoice, InvoiceItem, PaymentMethod, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
-import { shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
 
 export const SalesHistory: React.FC = () => {
@@ -70,6 +71,52 @@ export const SalesHistory: React.FC = () => {
   const handleBranchFilterChange = (branch: 'ALL' | BranchId) => {
     setSelectedBranchFilter(branch);
     setSelectedAreaFilter('ALL');
+  };
+
+  const [sharingImageId, setSharingImageId] = useState<string | null>(null);
+
+  const handleShareInvoiceImage = async (inv: SalesInvoice) => {
+    if (sharingImageId) return;
+    let syncTab: Window | null = null;
+    const isNative = typeof navigator !== 'undefined' &&
+      typeof navigator.canShare === 'function' &&
+      typeof navigator.share === 'function';
+
+    if (!isNative) {
+      try {
+        syncTab = window.open('about:blank', '_blank');
+      } catch {}
+    }
+
+    let safetyTimer: any = null;
+    try {
+      setSharingImageId(inv.id);
+      safetyTimer = setTimeout(() => {
+        setSharingImageId(null);
+      }, 4000);
+
+      const cust = customers.find(c => c.code === inv.customerCode);
+      const invoiceWithLiveBal = {
+        ...inv,
+        currentBalance: cust ? cust.balance : inv.currentBalance,
+        liveCustomerBalance: cust ? cust.balance : inv.currentBalance
+      };
+      await shareSalesInvoiceImageViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, syncTab);
+    } catch (err: any) {
+      if (syncTab && !syncTab.closed) syncTab.close();
+      if (
+        err?.name !== 'AbortError' &&
+        err?.name !== 'NotAllowedError' &&
+        !err?.message?.includes?.('AbortError') &&
+        !err?.message?.includes?.('canceled') &&
+        !err?.message?.includes?.('cancelled')
+      ) {
+        console.error(err);
+      }
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setSharingImageId(null);
+    }
   };
 
   const handleShareInvoicePdf = async (inv: SalesInvoice) => {
@@ -555,10 +602,19 @@ export const SalesHistory: React.FC = () => {
                       )}
 
                       <button 
+                        onClick={() => handleShareInvoiceImage(inv)}
+                        disabled={sharingImageId === inv.id}
+                        className="bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50 p-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                        title="مشاركة الفاتورة كصورة عبر واتساب"
+                      >
+                        <ImageIcon size={15} />
+                      </button>
+
+                      <button 
                         onClick={() => handleShareInvoicePdf(inv)}
                         disabled={sharingPdfId === inv.id}
                         className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 p-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                        title="إرسال عبر واتساب"
+                        title="إرسال PDF عبر واتساب"
                       >
                         <MessageCircle size={15} />
                       </button>
@@ -954,32 +1010,54 @@ export const SalesHistory: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-gray-50 p-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
-              <button 
-                onClick={() => {
-                  const custBal = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance;
-                  printInvoice({ 
-                    ...selectedInvoice, 
-                    currentBalance: custBal,
-                    liveCustomerBalance: custBal
-                  });
-                }}
-                className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Printer size={15} /> طباعة الفاتورة
-              </button>
-              <button 
-                onClick={() => handleShareInvoicePdf(selectedInvoice)}
-                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <MessageCircle size={15} /> مشاركة واتساب
-              </button>
-              <button 
-                onClick={() => setSelectedInvoice(null)}
-                className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-              >
-                إغلاق
-              </button>
+            <div className="bg-gray-50 p-3 sm:p-3.5 border-t border-gray-200 shrink-0">
+              <div className="grid grid-cols-2 sm:flex sm:justify-end sm:items-center sm:flex-wrap gap-2">
+                {/* 1. مشاركة PDF */}
+                <button 
+                  onClick={() => handleShareInvoicePdf(selectedInvoice)}
+                  disabled={sharingPdfId === selectedInvoice.id}
+                  className="w-full sm:w-auto px-3 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-60 text-white rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-1"
+                  title="مشاركة الفاتورة PDF عبر واتساب"
+                >
+                  <MessageCircle size={15} />
+                  <span>{sharingPdfId === selectedInvoice.id ? 'جاري التحويل...' : 'مشاركة PDF'}</span>
+                </button>
+
+                {/* 2. مشاركة كصورة */}
+                <button 
+                  onClick={() => handleShareInvoiceImage(selectedInvoice)}
+                  disabled={sharingImageId === selectedInvoice.id}
+                  className="w-full sm:w-auto px-3 py-2 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 disabled:opacity-60 text-white rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-2"
+                  title="مشاركة الفاتورة كصورة عبر واتساب"
+                >
+                  <ImageIcon size={15} />
+                  <span>{sharingImageId === selectedInvoice.id ? 'جاري التحضير...' : 'مشاركة كصورة'}</span>
+                </button>
+
+                {/* 3. طباعة الفاتورة */}
+                <button 
+                  onClick={() => {
+                    const custBal = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance;
+                    printInvoice({ 
+                      ...selectedInvoice, 
+                      currentBalance: custBal,
+                      liveCustomerBalance: custBal
+                    } as any);
+                  }}
+                  className="w-full sm:w-auto px-3 py-2 bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-3"
+                >
+                  <Printer size={15} />
+                  <span>طباعة الفاتورة</span>
+                </button>
+
+                {/* 4. إغلاق */}
+                <button 
+                  onClick={() => setSelectedInvoice(null)}
+                  className="w-full sm:w-auto px-3 py-2 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 border border-gray-300 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center transition-colors cursor-pointer order-4"
+                >
+                  <span>إغلاق</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

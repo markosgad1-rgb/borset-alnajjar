@@ -7,7 +7,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice, companyLogo } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
   
   // PDF sharing state
   const [sharingPdfId, setSharingPdfId] = useState<string | null>(null);
@@ -185,9 +185,8 @@ export const Purchases: React.FC = () => {
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
   
   // Calculate expected new balance for display
-  // If price is pending, supplier balance does NOT increase yet
-  const currentBalance = currentSupplier ? currentSupplier.balance : 0;
-  const expectedBalance = isPricePending ? currentBalance : (currentBalance + cartTotal);
+  const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, purchases) : 0;
+  const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal);
 
   const handleSaveInvoice = async () => {
     if (isSubmitting) return;
@@ -487,17 +486,17 @@ export const Purchases: React.FC = () => {
           {/* Supplier Balance Info */}
           <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
              <div className="flex justify-between items-center text-sm mb-2">
-                <span className="text-gray-500">رصيد سابق:</span>
-                <span className={`font-bold ${currentBalance > 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {currentBalance.toLocaleString()}
+                <span className="text-gray-500 font-bold">رصيد سابق:</span>
+                <span className={`font-bold font-mono ${currentBalance < 0 ? 'text-red-600' : currentBalance > 0 ? 'text-green-600' : 'text-gray-600'}`} dir="ltr">
+                  {currentBalance.toLocaleString()} {currentBalance < 0 ? '(له / علينا)' : currentBalance > 0 ? '(لنا / عليه)' : '(متزن)'}
                 </span>
              </div>
              <div className="flex justify-between items-center text-sm font-bold pt-2 border-t border-gray-200">
                 <span className="text-brand-800">
                   {isPricePending ? 'الرصيد (لا يتغير الآن):' : 'رصيد متوقع:'}
                 </span>
-                <span className={`font-mono text-lg ${expectedBalance > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {expectedBalance.toLocaleString()}
+                <span className={`font-mono text-base font-bold ${expectedBalance < 0 ? 'text-red-600' : expectedBalance > 0 ? 'text-green-600' : 'text-gray-600'}`} dir="ltr">
+                  {expectedBalance.toLocaleString()} {expectedBalance < 0 ? '(له / علينا)' : expectedBalance > 0 ? '(لنا / عليه)' : '(متزن)'}
                 </span>
              </div>
           </div>
