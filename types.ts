@@ -60,6 +60,7 @@ export interface Product {
     NOZHA: number;
   };
   avgCost: number;
+  cost?: number; // Cost alias
   price: number; // Selling price
 }
 
@@ -90,6 +91,7 @@ export interface Customer {
   branchId: BranchId; // Mandatory branch ('MARG' | 'NOZHA')
   area: string; // Mandatory area under branch
   balance: number; // Negative = Debt (Owes us), Positive = Credit (We owe him)
+  currentBalance?: number;
   history: CustomerHistory[];
   manualTransactions?: ManualCustomerTransaction[];
   isDeleted?: boolean;
@@ -110,6 +112,7 @@ export interface Supplier {
 }
 
 export interface SupplierStatementRow {
+  id?: string;
   num: number;
   date: string;
   ref: string;
@@ -123,7 +126,14 @@ export interface SupplierStatementRow {
   status: 'له (علينا)' | 'لنا (عليه)' | 'متزن';
   isInvoiceItem: boolean;
   purchaseId?: string;
+  invoiceId?: string;
+  invoiceNo?: string;
+  paymentId?: string;
+  type?: string;
   isOpeningBalance?: boolean;
+  description?: string;
+  amount?: number;
+  historyIndex?: number;
 }
 
 export interface Employee {
@@ -133,12 +143,22 @@ export interface Employee {
   salary: number; // Monthly Salary
   balance: number; // Negative = Unpaid Salary (We owe him), Positive = Advance/Solfa (He owes us)
   history: CustomerHistory[];
+  isDeleted?: boolean;
+  deletedAt?: string;
 }
 
 export interface CustomerHistory {
+  id?: string;
   date: string;
   description: string;
   amount: number; // Change in balance
+  invoiceId?: string;
+  invoiceNo?: string;
+  purchaseId?: string;
+  paymentId?: string;
+  type?: string;
+  rawDescription?: string;
+  historyIndex?: number;
 }
 
 export interface Purchase {
@@ -152,6 +172,7 @@ export interface Purchase {
   pricingStatus?: 'PRICED' | 'PENDING_PRICE'; // Support for pending purchase prices
   previousBalance?: number; // Snapshot of balance before this invoice
   currentBalance?: number; // Snapshot of balance after this invoice
+  createdAt?: string;
   isDeleted?: boolean;
   deletedAt?: string;
   // Deprecated single-item fields (kept optional for backward compatibility if needed)
@@ -206,6 +227,10 @@ export interface TreasuryTransaction {
   source?: string;
   createdAt?: string;
   timestamp?: number;
+  entityType?: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE';
+  entityCode?: string;
+  entityName?: string;
+  transferType?: 'IN' | 'OUT';
 }
 
 export interface UserPermissions {
@@ -237,6 +262,7 @@ export interface UserPermissions {
   canEditWarehouse?: boolean;
   canManageTreasury?: boolean;
   canEditPurchases?: boolean;
+  canDeletePurchases?: boolean;
 }
 
 export interface User {

@@ -4,10 +4,12 @@ import { useERP } from '../context/ERPContext';
 import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator } from 'lucide-react';
 import { InvoiceItem, Purchase, BranchId, BRANCHES } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
+  const { confirm: askConfirm, notify, dialog } = useDialog();
   
   // PDF sharing state
   const [sharingPdfId, setSharingPdfId] = useState<string | null>(null);
@@ -26,7 +28,7 @@ export const Purchases: React.FC = () => {
     itemCode: string;
     itemName: string;
     quantity: number | '';
-    price: number | '';
+    price: number | '' | string;
   }>({
     itemCode: '',
     itemName: '',
@@ -51,6 +53,7 @@ export const Purchases: React.FC = () => {
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
   const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
   const [editNewItem, setEditNewItem] = useState<{ code: string, quantity: number | '', price: number | '' }>({ code: '', quantity: '', price: '' });
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Pricing Modal State for Pending Invoices
   const [pricingPurchase, setPricingPurchase] = useState<Purchase | null>(null);
@@ -58,6 +61,9 @@ export const Purchases: React.FC = () => {
   const [isFinalizing, setIsFinalizing] = useState(false);
 
   const currentSupplier = suppliers.find(s => s.code === supplierCode);
+
+  const canEditPurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPurchases);
+  const canDeletePurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeletePurchases || currentUser?.permissions?.canEditPurchases);
 
   // Auto-generate Purchase ID (R001 series)
   useEffect(() => {
@@ -135,17 +141,17 @@ export const Purchases: React.FC = () => {
       : (typeof rawPrice === 'number' ? rawPrice : parseNumberFromCommas(rawPrice));
 
     if (!currentItem.itemCode || !currentItem.itemName) {
-      alert("الرجاء اختيار صنف صحيح");
+      notify("الرجاء اختيار صنف صحيح");
       itemCodeRef.current?.focus();
       return;
     }
     if (qty <= 0) {
-      alert("الكمية يجب أن تكون أكبر من صفر");
+      notify("الكمية يجب أن تكون أكبر من صفر");
       quantityRef.current?.focus();
       return;
     }
     if (!isPricePending && price <= 0) {
-      alert("الرجاء إدخال سعر الشراء (أو قم بتفعيل خيار 'سعر معلّق' إذا لم يتم الاتفاق على السعر بعد)");
+      notify("الرجاء إدخال سعر الشراء (أو قم بتفعيل خيار 'سعر معلّق' إذا لم يتم الاتفاق على السعر بعد)");
       priceRef.current?.focus();
       return;
     }
@@ -192,7 +198,7 @@ export const Purchases: React.FC = () => {
     if (isSubmitting) return;
 
     if (cartItems.length === 0) {
-      alert("الفاتورة فارغة! أضف أصناف أولاً.");
+      notify("الفاتورة فارغة! أضف أصناف أولاً.");
       return;
     }
     if (!supplierCode) {
@@ -219,7 +225,7 @@ export const Purchases: React.FC = () => {
       setSupplierCode('');
       setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
       setIsPricePending(false);
-      alert(isPricePending 
+      notify(isPricePending 
         ? "تم حفظ فاتورة المشتريات (سعر معلّق) وإدخال الكميات للمخزن بنجاح دون قيد مديونية للمورد لحين تحديد السعر." 
         : "تم حفظ فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح."
       );
@@ -258,7 +264,7 @@ export const Purchases: React.FC = () => {
     // Check that all items have price > 0
     const hasZero = pricingItems.some(item => !item.price || Number(item.price) <= 0);
     if (hasZero) {
-      alert("يرجى إدخال سعر شراء صحيح (أكبر من صفر) لجميع الأصناف في الفاتورة");
+      notify("يرجى إدخال سعر شراء صحيح (أكبر من صفر) لجميع الأصناف في الفاتورة");
       return;
     }
 
@@ -268,7 +274,7 @@ export const Purchases: React.FC = () => {
     try {
       const success = await finalizePurchasePrice(pricingPurchase.id, pricingItems, newTotal);
       if (success) {
-        alert(`تم اعتماد وتسعير فاتورة المشتريات #${pricingPurchase.id} بنجاح!\nالإجمالي الجديد: ${newTotal.toLocaleString()} ج.م، وتم ترحيل المديونية لحساب المورد وتحديث تكلفة الأصناف بالمخزن.`);
+        notify(`تم اعتماد وتسعير فاتورة المشتريات #${pricingPurchase.id} بنجاح!\nالإجمالي الجديد: ${newTotal.toLocaleString()} ج.م، وتم ترحيل المديونية لحساب المورد وتحديث تكلفة الأصناف بالمخزن.`);
         setPricingPurchase(null);
       }
     } finally {
@@ -277,8 +283,17 @@ export const Purchases: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    await deletePurchase(id);
-    setDeleteConfirmId(null);
+    const p = purchases.find(x => x.id === id);
+    const confirmMsg = `هل أنت متأكد من حذف فاتورة المشتريات #${id}${p?.supplierName ? ` للمورد (${p.supplierName})` : ''} نهائياً؟\n\nسيتم:\n1. خصم كميات الأصناف من المخزن لمنع تضخم الرصيد.\n2. حذف الفاتورة وبنودها من كشف حساب المورد وإعادة ضبط الرصيد.\n3. إلغاء أي دفعة مسددة من الخزينة إن وُجدت.`;
+    if (!await askConfirm(confirmMsg)) return;
+
+    try {
+      await deletePurchase(id);
+      notify(`تم حذف فاتورة المشتريات #${id} بنجاح وتحديث المخزن وحساب المورد والخزينة.`);
+    } catch (err: any) {
+      console.error(err);
+      notify("حدث خطأ أثناء حذف الفاتورة: " + (err.message || ""));
+    }
   };
 
   // --- Edit Logic ---
@@ -295,7 +310,9 @@ export const Purchases: React.FC = () => {
   };
 
   const handleEditAddItem = () => {
-    if (!editNewItem.code || editNewItem.quantity <= 0 || editNewItem.price <= 0) return;
+    const qty = Number(editNewItem.quantity) || 0;
+    const prc = Number(editNewItem.price) || 0;
+    if (!editNewItem.code || qty <= 0 || prc <= 0) return;
     const product = products.find(p => p.code === editNewItem.code);
     const itemName = product ? product.name : editNewItem.code;
 
@@ -303,16 +320,16 @@ export const Purchases: React.FC = () => {
       const existingIdx = prev.findIndex(i => i.itemCode === editNewItem.code);
       if (existingIdx >= 0) {
         const updated = [...prev];
-        updated[existingIdx].quantity += editNewItem.quantity;
+        updated[existingIdx].quantity += qty;
         updated[existingIdx].total = updated[existingIdx].quantity * updated[existingIdx].price; 
         return updated;
       }
       return [...prev, {
         itemCode: editNewItem.code,
         itemName: itemName,
-        quantity: editNewItem.quantity,
-        price: editNewItem.price,
-        total: editNewItem.quantity * editNewItem.price
+        quantity: qty,
+        price: prc,
+        total: qty * prc
       }];
     });
     setEditNewItem({ code: '', quantity: 1, price: 0 });
@@ -332,8 +349,8 @@ export const Purchases: React.FC = () => {
   };
 
   const handleSaveEdit = async () => {
-    if (!editPurchase) return;
-    if (editItems.length === 0) return alert("لا يمكن حفظ فاتورة فارغة");
+    if (!editPurchase || isSavingEdit) return;
+    if (editItems.length === 0) return notify("لا يمكن حفظ فاتورة فارغة");
 
     const newTotal = editItems.reduce((sum, i) => sum + i.total, 0);
     const newPurchaseData: Purchase = {
@@ -342,20 +359,34 @@ export const Purchases: React.FC = () => {
       total: newTotal
     };
 
-    await updatePurchase(editPurchase, newPurchaseData);
-    setEditPurchase(null);
-    alert("تم تعديل فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح");
+    setIsSavingEdit(true);
+    try {
+      await updatePurchase(editPurchase, newPurchaseData);
+      setEditPurchase(null);
+      notify("تم تعديل فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح");
+    } finally {
+      setIsSavingEdit(false);
+    }
   };
 
   const activePurchases = purchases.filter(p => !p.isDeleted);
   const pendingPurchasesCount = activePurchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
   const pricedPurchasesCount = activePurchases.filter(p => p.pricingStatus !== 'PENDING_PRICE').length;
 
-  const filteredPurchases = activePurchases.filter(p => {
-    if (historyFilter === 'PENDING_PRICE') return p.pricingStatus === 'PENDING_PRICE';
-    if (historyFilter === 'PRICED') return p.pricingStatus !== 'PENDING_PRICE';
-    return true;
-  });
+  const filteredPurchases = activePurchases
+    .filter(p => {
+      if (historyFilter === 'PENDING_PRICE') return p.pricingStatus === 'PENDING_PRICE';
+      if (historyFilter === 'PRICED') return p.pricingStatus !== 'PENDING_PRICE';
+      return true;
+    })
+    .sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.date ? new Date(a.date).getTime() : 0);
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.date ? new Date(b.date).getTime() : 0);
+      if (dateB !== dateA) return dateB - dateA;
+      const numA = parseInt((a.id || '').replace(/\D/g, '')) || 0;
+      const numB = parseInt((b.id || '').replace(/\D/g, '')) || 0;
+      return numB - numA;
+    });
 
   return (
     <div className="space-y-8">
@@ -823,7 +854,7 @@ export const Purchases: React.FC = () => {
                           const supp = suppliers.find(s => s.code === purchase.supplierCode);
                           setSharingPdfId(purchase.id);
                           try {
-                            await sharePurchaseInvoicePdfViaWhatsApp(purchase, companyLogo, supp?.phone);
+                            await sharePurchaseInvoicePdfViaWhatsApp(purchase, companyLogo || undefined, supp?.phone);
                           } finally {
                             setSharingPdfId(null);
                           }
@@ -835,43 +866,36 @@ export const Purchases: React.FC = () => {
                         <MessageCircle size={18} />
                       </button>
                       
-                      {currentUser?.permissions.canEditPurchases && (
-                        <>
-                          <button 
-                            onClick={() => openEditModal(purchase)}
-                            className="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded transition-colors"
-                            title="تعديل"
-                          >
-                            <Edit size={18} />
-                          </button>
-                          {deleteConfirmId === purchase.id ? (
-                            <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-100 shadow-sm animate-fade-in">
-                               <button 
-                                 onClick={() => handleDelete(purchase.id)} 
-                                 className="bg-red-500 text-white p-1.5 rounded hover:bg-red-600 transition-colors shadow-sm" 
-                                 title="تأكيد الحذف"
-                               >
-                                 <Check size={16}/>
-                               </button>
-                               <button 
-                                 onClick={() => setDeleteConfirmId(null)} 
-                                 className="bg-white text-gray-500 p-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
-                                 title="إلغاء"
-                               >
-                                 <X size={16}/>
-                               </button>
-                             </div>
-                          ) : (
-                            <button 
-                              onClick={() => setDeleteConfirmId(purchase.id)}
-                              className="text-red-400 hover:bg-red-50 hover:text-red-600 p-2 rounded transition-colors"
-                              title="حذف السجل"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                          )}
-                        </>
+                      {canEditPurchases && (
+                        <button 
+                          onClick={() => openEditModal(purchase)}
+                          className="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded transition-colors"
+                          title="تعديل"
+                        >
+                          <Edit size={18} />
+                        </button>
                       )}
+
+                      <button 
+                        type="button"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          if (!await askConfirm("هل أنت متأكد من حذف الفاتورة؟")) return;
+                          try {
+                            const deleteFn = deletePurchaseInvoice || deletePurchase;
+                            await deleteFn(purchase.id);
+                            notify(`تم حذف الفاتورة #${purchase.id} بنجاح.`);
+                          } catch (err: any) {
+                            console.error(err);
+                            notify("حدث خطأ أثناء حذف الفاتورة: " + (err?.message || ""));
+                          }
+                        }}
+                        className="text-red-500 hover:bg-red-50 hover:text-red-700 p-2 rounded transition-colors cursor-pointer"
+                        title="حذف فاتورة المشتريات"
+                      >
+                        <Trash2 size={18} />
+                      </button>
                     </td>
                   </tr>
                 );
@@ -1100,8 +1124,12 @@ export const Purchases: React.FC = () => {
                <div className="text-lg font-bold text-gray-800">
                  الإجمالي الجديد: <span className="text-blue-700">{editItems.reduce((s, i) => s + i.total, 0).toLocaleString()} ج.م</span>
                </div>
-               <button onClick={handleSaveEdit} className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 shadow-lg">
-                 <Save size={20}/> حفظ التعديلات
+               <button 
+                 onClick={handleSaveEdit} 
+                 disabled={isSavingEdit}
+                 className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 shadow-lg disabled:opacity-50"
+               >
+                 <Save size={20}/> {isSavingEdit ? 'جاري الحفظ...' : 'حفظ التعديلات'}
                </button>
             </div>
           </div>
@@ -1218,6 +1246,9 @@ export const Purchases: React.FC = () => {
         </div>
       )}
 
+
+      {dialog}
     </div>
   );
 };
+

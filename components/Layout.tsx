@@ -114,27 +114,41 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
 
       {/* Sidebar */}
       <aside className={`
-        print:hidden fixed md:static inset-y-0 right-0 z-10 w-64 bg-gradient-to-b from-brand-800 to-brand-900 text-white shadow-xl transform transition-transform duration-300 ease-in-out flex flex-col
+        print:hidden fixed md:static inset-y-0 right-0 z-50 w-72 md:w-64 bg-gradient-to-b from-brand-800 to-brand-900 text-white shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col scrollbar-none no-scrollbar
         ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
       `}>
-        <div className="p-6 border-b border-brand-700">
-          <h1 className="text-2xl font-bold text-center text-white tracking-wider">بورصة النجار</h1>
-          <div className="flex items-center justify-center gap-2 mt-2 bg-brand-900/50 py-1 px-2 rounded-full">
-             {isOnline ? (
-               <>
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-[10px] text-green-200">متصل (أونلاين)</span>
-               </>
-             ) : (
-               <>
-                <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-                <span className="text-[10px] text-gray-400">محلي (أوفلاين)</span>
-               </>
-             )}
+        {/* Drawer Header: Compact on Mobile, Luxurious & Centered on Desktop */}
+        <div className="py-2.5 px-3 border-b border-brand-700/80 shrink-0 flex items-center justify-between lg:block lg:py-5 lg:px-4 lg:text-center">
+          <div className="flex items-center gap-2 min-w-0 lg:block">
+            <h1 className="text-base lg:text-lg xl:text-xl font-black text-white tracking-wide lg:tracking-wider truncate">بورصة النجار</h1>
+            <div className="flex items-center gap-1 lg:gap-1.5 bg-brand-900/60 py-0.5 px-2 lg:py-1 lg:px-3 rounded-full border border-brand-700/40 shrink-0 lg:mt-2 lg:mx-auto lg:w-fit">
+              {isOnline ? (
+                <>
+                  <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span className="text-[10px] lg:text-xs text-green-300 font-bold">متصل (أونلاين)</span>
+                </>
+              ) : (
+                <>
+                  <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-gray-400 rounded-full"></div>
+                  <span className="text-[10px] lg:text-xs text-gray-400 font-bold">محلي (أوفلاين)</span>
+                </>
+              )}
+            </div>
           </div>
+
+          {/* Mobile Close Button in the same row on mobile, hidden on desktop */}
+          <button 
+            type="button"
+            onClick={() => setIsSidebarOpen(false)} 
+            className="lg:hidden p-1.5 text-brand-200 hover:text-white hover:bg-brand-700/80 rounded-lg transition-all border border-brand-700/50 flex items-center justify-center cursor-pointer shadow-xs active:scale-95 shrink-0"
+            title="إغلاق القائمة"
+            aria-label="إغلاق القائمة"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        <nav className="flex-1 mt-6 px-2 overflow-y-auto">
+        <nav className="flex-1 mt-1.5 lg:mt-3 px-2 lg:px-3 overflow-y-auto scrollbar-none no-scrollbar lg:space-y-1.5">
           {filteredNav.map((item) => (
             <button
               key={item.id}
@@ -142,17 +156,17 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                 onNavigate(item.id);
                 setIsSidebarOpen(false);
               }}
-              className={`w-full flex items-center gap-3 px-4 py-3 mb-2 rounded-lg transition-all duration-200
+              className={`w-full flex items-center gap-2.5 lg:gap-3 px-3 py-1.5 lg:py-2.5 lg:px-3.5 mb-1 lg:mb-0 rounded-lg lg:rounded-xl transition-all duration-150 text-sm font-medium lg:font-bold
                 ${activePage === item.id 
-                  ? 'bg-brand-50 text-brand-900 font-bold shadow-lg translate-x-[-5px]' 
+                  ? 'bg-brand-50 text-brand-900 font-bold shadow-md translate-x-[-3px] lg:translate-x-[-4px]' 
                   : 'text-brand-100 hover:bg-brand-700 hover:text-white'
                 }
               `}
             >
-              {item.icon}
-              <span>{item.label}</span>
+              <span className="shrink-0 [&>svg]:w-4.5 [&>svg]:h-4.5 lg:[&>svg]:w-5 lg:[&>svg]:h-5">{item.icon}</span>
+              <span className="truncate">{item.label}</span>
               {item.id === 'purchases' && pendingPurchasesCount > 0 && (
-                <span className="mr-auto bg-amber-400 text-amber-950 text-xs px-2 py-0.5 rounded-full font-black animate-pulse shadow-xs">
+                <span className="mr-auto bg-amber-400 text-amber-950 text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs">
                   {pendingPurchasesCount}
                 </span>
               )}
@@ -160,9 +174,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           ))}
         </nav>
 
-        {/* Sidebar Footer (Backup, Install, User Profile & Logout) */}
-        <div className="p-4 border-t border-brand-700 bg-brand-800 space-y-2.5">
-           
+        {/* Sidebar Footer (Responsive & Balanced) */}
+        <div className="p-2.5 lg:p-3 border-t border-brand-700 bg-brand-800 space-y-2 lg:space-y-2.5 shrink-0">
            {/* Backup & Restore Button */}
            {canManageBackup && (
              <button 
@@ -170,27 +183,31 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                  setIsBackupModalOpen(true);
                  setIsSidebarOpen(false);
                }}
-               className="w-full flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-brand-950 py-2 rounded-lg transition-colors text-xs font-black shadow-sm"
+               className="w-full flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-brand-950 py-1.5 lg:py-2 rounded-lg transition-colors text-xs font-black shadow-xs cursor-pointer"
              >
-               <Database size={15} /> نسخ احتياطي واسترجاع
+               <Database size={14} className="lg:w-4 lg:h-4" /> <span>نسخ احتياطي واسترجاع</span>
              </button>
            )}
 
-           <div className="flex items-center gap-3 px-2 pt-1">
-             <div className="w-8 h-8 bg-brand-600 rounded-full flex items-center justify-center font-bold">
-                {currentUser?.fullName.charAt(0)}
+           <div className="flex items-center justify-between gap-2 px-1">
+             <div className="flex items-center gap-2 min-w-0">
+               <div className="w-7 h-7 lg:w-8 lg:h-8 bg-brand-600 rounded-full flex items-center justify-center font-bold text-xs lg:text-sm shrink-0">
+                  {currentUser?.fullName?.charAt(0) || 'U'}
+               </div>
+               <div className="overflow-hidden">
+                  <p className="text-xs lg:text-sm font-bold truncate leading-tight">{currentUser?.fullName}</p>
+                  <p className="text-[10px] lg:text-xs text-brand-300 truncate">{currentUser?.role === 'ADMIN' ? 'مدير النظام' : 'مستخدم'}</p>
+               </div>
              </div>
-             <div className="overflow-hidden">
-                <p className="text-sm font-bold truncate">{currentUser?.fullName}</p>
-                <p className="text-xs text-brand-300 truncate">{currentUser?.role === 'ADMIN' ? 'مدير النظام' : 'مستخدم'}</p>
-             </div>
+             <button 
+               onClick={logout}
+               className="flex items-center gap-1 bg-red-600/20 hover:bg-red-600 text-red-200 hover:text-white py-1 px-2 lg:py-1.5 lg:px-2.5 rounded-lg transition-colors text-xs font-bold shrink-0 cursor-pointer"
+               title="تسجيل الخروج"
+             >
+               <LogOut size={13} className="lg:w-3.5 lg:h-3.5" />
+               <span>خروج</span>
+             </button>
            </div>
-           <button 
-             onClick={logout}
-             className="w-full flex items-center justify-center gap-2 bg-red-600/20 hover:bg-red-600 text-red-200 hover:text-white py-1.5 rounded-lg transition-colors text-xs font-bold"
-           >
-             <LogOut size={15} /> تسجيل الخروج
-           </button>
         </div>
       </aside>
 
@@ -273,7 +290,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
       {/* Overlay for mobile */}
       {isSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 z-0 md:hidden"
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 md:hidden transition-opacity"
           onClick={() => setIsSidebarOpen(false)}
         ></div>
       )}

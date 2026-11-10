@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
-import { Product, Customer, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId } from '../types';
+import { Product, Customer, CustomerHistory, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId } from '../types';
 import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
 import { getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance } from '../utils/supplierStatement';
@@ -61,6 +61,7 @@ interface ERPContextType {
   updatePurchase: (oldPurchase: Purchase, newPurchaseData: Purchase) => Promise<void>;
   finalizePurchasePrice: (purchaseId: string, updatedItems: InvoiceItem[], newTotal: number) => Promise<boolean>;
   deletePurchase: (id: string) => Promise<void>;
+  deletePurchaseInvoice: (id: string) => Promise<void>;
   addInvoice: (invoiceData: {
     id: string;
     branchId?: BranchId;
@@ -87,6 +88,7 @@ interface ERPContextType {
     paymentMethod: PaymentMethod;
     notes?: string;
   }) => Promise<void>;
+  addTreasuryTransaction: (data: Omit<TreasuryTransaction, 'id' | 'balance'> & { id?: string }) => Promise<TreasuryTransaction>;
   addTransfer: (data: {
     branchId?: BranchId;
     entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE';
@@ -97,6 +99,7 @@ interface ERPContextType {
     notes?: string;
     paymentMethod: PaymentMethod;
   }) => Promise<void>;
+  deleteTransfer: (id: string) => Promise<{ success: boolean; message?: string }>;
   addExpense: (data: {
     branchId?: BranchId;
     name: string;
@@ -121,6 +124,14 @@ interface ERPContextType {
   addEmployee: (employee: Employee) => void;
   updateEmployee: (code: string, updatedData: Partial<Employee>) => void;
   deleteEmployee: (code: string) => Promise<void>;
+  deleteCustomerLedgerMovement: (
+    customerCode: string, 
+    movement: { id?: string; date: string; description: string; amount: number; invoiceId?: string; invoiceNo?: string; isInvoiceItem?: boolean; paymentId?: string; historyIndex?: number }
+  ) => Promise<void>;
+  deleteSupplierLedgerMovement: (
+    supplierCode: string, 
+    movement: { id?: string; date: string; description: string; amount?: number; credit?: number; debit?: number; purchaseId?: string; invoiceId?: string; invoiceNo?: string; isInvoiceItem?: boolean; isOpeningBalance?: boolean; paymentId?: string; historyIndex?: number }
+  ) => Promise<void>;
   
   // Trash and Soft Delete operations
   restoreEntity: (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string) => Promise<{ success: boolean; message?: string }>;
@@ -399,7 +410,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
            } else {
               setCurrentUser(prev => {
                 if (!prev) return null;
-                const live = loadedUsers.find(u => u.id === prev.id || u.username === prev.username);
+                const live = loadedUsers.find((u: any) => u.id === prev.id || u.username === prev.username);
                 return live ? sanitizeUser(live) : prev;
               });
            }
@@ -1299,15 +1310,66 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newBalance = isPendingPrice ? prevBalance : (prevBalance - purchaseData.total);
 
     const pBranch: BranchId = purchaseData.branchId || 'MARG';
+    const nowIso = new Date().toISOString();
     const newPurchase: Purchase = { 
       ...purchaseData, 
       id,
       branchId: pBranch,
       pricingStatus: isPendingPrice ? 'PENDING_PRICE' : 'PRICED',
       previousBalance: prevBalance, 
-      currentBalance: newBalance 
+      currentBalance: newBalance,
+      createdAt: (purchaseData as any).createdAt || nowIso
     };
     
+    // Optimistic local state update for instant UI feedback
+    setPurchases(prev => [newPurchase, ...prev.filter(p => p.id !== newPurchase.id)]);
+    
+    setProducts(prev => {
+      let tempProducts = [...prev];
+      purchaseData.items.forEach(item => {
+        const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+        if (idx >= 0) {
+          const existing = tempProducts[idx];
+          const oldMarg = existing.quantityMarg !== undefined ? Number(existing.quantityMarg) : Number(existing.quantity || 0);
+          const oldNozha = existing.quantityNozha !== undefined ? Number(existing.quantityNozha) : 0;
+          const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+          const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+          const newQty = newMarg + newNozha;
+          const newAvg = item.price > 0 && newQty > 0
+            ? ((existing.quantity * (existing.avgCost || 0)) + (item.quantity * item.price)) / newQty
+            : (existing.avgCost || 0);
+          tempProducts[idx] = { ...existing, quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvg };
+        } else {
+           const newMarg = pBranch === 'MARG' ? item.quantity : 0;
+           const newNozha = pBranch === 'NOZHA' ? item.quantity : 0;
+           tempProducts.push({ 
+             code: item.itemCode, 
+             name: item.itemName, 
+             quantity: item.quantity, 
+             quantityMarg: newMarg,
+             quantityNozha: newNozha,
+             avgCost: item.price || 0, 
+             price: (item.price || 0) * 1.2 
+           });
+        }
+      });
+      return tempProducts;
+    });
+
+    setSuppliers(prev => prev.map(s => {
+       if (s.code === purchaseData.supplierCode) {
+         const desc = isPendingPrice 
+           ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
+           : `فاتورة مشتريات #${newPurchase.id}`;
+         return { 
+           ...s, 
+           balance: newBalance, 
+           history: [...(s.history || []), { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }]
+         };
+       }
+       return s;
+    }));
+
     if (isOnline) {
       try {
         await setDoc(doc(db, 'purchases', newPurchase.id), newPurchase);
@@ -1352,58 +1414,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const desc = isPendingPrice 
             ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
             : `فاتورة مشتريات #${newPurchase.id}`;
-          const newHistory = [...s.history, { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }];
+          const newHistory = [...(s.history || []), { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }];
           await updateDoc(supplierRef, { balance: newBalance, history: newHistory });
         }
       } catch (e) { handleFirebaseError(e); }
-    } else {
-      setPurchases(prev => [newPurchase, ...prev]);
-      
-      setProducts(prev => {
-        let tempProducts = [...prev];
-        purchaseData.items.forEach(item => {
-          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-          if (idx >= 0) {
-            const existing = tempProducts[idx];
-            const oldMarg = existing.quantityMarg !== undefined ? Number(existing.quantityMarg) : Number(existing.quantity || 0);
-            const oldNozha = existing.quantityNozha !== undefined ? Number(existing.quantityNozha) : 0;
-            const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
-            const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
-            const newQty = newMarg + newNozha;
-            const newAvg = item.price > 0 && newQty > 0
-              ? ((existing.quantity * (existing.avgCost || 0)) + (item.quantity * item.price)) / newQty
-              : (existing.avgCost || 0);
-            tempProducts[idx] = { ...existing, quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvg };
-          } else {
-             const newMarg = pBranch === 'MARG' ? item.quantity : 0;
-             const newNozha = pBranch === 'NOZHA' ? item.quantity : 0;
-             tempProducts.push({ 
-               code: item.itemCode, 
-               name: item.itemName, 
-               quantity: item.quantity, 
-               quantityMarg: newMarg,
-               quantityNozha: newNozha,
-               avgCost: item.price || 0, 
-               price: (item.price || 0) * 1.2 
-             });
-          }
-        });
-        return tempProducts;
-      });
-
-      setSuppliers(prev => prev.map(s => {
-         if (s.code === purchaseData.supplierCode) {
-           const desc = isPendingPrice 
-             ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
-             : `فاتورة مشتريات #${newPurchase.id}`;
-           return { 
-             ...s, 
-             balance: newBalance, 
-             history: [...s.history, { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }]
-           };
-         }
-         return s;
-      }));
     }
   };
 
@@ -1503,6 +1517,76 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updatePurchase = async (oldPurchase: Purchase, newPurchaseData: Purchase) => {
     const balanceChange = newPurchaseData.total - oldPurchase.total; 
 
+    // Optimistically update local state immediately
+    setPurchases(prev => prev.map(p => p.id === oldPurchase.id ? newPurchaseData : p));
+    
+    setSuppliers(prev => prev.map(s => {
+      if(s.code === oldPurchase.supplierCode) {
+        const cleanHistory = (s.history || []).filter(h => 
+          !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
+          !h.description.includes(`تعديل فاتورة مشتريات #${newPurchaseData.id}`)
+        );
+        const pPattern = `#${oldPurchase.id}`;
+        const hasExisting = cleanHistory.some(h => h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات'));
+        const newDesc = `فاتورة مشتريات #${newPurchaseData.id}`;
+
+        let newHistory;
+        if (hasExisting) {
+          newHistory = cleanHistory.map(h => {
+            if (h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات')) {
+              return {
+                ...h,
+                date: newPurchaseData.date,
+                description: newDesc,
+                amount: newPurchaseData.total
+              };
+            }
+            return h;
+          });
+        } else {
+          newHistory = [...cleanHistory, {
+            date: newPurchaseData.date,
+            description: newDesc,
+            amount: newPurchaseData.total
+          }];
+        }
+
+        return {
+          ...s,
+          balance: s.balance - balanceChange,
+          history: newHistory
+        };
+      }
+      return s;
+    }));
+
+    setProducts(prev => {
+      let tempProducts = [...prev];
+      oldPurchase.items.forEach(item => {
+        const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+        if (idx >= 0) {
+          const p = tempProducts[idx];
+          const currentVal = p.quantity * p.avgCost;
+          const oldVal = item.quantity * item.price;
+          const revQty = p.quantity - item.quantity;
+          const revAvg = revQty > 0 ? (currentVal - oldVal) / revQty : 0;
+          tempProducts[idx] = { ...p, quantity: revQty, avgCost: revAvg };
+        }
+      });
+      newPurchaseData.items.forEach(item => {
+        const idx = tempProducts.findIndex(p => p.code === item.itemCode);
+        if (idx >= 0) {
+          const p = tempProducts[idx];
+          const currentVal = p.quantity * p.avgCost;
+          const newVal = item.quantity * item.price;
+          const newQty = p.quantity + item.quantity;
+          const newAvg = newQty > 0 ? (currentVal + newVal) / newQty : 0;
+          tempProducts[idx] = { ...p, quantity: newQty, avgCost: newAvg };
+        }
+      });
+      return tempProducts;
+    });
+
     if (isOnline) {
       try {
         await setDoc(doc(db, 'purchases', oldPurchase.id), newPurchaseData);
@@ -1577,85 +1661,465 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
       } catch (e) { handleFirebaseError(e); }
-    } else {
-      setPurchases(prev => prev.map(p => p.id === oldPurchase.id ? newPurchaseData : p));
-      
-      setSuppliers(prev => prev.map(s => {
-        if(s.code === oldPurchase.supplierCode) {
-          const cleanHistory = (s.history || []).filter(h => 
-            !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
-            !h.description.includes(`تعديل فاتورة مشتريات #${newPurchaseData.id}`)
-          );
-          const pPattern = `#${oldPurchase.id}`;
-          const hasExisting = cleanHistory.some(h => h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات'));
-          const newDesc = `فاتورة مشتريات #${newPurchaseData.id}`;
-
-          let newHistory;
-          if (hasExisting) {
-            newHistory = cleanHistory.map(h => {
-              if (h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات')) {
-                return {
-                  ...h,
-                  date: newPurchaseData.date,
-                  description: newDesc,
-                  amount: newPurchaseData.total
-                };
-              }
-              return h;
-            });
-          } else {
-            newHistory = [...cleanHistory, {
-              date: newPurchaseData.date,
-              description: newDesc,
-              amount: newPurchaseData.total
-            }];
-          }
-
-          return {
-            ...s,
-            balance: s.balance - balanceChange,
-            history: newHistory
-          };
-        }
-        return s;
-      }));
-
-      setProducts(prev => {
-        let tempProducts = [...prev];
-        oldPurchase.items.forEach(item => {
-          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-          if (idx >= 0) {
-            const p = tempProducts[idx];
-            const currentVal = p.quantity * p.avgCost;
-            const oldVal = item.quantity * item.price;
-            const revQty = p.quantity - item.quantity;
-            const revAvg = revQty > 0 ? (currentVal - oldVal) / revQty : 0;
-            tempProducts[idx] = { ...p, quantity: revQty, avgCost: revAvg };
-          }
-        });
-        newPurchaseData.items.forEach(item => {
-          const idx = tempProducts.findIndex(p => p.code === item.itemCode);
-          if (idx >= 0) {
-            const p = tempProducts[idx];
-            const currentVal = p.quantity * p.avgCost;
-            const newVal = item.quantity * item.price;
-            const newQty = p.quantity + item.quantity;
-            const newAvg = newQty > 0 ? (currentVal + newVal) / newQty : 0;
-            tempProducts[idx] = { ...p, quantity: newQty, avgCost: newAvg };
-          }
-        });
-        return tempProducts;
-      });
     }
   };
 
   const deletePurchase = async (id: string) => {
+    const cleanId = String(id || '').replace(/^#/, '').trim();
+    if (!cleanId) return;
+
+    const purchase = purchases.find(p => String(p.id).trim().replace(/^#/, '').toLowerCase() === cleanId.toLowerCase());
+    const pBranch: BranchId = purchase?.branchId || 'MARG';
     const now = new Date().toISOString();
-    setPurchases(prev => prev.map(p => p.id === id ? { ...p, isDeleted: true, deletedAt: now } : p));
+
+    const suppCode = purchase?.supplierCode || suppliers.find(s => 
+      (s.history || []).some(h => 
+        (h.description && (h.description.includes(`#${cleanId}`) || h.description.includes(cleanId))) ||
+        h.purchaseId === cleanId ||
+        h.invoiceId === cleanId ||
+        h.invoiceNo === cleanId
+      )
+    )?.code;
+
+    // Helper to clean supplier history and calculate new supplier balance
+    const purgeSupplierHistory = (history: CustomerHistory[] = []) => {
+      const indicesToRemove = new Set<number>();
+      for (let i = 0; i < history.length; i++) {
+        const h = history[i];
+        const desc = h.description || '';
+        const rawDesc = h.rawDescription || '';
+        if (
+          h.purchaseId === cleanId ||
+          h.invoiceId === cleanId ||
+          h.invoiceNo === cleanId ||
+          desc.includes(`#${cleanId}`) ||
+          rawDesc.includes(`#${cleanId}`) ||
+          (cleanId.length >= 3 && (desc.includes(cleanId) || rawDesc.includes(cleanId)) && (desc.includes('فاتورة مشتريات') || desc.includes('استلام بضاعة') || desc.includes('تعديل') || desc.includes('دفعة') || desc.includes('سداد')))
+        ) {
+          indicesToRemove.add(i);
+        }
+      }
+
+      const cleanedHistory = history.filter((_, idx) => !indicesToRemove.has(idx));
+      const remainingPurchases = purchases.filter(p => String(p.id).trim().replace(/^#/, '').toLowerCase() !== cleanId.toLowerCase());
+      const supplierObj = suppCode ? suppliers.find(s => s.code === suppCode) : null;
+      const tempSupplier = supplierObj ? { ...supplierObj, history: cleanedHistory } : null;
+      const accurateBalance = tempSupplier ? calculateSupplierBalance(tempSupplier, remainingPurchases) : 0;
+
+      return { cleanedHistory, accurateBalance };
+    };
+
+    // 1. Immediate Local State Updates (Snappy UI)
+    // Remove purchase completely from active purchases list
+    const remainingPurchases = purchases.filter(p => String(p.id).trim().replace(/^#/, '').toLowerCase() !== cleanId.toLowerCase());
+    setPurchases(remainingPurchases);
+
+    // Update Supplier in state
+    if (suppCode) {
+      setSuppliers(prev => prev.map(s => {
+        if (s.code === suppCode) {
+          const { cleanedHistory, accurateBalance } = purgeSupplierHistory(s.history || []);
+          return {
+            ...s,
+            balance: accurateBalance,
+            history: cleanedHistory
+          };
+        }
+        return s;
+      }));
+    }
+
+    // Update Treasury in state: remove any payment transaction tied to this purchase
+    setTreasury(prev => prev.filter(t => 
+      t.invoiceNumber !== cleanId && 
+      t.invoiceNumber !== `#${cleanId}` &&
+      !t.id.includes(cleanId) && 
+      !(t.description && t.description.includes(cleanId))
+    ));
+
+    // Update Warehouse Products in state: deduct item quantities that entered the warehouse
+    if (purchase && purchase.items && purchase.items.length > 0) {
+      setProducts(prev => {
+        let temp = [...prev];
+        purchase.items.forEach(item => {
+          const idx = temp.findIndex(p => p.code === item.itemCode);
+          if (idx >= 0) {
+            const prod = temp[idx];
+            const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+            const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+            const newMarg = pBranch === 'MARG' ? Math.max(0, oldMarg - item.quantity) : oldMarg;
+            const newNozha = pBranch === 'NOZHA' ? Math.max(0, oldNozha - item.quantity) : oldNozha;
+            const newQty = Math.max(0, newMarg + newNozha);
+
+            const currentTotalValue = prod.quantity * (prod.avgCost || 0);
+            const itemTotalValue = item.quantity * (item.price || 0);
+            const revertedTotalValue = Math.max(0, currentTotalValue - itemTotalValue);
+            const newAvgCost = newQty > 0 ? revertedTotalValue / newQty : (prod.avgCost || 0);
+
+            temp[idx] = { 
+              ...prod, 
+              quantityMarg: newMarg, 
+              quantityNozha: newNozha, 
+              quantity: newQty, 
+              avgCost: newAvgCost 
+            };
+          }
+        });
+        return temp;
+      });
+    }
+
+    // 2. Firebase Persistence
     if (isOnline) {
       try {
-        await setDoc(doc(db, 'purchases', id), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true });
-      } catch (e) { handleFirebaseError(e); }
+        await deleteDoc(doc(db, 'purchases', purchase ? purchase.id : cleanId)).catch(async () => {
+          await deleteDoc(doc(db, 'purchases', cleanId)).catch(() => {});
+        });
+
+        // Update Supplier doc in Firestore
+        if (suppCode) {
+          const supplierRef = doc(db, 'suppliers', suppCode);
+          const supplierSnap = await getDoc(supplierRef);
+          if (supplierSnap.exists()) {
+            const sData = supplierSnap.data() as Supplier;
+            const { cleanedHistory: fsHistory, accurateBalance: fsBalance } = purgeSupplierHistory(sData.history || []);
+            await updateDoc(supplierRef, cleanDoc({
+              balance: fsBalance,
+              history: fsHistory
+            }));
+          }
+        }
+
+        // Delete linked Treasury transactions in Firestore
+        const qTreasury = query(collection(db, 'treasury'));
+        const snap = await getDocs(qTreasury);
+        const linkedDocs = snap.docs.filter(d => {
+          const data = d.data() as TreasuryTransaction;
+          return (
+            data.invoiceNumber === cleanId || 
+            data.invoiceNumber === `#${cleanId}` ||
+            d.id.includes(cleanId) || 
+            (data.description && data.description.includes(cleanId))
+          );
+        });
+        for (const d of linkedDocs) {
+          await deleteDoc(d.ref);
+        }
+
+        // Deduct inventory items in Firestore
+        if (purchase && purchase.items) {
+          for (const item of purchase.items) {
+            const pRef = doc(db, 'products', item.itemCode);
+            const pSnap = await getDoc(pRef);
+            if (pSnap.exists()) {
+              const p = pSnap.data() as Product;
+              const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+              const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+              const newMarg = pBranch === 'MARG' ? Math.max(0, oldMarg - item.quantity) : oldMarg;
+              const newNozha = pBranch === 'NOZHA' ? Math.max(0, oldNozha - item.quantity) : oldNozha;
+              const newQty = Math.max(0, newMarg + newNozha);
+
+              const currentTotalValue = p.quantity * (p.avgCost || 0);
+              const itemTotalValue = item.quantity * (item.price || 0);
+              const revertedTotalValue = Math.max(0, currentTotalValue - itemTotalValue);
+              const newAvgCost = newQty > 0 ? revertedTotalValue / newQty : (p.avgCost || 0);
+
+              await updateDoc(pRef, {
+                quantity: newQty,
+                quantityMarg: newMarg,
+                quantityNozha: newNozha,
+                avgCost: newAvgCost
+              });
+            }
+          }
+        }
+      } catch (e) {
+        handleFirebaseError(e);
+      }
+    }
+  };
+
+  const deleteCustomerLedgerMovement = async (
+    customerCode: string, 
+    movement: { 
+      id?: string;
+      date: string; 
+      description: string; 
+      amount: number; 
+      invoiceId?: string; 
+      invoiceNo?: string; 
+      isInvoiceItem?: boolean; 
+      paymentId?: string;
+      historyIndex?: number;
+    }
+  ) => {
+    // If movement is linked to a sales invoice and is NOT an individual payment: delete that invoice completely
+    const targetInvId = movement.invoiceId || movement.invoiceNo;
+    if (targetInvId && !movement.paymentId) {
+      await deleteInvoice(targetInvId);
+      return;
+    }
+
+    const cleanCode = (customerCode || '').trim().toLowerCase();
+    const customer = customers.find(c => (c.code || '').trim().toLowerCase() === cleanCode);
+    if (!customer) return;
+
+    // If an invoice payment is being removed, update the invoice's paidAmount to 0
+    if (targetInvId && movement.paymentId) {
+      const cleanInvId = targetInvId.replace(/^#/, '').trim();
+      setInvoices(prev => prev.map(inv => {
+        if (String(inv.id).replace(/^#/, '').trim() === cleanInvId) {
+          return {
+            ...inv,
+            paidAmount: 0,
+            remainingAmount: inv.total
+          };
+        }
+        return inv;
+      }));
+      if (isOnline) {
+        try {
+          const invObj = invoices.find(i => String(i.id).replace(/^#/, '').trim() === cleanInvId);
+          await updateDoc(doc(db, 'invoices', invObj ? invObj.id : cleanInvId), { 
+            paidAmount: 0, 
+            remainingAmount: invObj ? invObj.total : 0 
+          }).catch(() => {});
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+
+    // Filter out the movement from customer.history
+    const history = customer.history || [];
+    let newHistory: CustomerHistory[] = [];
+
+    if (typeof movement.historyIndex === 'number' && movement.historyIndex >= 0 && movement.historyIndex < history.length) {
+      // Direct and exact index removal!
+      newHistory = history.filter((_, idx) => idx !== movement.historyIndex);
+    } else {
+      let removed = false;
+      const targetAmt = Number(movement.amount) || 0;
+      for (const h of history) {
+        if (!removed) {
+          const matchId = movement.id && (h as any).id === movement.id;
+          const matchDate = !movement.date || h.date === movement.date;
+          const hAmt = Number(h.amount) || 0;
+          const matchAmt = Math.abs(hAmt - targetAmt) < 0.01 || Math.abs(Math.abs(hAmt) - Math.abs(targetAmt)) < 0.01;
+          const matchDesc = !movement.description || 
+            h.description === movement.description || 
+            h.description.includes(movement.description) || 
+            movement.description.includes(h.description);
+
+          if (matchId || (matchDate && matchAmt && matchDesc) || (matchDate && matchAmt && !movement.description)) {
+            removed = true;
+            continue;
+          }
+        }
+        newHistory.push(h);
+      }
+    }
+
+    // Also remove from manualTransactions if applicable
+    const manualTransactions = (customer.manualTransactions || []).filter(mt => {
+      if (movement.paymentId && mt.id === movement.paymentId) return false;
+      if (movement.id && mt.id === movement.id) return false;
+      const matchDate = !movement.date || mt.date === movement.date;
+      const matchAmt = Math.abs(Math.abs(mt.amount) - Math.abs(movement.amount)) < 0.01;
+      return !(matchDate && matchAmt);
+    });
+
+    // Check if matched a Treasury transaction (e.g. collection/cash receipt)
+    const amountVal = Math.abs(movement.amount);
+    let matchedTreasuryId: string | null = null;
+    if (targetInvId) {
+      const invTreasury = treasury.find(t => t.invoiceNumber === targetInvId || t.id.includes(targetInvId) || (t.description && t.description.includes(targetInvId)));
+      if (invTreasury) matchedTreasuryId = invTreasury.id;
+    }
+    if (!matchedTreasuryId && movement.paymentId && treasury.some(t => t.id === movement.paymentId)) {
+      matchedTreasuryId = movement.paymentId;
+    } else if (!matchedTreasuryId) {
+      const targetTreasury = treasury.find(t => {
+        const desc = t.description || '';
+        const matchesEntity = desc.includes(customer.code) || desc.includes(customer.name);
+        const matchesAmount = Math.abs(t.credit - amountVal) < 0.01 || Math.abs(t.debit - amountVal) < 0.01;
+        const matchesDate = !t.date || t.date.startsWith(movement.date);
+        return matchesEntity && matchesAmount && matchesDate;
+      });
+      if (targetTreasury) {
+        matchedTreasuryId = targetTreasury.id;
+      }
+    }
+
+    // Recalculate customer balance from new history:
+    let newBal = 0;
+    for (const h of newHistory) {
+      newBal += Number(h.amount) || 0;
+    }
+    newBal = Math.round(newBal * 100) / 100;
+    if (Object.is(newBal, -0)) newBal = 0;
+
+    // 1. Immediate optimistic updates
+    setCustomers(prev => prev.map(c => {
+      if ((c.code || '').trim().toLowerCase() === cleanCode) {
+        return {
+          ...c,
+          balance: newBal,
+          currentBalance: newBal,
+          history: newHistory,
+          manualTransactions
+        };
+      }
+      return c;
+    }));
+
+    if (matchedTreasuryId) {
+      setTreasury(prev => prev.filter(t => t.id !== matchedTreasuryId));
+    }
+
+    // 2. Firestore persistence
+    if (isOnline) {
+      try {
+        const customerRef = doc(db, 'customers', customer.code);
+        await updateDoc(customerRef, cleanDoc({
+          balance: newBal,
+          currentBalance: newBal,
+          history: newHistory,
+          manualTransactions
+        }));
+
+        if (matchedTreasuryId) {
+          await deleteDoc(doc(db, 'treasury', matchedTreasuryId)).catch(() => {});
+        }
+      } catch (e) {
+        handleFirebaseError(e);
+      }
+    }
+  };
+
+  const deleteSupplierLedgerMovement = async (
+    supplierCode: string,
+    movement: { 
+      id?: string;
+      date: string; 
+      description: string; 
+      amount?: number; 
+      credit?: number; 
+      debit?: number; 
+      purchaseId?: string; 
+      invoiceId?: string; 
+      invoiceNo?: string; 
+      isInvoiceItem?: boolean; 
+      isOpeningBalance?: boolean; 
+      paymentId?: string;
+      historyIndex?: number;
+    }
+  ) => {
+    // If movement is linked to a purchase invoice and is NOT an individual payment: delete that purchase invoice
+    const targetPurchaseId = movement.purchaseId || movement.invoiceId || movement.invoiceNo;
+    if (targetPurchaseId && !movement.paymentId) {
+      await deletePurchase(targetPurchaseId);
+      return;
+    }
+
+    const cleanCode = (supplierCode || '').trim().toLowerCase();
+    const supplier = suppliers.find(s => (s.code || '').trim().toLowerCase() === cleanCode);
+    if (!supplier) return;
+
+    let newOpeningBal = supplier.openingBalance;
+    const history = supplier.history || [];
+    let newHistory: CustomerHistory[] = [];
+    const targetAmt = movement.amount !== undefined ? movement.amount : ((movement.debit || 0) > 0 ? (movement.debit || 0) : -(movement.credit || 0));
+
+    if (movement.isOpeningBalance) {
+      newOpeningBal = 0;
+      newHistory = history.filter(h => !h.description.includes('رصيد افتتاحي'));
+    } else if (typeof movement.historyIndex === 'number' && movement.historyIndex >= 0 && movement.historyIndex < history.length) {
+      // Direct and exact index removal!
+      newHistory = history.filter((_, idx) => idx !== movement.historyIndex);
+    } else {
+      let removed = false;
+      for (const h of history) {
+        if (!removed) {
+          const matchId = movement.id && (h as any).id === movement.id;
+          const matchDate = !movement.date || h.date === movement.date;
+          const hAmt = Number(h.amount) || 0;
+          const matchAmt = Math.abs(hAmt - targetAmt) < 0.01 || Math.abs(Math.abs(hAmt) - Math.abs(targetAmt)) < 0.01;
+          const matchDesc = !movement.description || 
+            h.description === movement.description || 
+            h.description.includes(movement.description) || 
+            movement.description.includes(h.description);
+
+          if (matchId || (matchDate && matchAmt && matchDesc) || (matchDate && matchAmt && !movement.description)) {
+            removed = true;
+            continue;
+          }
+        }
+        newHistory.push(h);
+      }
+    }
+
+    // Also remove from manualTransactions if applicable
+    const manualTransactions = (supplier.manualTransactions || []).filter(mt => {
+      if (movement.paymentId && mt.id === movement.paymentId) return false;
+      if (movement.id && mt.id === movement.id) return false;
+      const matchDate = !movement.date || mt.date === movement.date;
+      const matchAmt = Math.abs(Math.abs(mt.amount) - Math.abs(targetAmt)) < 0.01;
+      return !(matchDate && matchAmt);
+    });
+
+    // Check if matched a Treasury transaction
+    const moveAmt = Math.abs(targetAmt);
+    let matchedTreasuryId: string | null = null;
+    if (movement.paymentId && treasury.some(t => t.id === movement.paymentId)) {
+      matchedTreasuryId = movement.paymentId;
+    } else {
+      const targetTreasury = treasury.find(t => {
+        const desc = t.description || '';
+        const matchesEntity = desc.includes(supplier.code) || desc.includes(supplier.name);
+        const matchesAmount = Math.abs(t.credit - moveAmt) < 0.01 || Math.abs(t.debit - moveAmt) < 0.01;
+        const matchesDate = !t.date || t.date.startsWith(movement.date);
+        return matchesEntity && matchesAmount && matchesDate;
+      });
+      if (targetTreasury) {
+        matchedTreasuryId = targetTreasury.id;
+      }
+    }
+
+    // Recalculate supplier balance
+    const updatedSupplierObj: Supplier = {
+      ...supplier,
+      openingBalance: newOpeningBal,
+      history: newHistory,
+      manualTransactions
+    };
+    const accurateBalance = calculateSupplierBalance(updatedSupplierObj, purchases);
+    updatedSupplierObj.balance = accurateBalance;
+
+    // 1. Immediate optimistic updates
+    setSuppliers(prev => prev.map(s => (s.code || '').trim().toLowerCase() === cleanCode ? updatedSupplierObj : s));
+
+    if (matchedTreasuryId) {
+      setTreasury(prev => prev.filter(t => t.id !== matchedTreasuryId));
+    }
+
+    // 2. Firestore persistence
+    if (isOnline) {
+      try {
+        const supplierRef = doc(db, 'suppliers', supplier.code);
+        await updateDoc(supplierRef, cleanDoc({
+          balance: accurateBalance,
+          openingBalance: newOpeningBal,
+          history: newHistory,
+          manualTransactions
+        }));
+
+        if (matchedTreasuryId) {
+          await deleteDoc(doc(db, 'treasury', matchedTreasuryId)).catch(() => {});
+        }
+      } catch (e) {
+        handleFirebaseError(e);
+      }
     }
   };
 
@@ -2080,92 +2544,217 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteInvoice = async (id: string) => {
-    const inv = invoices.find(i => i.id === id);
-    if (!inv) return;
+    const cleanId = String(id || '').replace(/^#/, '').trim();
+    if (!cleanId) return;
 
-    const remainingDebt = inv.total - (inv.paidAmount || 0);
-    const invBranch: BranchId = inv.branchId || 'MARG';
+    const inv = invoices.find(i => 
+      String(i.id).trim().replace(/^#/, '').toLowerCase() === cleanId.toLowerCase() || 
+      String((i as any).invoiceNumber || '').trim().replace(/^#/, '').toLowerCase() === cleanId.toLowerCase()
+    );
+
+    const invBranch: BranchId = inv?.branchId || 'MARG';
     const now = new Date().toISOString();
+    const invPaid = Math.max(0, Number(inv?.paidAmount || 0));
 
-    // Immediate Optimistic State Update
-    setInvoices(prev => prev.map(i => i.id === id ? { ...i, isDeleted: true, deletedAt: now } : i));
-    setCustomers(prev => prev.map(c => {
-      if (c.code === inv.customerCode) {
-        return {
-          ...c,
-          balance: c.balance + remainingDebt,
-          history: [
-            ...(c.history || []),
-            {
-              date: new Date().toISOString().split('T')[0],
-              description: `إلغاء فاتورة بيع #${id}`,
-              amount: remainingDebt
+    // Determine target customer
+    const custCode = inv?.customerCode || customers.find(c => 
+      (c.history || []).some(h => 
+        h.invoiceId === cleanId ||
+        h.invoiceNo === cleanId ||
+        (h.description && (h.description.includes(`#${cleanId}`) || h.description.includes(cleanId))) ||
+        (h.rawDescription && (h.rawDescription.includes(`#${cleanId}`) || h.rawDescription.includes(cleanId)))
+      )
+    )?.code;
+
+    // Pure helper to purge all movements belonging to this invoice from a customer's history
+    const purgeCustomerHistory = (history: CustomerHistory[] = []) => {
+      const indicesToRemove = new Set<number>();
+      
+      // 1. Mark all entries explicitly referencing this invoice (sale, edit, previous cancellation, payment)
+      for (let i = 0; i < history.length; i++) {
+        const h = history[i];
+        const desc = h.description || '';
+        const rawDesc = h.rawDescription || '';
+        const isTargetInvoice = 
+          h.invoiceId === cleanId ||
+          h.invoiceNo === cleanId ||
+          desc.includes(`#${cleanId}`) || 
+          desc.includes(` #${cleanId}`) ||
+          rawDesc.includes(`#${cleanId}`) ||
+          (cleanId.length >= 3 && (desc.includes(cleanId) || rawDesc.includes(cleanId)) && (desc.includes('فاتورة') || desc.includes('سداد') || desc.includes('دفعة') || desc.includes('إلغاء') || desc.includes('تعديل')));
+
+        if (isTargetInvoice) {
+          indicesToRemove.add(i);
+
+          // If this invoice had a paid amount, check if the immediate next entry is its paired payment
+          if (invPaid > 0 && i + 1 < history.length && !indicesToRemove.has(i + 1)) {
+            const next = history[i + 1];
+            const nextAmt = Number(next.amount) || 0;
+            if (
+              nextAmt > 0 && 
+              Math.abs(nextAmt - invPaid) < 0.01 && 
+              (next.description.includes('دفعة') || next.description.includes('سداد') || !next.description.includes('فاتورة بيع'))
+            ) {
+              indicesToRemove.add(i + 1);
             }
-          ]
-        };
-      }
-      return c;
-    }));
-    setTreasury(prev => prev.filter(t => t.invoiceNumber !== id));
-    setProducts(prev => {
-      let temp = [...prev];
-      inv.items.forEach(item => {
-        const idx = temp.findIndex(p => p.code === item.itemCode);
-        if (idx >= 0) {
-          const prod = temp[idx];
-          const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
-          const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
-          const newMarg = invBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
-          const newNozha = invBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
-          temp[idx] = { ...prod, quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha };
+          }
         }
-      });
-      return temp;
-    });
+      }
 
+      // 2. If invoice had a payment that wasn't immediately following, find by date, amount & 'دفعة'
+      if (invPaid > 0) {
+        let paymentRemoved = false;
+        for (const idx of indicesToRemove) {
+          if (history[idx] && Number(history[idx].amount) > 0 && Math.abs(Number(history[idx].amount) - invPaid) < 0.01) {
+            paymentRemoved = true;
+            break;
+          }
+        }
+
+        if (!paymentRemoved) {
+          for (let i = 0; i < history.length; i++) {
+            if (indicesToRemove.has(i)) continue;
+            const h = history[i];
+            const hAmt = Number(h.amount) || 0;
+            if (
+              hAmt > 0 && 
+              Math.abs(hAmt - invPaid) < 0.01 &&
+              (h.date === inv?.date || !inv?.date) &&
+              (h.description.includes('دفعة') || h.description.includes('سداد') || h.description.includes(cleanId))
+            ) {
+              indicesToRemove.add(i);
+              break;
+            }
+          }
+        }
+      }
+
+      // 3. Also purge any legacy "إلغاء فاتورة" or compensation entries referencing this invoice id
+      for (let i = 0; i < history.length; i++) {
+        const desc = history[i].description || '';
+        if (desc.includes('إلغاء فاتورة') && desc.includes(cleanId)) {
+          indicesToRemove.add(i);
+        }
+      }
+
+      const cleanedHistory = history.filter((_, idx) => !indicesToRemove.has(idx));
+
+      // Calculate fresh customer balance:
+      // الرصيد = مجموع الحركات الصافية (دائن موجب - مدين سالب)
+      let freshBalance = 0;
+      for (const h of cleanedHistory) {
+        freshBalance += Number(h.amount) || 0;
+      }
+
+      freshBalance = Math.round(freshBalance * 100) / 100;
+      if (Object.is(freshBalance, -0) || Math.abs(freshBalance) < 0.0001) freshBalance = 0;
+
+      return { cleanedHistory, freshBalance };
+    };
+
+    // 1. Immediate Optimistic State Updates
+    // Remove invoice completely from active invoices list
+    setInvoices(prev => prev.filter(i => String(i.id).trim().replace(/^#/, '').toLowerCase() !== cleanId.toLowerCase()));
+
+    // Update Customer in state: full hard delete from ledger with immediate balance update
+    if (custCode) {
+      setCustomers(prev => prev.map(c => {
+        if (c.code === custCode) {
+          const { cleanedHistory, freshBalance } = purgeCustomerHistory(c.history || []);
+          return {
+            ...c,
+            balance: freshBalance,
+            currentBalance: freshBalance,
+            history: cleanedHistory
+          };
+        }
+        return c;
+      }));
+    }
+
+    // Update Treasury in state: remove deposit transaction linked to this invoice
+    setTreasury(prev => prev.filter(t => 
+      t.invoiceNumber !== cleanId && 
+      t.invoiceNumber !== `#${cleanId}` &&
+      !t.id.includes(cleanId) && 
+      !(t.description && t.description.includes(cleanId))
+    ));
+
+    // Update Inventory in state: return sold item quantities back to stock
+    if (inv && inv.items && inv.items.length > 0) {
+      setProducts(prev => {
+        let temp = [...prev];
+        inv.items.forEach(item => {
+          const idx = temp.findIndex(p => p.code === item.itemCode);
+          if (idx >= 0) {
+            const prod = temp[idx];
+            const oldMarg = prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity;
+            const oldNozha = prod.quantityNozha !== undefined ? prod.quantityNozha : 0;
+            const newMarg = invBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+            const newNozha = invBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+            temp[idx] = { ...prod, quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha };
+          }
+        });
+        return temp;
+      });
+    }
+
+    // 2. Firebase Persistence
     if (isOnline) {
       try {
-        await setDoc(doc(db, 'invoices', id), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true });
+        await deleteDoc(doc(db, 'invoices', inv ? inv.id : cleanId)).catch(async () => {
+          await deleteDoc(doc(db, 'invoices', cleanId)).catch(() => {});
+        });
 
-        // Revert Customer Balance for the remaining debt of this invoice
-        const customerRef = doc(db, 'customers', inv.customerCode);
-        const customerSnap = await getDoc(customerRef);
-        if (customerSnap.exists()) {
-          const c = customerSnap.data() as Customer;
-          const newBalance = c.balance + remainingDebt;
-          const newHistory = [
-            ...(c.history || []),
-            {
-              date: new Date().toISOString().split('T')[0],
-              description: `إلغاء فاتورة بيع #${id}`,
-              amount: remainingDebt
-            }
-          ];
-          await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: newHistory }));
+        // Update Customer in Firestore with purged history and recalculated balance
+        if (custCode) {
+          const customerRef = doc(db, 'customers', custCode);
+          const customerSnap = await getDoc(customerRef);
+          if (customerSnap.exists()) {
+            const cData = customerSnap.data() as Customer;
+            const { cleanedHistory: fsHistory, freshBalance: fsBalance } = purgeCustomerHistory(cData.history || []);
+            await updateDoc(customerRef, cleanDoc({
+              balance: fsBalance,
+              currentBalance: fsBalance,
+              history: fsHistory
+            }));
+          }
         }
 
-        // Delete linked Treasury transactions
+        // Delete linked Treasury transactions in Firestore
         const qTreasury = query(collection(db, 'treasury'));
         const snap = await getDocs(qTreasury);
-        const linkedDocs = snap.docs.filter(d => (d.data() as TreasuryTransaction).invoiceNumber === id);
+        const linkedDocs = snap.docs.filter(d => {
+          const data = d.data() as TreasuryTransaction;
+          return (
+            data.invoiceNumber === cleanId || 
+            data.invoiceNumber === `#${cleanId}` ||
+            d.id.includes(cleanId) || 
+            (data.description && data.description.includes(cleanId))
+          );
+        });
         for (const d of linkedDocs) {
           await deleteDoc(d.ref);
         }
 
-        // Restore Inventory items
-        for (const item of inv.items) {
-          const pRef = doc(db, 'products', item.itemCode);
-          const pSnap = await getDoc(pRef);
-          if (pSnap.exists()) {
-            const p = pSnap.data() as Product;
-            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
-            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
-            const newMarg = invBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
-            const newNozha = invBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
-            await updateDoc(pRef, { quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha });
+        // Restore Inventory items in Firestore
+        if (inv && inv.items) {
+          for (const item of inv.items) {
+            const pRef = doc(db, 'products', item.itemCode);
+            const pSnap = await getDoc(pRef);
+            if (pSnap.exists()) {
+              const p = pSnap.data() as Product;
+              const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+              const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+              const newMarg = invBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+              const newNozha = invBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+              await updateDoc(pRef, { quantityMarg: newMarg, quantityNozha: newNozha, quantity: newMarg + newNozha });
+            }
           }
         }
-      } catch (e) { handleFirebaseError(e); }
+      } catch (e) {
+        handleFirebaseError(e);
+      }
     }
   };
 
@@ -2382,6 +2971,49 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const addTreasuryTransaction = async (data: Omit<TreasuryTransaction, 'id' | 'balance'> & { id?: string }): Promise<TreasuryTransaction> => {
+    const now = new Date();
+    const tId = data.id || `T_${now.getTime()}_${Math.random().toString(36).substring(2, 6)}`;
+    const timestampIso = data.createdAt || now.toISOString();
+    const timestamp = data.timestamp || now.getTime();
+    const timeStr = now.toTimeString().split(' ')[0];
+    const entryDate = data.date || now.toISOString().split('T')[0];
+    const fullDate = (entryDate && entryDate.includes(':'))
+      ? entryDate
+      : `${entryDate} ${timeStr}`;
+
+    const credit = Number(data.credit ?? (data.type === 'INCOME' ? data.amount : 0)) || 0;
+    const debit = Number(data.debit ?? (data.type === 'EXPENSE' ? data.amount : 0)) || 0;
+
+    const transaction: TreasuryTransaction = {
+      ...data,
+      id: tId,
+      branchId: data.branchId || 'MARG',
+      credit,
+      debit,
+      balance: 0,
+      paymentMethod: data.paymentMethod || 'CASH',
+      description: data.description,
+      date: fullDate,
+      createdAt: timestampIso,
+      timestamp,
+      type: data.type || (credit > 0 ? 'INCOME' : 'EXPENSE'),
+      amount: data.amount !== undefined ? data.amount : (credit > 0 ? credit : debit)
+    };
+
+    setTreasury(prev => [transaction, ...prev.filter(t => t.id !== tId)]);
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'treasury', tId), cleanDoc(transaction));
+      } catch (e) {
+        handleFirebaseError(e);
+      }
+    }
+
+    return transaction;
+  };
+
   const addCollection = async (data: { 
     customerCode: string; 
     customerName?: string;
@@ -2393,68 +3025,63 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }) => {
     const { customerCode, invoiceId, amount, date, paymentMethod, notes } = data;
     const now = new Date();
-    const tId = `T_COL_${now.getTime()}`;
+    const tId = `T_COL_${now.getTime()}_${Math.random().toString(36).substring(2, 6)}`;
     
     // Find customer for clear name display and branch
-    const customer = customers.find(c => c.code === customerCode);
-    const displayName = customer?.name || data.customerName || customerCode;
+    const cleanCode = (customerCode || '').trim();
+    const customer = customers.find(c => c.code.toLowerCase() === cleanCode.toLowerCase());
+    const displayName = customer?.name || data.customerName || cleanCode;
     const branchId: BranchId = customer?.branchId || 'MARG';
 
-    const descParts = [`تحصيل من العميل [${customerCode}] ${displayName}`];
-    if (invoiceId && invoiceId.trim()) descParts.push(`فاتورة #${invoiceId.trim()}`);
-    if (notes && notes.trim()) descParts.push(notes.trim());
-    const description = descParts.join(' - ');
+    // Format requested: تحصيل من عميل: [اسم العميل] ([كود العميل]) - [ملاحظات]
+    let description = `تحصيل من عميل: ${displayName} (${cleanCode})`;
+    if (invoiceId && invoiceId.trim()) {
+      description += ` - فاتورة #${invoiceId.trim().replace(/^#/, '')}`;
+    }
+    if (notes && notes.trim()) {
+      description += ` - ${notes.trim()}`;
+    }
 
     const timeStr = now.toTimeString().split(' ')[0]; // HH:mm:ss
     const timestampIso = now.toISOString();
-    // Build date string with timestamp for precise chronological ordering
-    const fullDate = (date && date.includes(':'))
-      ? date
-      : (date ? `${date} ${timeStr}` : timestampIso.replace('T', ' ').substring(0, 19));
+    const entryDate = date || now.toISOString().split('T')[0];
+    const fullDate = (entryDate && entryDate.includes(':'))
+      ? entryDate
+      : `${entryDate} ${timeStr}`;
     
-    // Update Customer Balance
+    // 1. Update Customer Balance and Ledger
     if (customer) {
         const newBalance = customer.balance + amount;
         const customerLedgerDesc = notes && notes.trim() ? `دفعة (${notes.trim()})` : 'دفعة';
         const newHistory = [...(customer.history || []), { 
-          date: date || now.toISOString().split('T')[0], 
+          id: `cust_pay_${tId}`,
+          date: entryDate, 
           description: customerLedgerDesc, 
-          amount 
+          amount,
+          paymentId: tId,
+          invoiceId: invoiceId?.trim() || undefined,
+          invoiceNo: invoiceId?.trim() || undefined,
+          type: 'payment'
         }];
-        await updateCustomer(customerCode, { balance: newBalance, history: newHistory });
+        await updateCustomer(customer.code, { balance: newBalance, currentBalance: newBalance, history: newHistory });
     }
 
-    // Add to Treasury with all required fields
-    const transaction: TreasuryTransaction = {
-        id: tId,
-        branchId,
-        type: 'INCOME',
-        amount: amount,
-        credit: amount,
-        debit: 0,
-        balance: 0,
-        source: 'COLLECTION',
-        paymentMethod: paymentMethod || 'CASH',
-        description,
-        date: fullDate,
-        createdAt: timestampIso,
-        timestamp: now.getTime(),
-        ...(invoiceId && invoiceId.trim() ? { invoiceNumber: invoiceId.trim() } : {})
-    };
-    
-    // Optimistic update so UI reflects immediately both online and offline
-    setTreasury(prev => {
-        const withoutThis = prev.filter(t => t.id !== tId);
-        return [transaction, ...withoutThis];
+    // 2. Add to Treasury with all required fields
+    await addTreasuryTransaction({
+      id: tId,
+      branchId,
+      type: 'INCOME',
+      amount: amount,
+      credit: amount,
+      debit: 0,
+      source: 'COLLECTION',
+      paymentMethod: paymentMethod || 'CASH',
+      description,
+      date: fullDate,
+      createdAt: timestampIso,
+      timestamp: now.getTime(),
+      ...(invoiceId && invoiceId.trim() ? { invoiceNumber: invoiceId.trim().replace(/^#/, '') } : {})
     });
-
-    if (isOnline) {
-        try { 
-          await setDoc(doc(db, 'treasury', tId), cleanDoc(transaction)); 
-        } catch (e) { 
-          handleFirebaseError(e); 
-        }
-    }
   };
 
   const addTransfer = async (data: { branchId?: BranchId; entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod }) => {
@@ -2463,10 +3090,21 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       let treasuryDesc = '';
       let branchId: BranchId = data.branchId || 'MARG';
 
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0]; // HH:mm:ss
+      const timestampIso = now.toISOString();
+      const entryDate = date || now.toISOString().split('T')[0];
+      const fullDate = (entryDate && entryDate.includes(':'))
+        ? entryDate
+        : `${entryDate} ${timeStr}`;
+
+      let entityName = entityCode;
+
       if (entityType === 'CUSTOMER') {
           const c = customers.find(x => x.code === entityCode);
           if (c?.branchId) branchId = c.branchId;
           const customerName = c?.name || entityCode;
+          entityName = customerName;
           const change = type === 'IN' ? amount : -amount;
           const newBalance = (c ? c.balance : 0) + change;
           const customerHistDesc = type === 'IN' 
@@ -2474,8 +3112,16 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               : (notes && notes.trim() ? `صرف لعميل (${notes.trim()})` : 'صرف لعميل');
 
           if (c) {
-              const newHistory = [...(c.history || []), { date, description: customerHistDesc, amount: change }];
-              await updateCustomer(entityCode, { balance: newBalance, history: newHistory });
+              const newHistory = [...(c.history || []), { 
+                id: `trans_${tId}`,
+                transferId: tId,
+                paymentId: tId,
+                date: entryDate, 
+                description: customerHistDesc, 
+                amount: change,
+                type: type === 'IN' ? 'payment' : 'charge'
+              }];
+              await updateCustomer(entityCode, { balance: newBalance, currentBalance: newBalance, history: newHistory });
           }
 
           treasuryDesc = type === 'IN'
@@ -2485,6 +3131,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       } else if (entityType === 'SUPPLIER') {
           const s = suppliers.find(x => x.code === entityCode);
           const supplierName = s?.name || entityCode;
+          entityName = supplierName;
           // OUT: paying supplier reduces our debt to them (+amount)
           // IN: refund from supplier increases liability to us (-amount)
           const change = type === 'OUT' ? amount : -amount;
@@ -2494,7 +3141,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               : (notes && notes.trim() ? `استلام من مورد (${notes.trim()})` : 'استلام من مورد');
 
           if (s) {
-              const newHistory = [...(s.history || []), { date, description: supplierHistDesc, amount: change }];
+              const newHistory = [...(s.history || []), { 
+                id: `trans_${tId}`,
+                transferId: tId,
+                paymentId: tId,
+                date: entryDate, 
+                description: supplierHistDesc, 
+                amount: change 
+              }];
               await updateSupplier(entityCode, { balance: newBalance, history: newHistory });
           }
 
@@ -2505,6 +3159,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       } else if (entityType === 'EMPLOYEE') {
           const e = employees.find(x => x.code === entityCode);
           const employeeName = e?.name || entityCode;
+          entityName = employeeName;
           // OUT: paying advance or salary to employee increases employee debt to us (+amount)
           // IN: employee returns advance (-amount)
           const change = type === 'OUT' ? amount : -amount;
@@ -2514,7 +3169,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               : (notes && notes.trim() ? `استرداد (${notes.trim()})` : 'استرداد سلفة');
 
           if (e) {
-              const newHistory = [...(e.history || []), { date, description: empHistDesc, amount: change }];
+              const newHistory = [...(e.history || []), { 
+                id: `trans_${tId}`,
+                transferId: tId,
+                paymentId: tId,
+                date: entryDate, 
+                description: empHistDesc, 
+                amount: change 
+              }];
               await updateEmployee(entityCode, { balance: newBalance, history: newHistory });
           }
 
@@ -2526,18 +3188,27 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const transaction: TreasuryTransaction = {
           id: tId,
           branchId,
-          date,
+          date: fullDate,
           credit: type === 'IN' ? amount : 0,
           debit: type === 'OUT' ? amount : 0,
           balance: 0,
           paymentMethod: paymentMethod || 'CASH',
-          description: treasuryDesc
+          description: treasuryDesc,
+          type: type === 'IN' ? 'INCOME' : 'EXPENSE',
+          amount,
+          source: 'TRANSFER',
+          createdAt: timestampIso,
+          timestamp: now.getTime(),
+          entityType,
+          entityCode,
+          entityName,
+          transferType: type
       };
       
-      // Optimistic update
+      // Optimistic update: Place immediately at the beginning for real-time descending view
       setTreasury(prev => {
           const withoutThis = prev.filter(t => t.id !== tId);
-          return [...withoutThis, transaction];
+          return [transaction, ...withoutThis];
       });
 
       if (isOnline) {
@@ -2548,6 +3219,96 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
       }
   };
+
+  const deleteTransfer = async (transferId: string): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const target = treasury.find(t => t.id === transferId);
+      if (!target) {
+        return { success: false, message: 'لم يتم العثور على حركة التحويل في سجل الخزنة' };
+      }
+
+      // Determine entity info
+      let entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE' | undefined = target.entityType;
+      let entityCode: string | undefined = target.entityCode;
+
+      if (!entityType) {
+        if (target.description.includes('عميل')) entityType = 'CUSTOMER';
+        else if (target.description.includes('مورد')) entityType = 'SUPPLIER';
+        else if (target.description.includes('موظف')) entityType = 'EMPLOYEE';
+      }
+
+      if (!entityCode) {
+        const codeMatch = target.description.match(/\(([^)]+)\)/);
+        if (codeMatch && codeMatch[1]) {
+          entityCode = codeMatch[1].trim();
+        }
+      }
+
+      const amount = target.amount || (target.credit > 0 ? target.credit : target.debit);
+      const isIncoming = target.transferType === 'IN' || target.credit > 0;
+
+      // 1. Revert entity ledger & balance
+      if (entityType === 'CUSTOMER' && entityCode) {
+        const c = customers.find(x => x.code === entityCode);
+        if (c) {
+          // In customer: IN added amount to balance, OUT subtracted amount
+          const reverseChange = isIncoming ? -amount : amount;
+          const newBalance = (c.balance || 0) + reverseChange;
+          const newHistory = (c.history || []).filter(h => {
+            if ((h as any).transferId === transferId) return false;
+            if ((h as any).paymentId === transferId) return false;
+            if (h.id === `trans_${transferId}`) return false;
+            return true;
+          });
+          await updateCustomer(entityCode, { balance: newBalance, currentBalance: newBalance, history: newHistory });
+        }
+      } else if (entityType === 'SUPPLIER' && entityCode) {
+        const s = suppliers.find(x => x.code === entityCode);
+        if (s) {
+          // In supplier: OUT added amount to balance, IN subtracted amount
+          const reverseChange = isIncoming ? amount : -amount;
+          const newBalance = (s.balance || 0) + reverseChange;
+          const newHistory = (s.history || []).filter(h => {
+            if ((h as any).transferId === transferId) return false;
+            if ((h as any).paymentId === transferId) return false;
+            if (h.id === `trans_${transferId}`) return false;
+            return true;
+          });
+          await updateSupplier(entityCode, { balance: newBalance, history: newHistory });
+        }
+      } else if (entityType === 'EMPLOYEE' && entityCode) {
+        const e = employees.find(x => x.code === entityCode);
+        if (e) {
+          // In employee: OUT added amount to balance, IN subtracted amount
+          const reverseChange = isIncoming ? amount : -amount;
+          const newBalance = (e.balance || 0) + reverseChange;
+          const newHistory = (e.history || []).filter(h => {
+            if ((h as any).transferId === transferId) return false;
+            if ((h as any).paymentId === transferId) return false;
+            if (h.id === `trans_${transferId}`) return false;
+            return true;
+          });
+          await updateEmployee(entityCode, { balance: newBalance, history: newHistory });
+        }
+      }
+
+      // 2. Remove from Treasury
+      setTreasury(prev => prev.filter(t => t.id !== transferId));
+      if (isOnline) {
+        try {
+          await deleteDoc(doc(db, 'treasury', transferId));
+        } catch (e) {
+          handleFirebaseError(e);
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('Error deleting transfer:', err);
+      return { success: false, message: err?.message || 'حدث خطأ أثناء حذف التحويل' };
+    }
+  };
+
 
   const addExpense = async (data: { branchId?: BranchId; name: string; amount: number; date: string; notes?: string }) => {
      const tId = `EX${Date.now()}`;
@@ -3750,9 +4511,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
-      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deduplicateProducts, deletePurchase,
+      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deduplicateProducts, deletePurchase, deletePurchaseInvoice: deletePurchase,
       transferStockBetweenBranches, transferCashBetweenBranches,
-      addPurchase, updatePurchase, finalizePurchasePrice, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, deleteSupplier, addEmployee, updateEmployee, deleteEmployee,
+      addPurchase, updatePurchase, finalizePurchasePrice, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, deleteTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, deleteSupplier, addEmployee, updateEmployee, deleteEmployee,
+      deleteCustomerLedgerMovement, deleteSupplierLedgerMovement,
       restoreEntity, permanentDeleteEntity,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury, updateSystemLogo,
       exportBackupData, restoreBackupData,

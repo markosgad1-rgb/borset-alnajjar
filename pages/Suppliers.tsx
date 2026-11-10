@@ -9,6 +9,7 @@ import { Purchase, CustomerHistory, ManualSupplierTransaction } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
 
@@ -17,8 +18,9 @@ export const Suppliers: React.FC = () => {
     suppliers, addSupplier, updateSupplier, deleteSupplier,
     clearLedger, cleanCorruptedSupplierOpeningBalance,
     currentUser, purchases, printLedger, printPurchaseInvoice,
-    companyLogo
+    companyLogo, deleteSupplierLedgerMovement, deletePurchase
   } = useERP();
+  const { confirm: askConfirm, notify, dialog } = useDialog();
 
   const canDeleteSuppliers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteSuppliers);
   
@@ -186,7 +188,7 @@ export const Suppliers: React.FC = () => {
         handleCloseModal();
       } else {
         if (suppliers.some(s => s.code === formData.code)) {
-          alert('هذا الكود مستخدم بالفعل لمورد آخر!');
+          notify('هذا الكود مستخدم بالفعل لمورد آخر!');
           return;
         }
 
@@ -218,7 +220,7 @@ export const Suppliers: React.FC = () => {
     e.stopPropagation();
     if (!supplier) return;
     if (!canDeleteSuppliers) {
-      alert('ليس لديك صلاحية حذف الموردين');
+      notify('ليس لديك صلاحية حذف الموردين');
       return;
     }
 
@@ -251,9 +253,9 @@ export const Suppliers: React.FC = () => {
         }
         setSupplierToDelete(null);
         setDeleteWarningReason(null);
-        alert(`تم حذف المورد (${supplierToDelete.name}) بنجاح.`);
+        notify(`تم حذف المورد (${supplierToDelete.name}) بنجاح.`);
       } else {
-        alert(res.message || 'حدث خطأ أثناء محاولة حذف المورد.');
+        notify(res.message || 'حدث خطأ أثناء محاولة حذف المورد.');
       }
     } finally {
       setIsDeletingSupplier(false);
@@ -265,7 +267,7 @@ export const Suppliers: React.FC = () => {
     const success = await clearLedger('SUPPLIER', selectedSupplier.code);
     if (success) {
       setShowClearLedgerConfirm(false);
-      alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+      notify("تم تصفير الحساب ومسح السجلات بنجاح.");
     }
   };
 
@@ -277,7 +279,7 @@ export const Suppliers: React.FC = () => {
       if (p) {
         setViewPurchase(p);
       } else {
-        alert("عذراً، تفاصيل هذه الفاتورة غير متوفرة في السجل العام (ربما تم حذفها).");
+        notify("عذراً، تفاصيل هذه الفاتورة غير متوفرة في السجل العام (ربما تم حذفها).");
       }
     }
   };
@@ -395,19 +397,19 @@ export const Suppliers: React.FC = () => {
   const handleSaveManualTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSupplier) {
-      alert('يرجى اختيار مورد أولاً');
+      notify('يرجى اختيار مورد أولاً');
       return;
     }
 
     const amt = parseNumberFromCommas(manualTxAmount);
     if (isNaN(amt) || amt <= 0) {
-      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      notify('يرجى إدخال مبلغ صحيح أكبر من الصفر');
       return;
     }
 
     const desc = manualTxDescription.trim();
     if (!desc) {
-      alert('يرجى كتابة البيان / سبب الحركة (مثال: سداد للمورد، خصم خاص، بضاعة بدون فاتورة، مرتجع بضاعة)');
+      notify('يرجى كتابة البيان / سبب الحركة (مثال: سداد للمورد، خصم خاص، بضاعة بدون فاتورة، مرتجع بضاعة)');
       return;
     }
 
@@ -450,9 +452,43 @@ export const Suppliers: React.FC = () => {
       handleCloseManualTxModal();
     } catch (error) {
       console.error('Error saving supplier manual transaction:', error);
-      alert('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
+      notify('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
     } finally {
       setIsSavingManualTx(false);
+    }
+  };
+
+  const handleDeleteSupplierMovement = async (row: any) => {
+    if (!selectedSupplier) return;
+
+    try {
+      const pId = row.purchaseId || (row.ref && row.ref.startsWith('R') ? row.ref : (row.ref && row.ref !== '-' && row.ref !== 'تسوية' ? row.ref : null));
+      if (pId) {
+        if (!await askConfirm(`هذا السطر تابع لفاتورة مشتريات #${pId}.\n\nهل تريد حذف فاتورة المشتريات بالكامل وخصم أصنافها من المخزن وعكس أثرها من الحساب والخزينة؟`)) {
+          return;
+        }
+        await deletePurchase(pId);
+        notify(`تم حذف فاتورة المشتريات #${pId} بنجاح وتحديث حساب المورد والمخزن.`);
+        return;
+      }
+
+      const desc = row.description || row.itemName || 'حركة كشف حساب المورد';
+      const confirmMsg = `هل أنت متأكد من حذف حركة (${desc}) بتاريخ ${row.date} نهائياً؟\n\nسيتم عكس أثرها من الرصيد والخزينة وإعادة احتساب الرصيد التراكمي للمورد.`;
+      if (!await askConfirm(confirmMsg)) return;
+
+      await deleteSupplierLedgerMovement(selectedSupplier.code, {
+        date: row.date,
+        description: row.description || row.itemName,
+        credit: row.credit,
+        debit: row.debit,
+        amount: row.amount,
+        isOpeningBalance: row.isOpeningBalance
+      });
+
+      notify("تم حذف الحركة بنجاح وتحديث الرصيد.");
+    } catch (err: any) {
+      console.error('Error deleting supplier movement:', err);
+      notify("حدث خطأ أثناء حذف الحركة: " + (err?.message || ""));
     }
   };
 
@@ -535,7 +571,7 @@ export const Suppliers: React.FC = () => {
     } catch (err: any) {
       console.error("WhatsApp share failed:", err);
       if (syncTab && !syncTab.closed) syncTab.close();
-      alert("حدث خطأ أثناء إعداد ومشاركة كشف الحساب.");
+      notify("حدث خطأ أثناء إعداد ومشاركة كشف الحساب.");
     } finally {
       if (safetyTimer) clearTimeout(safetyTimer);
       setIsSharingPdf(false);
@@ -1101,13 +1137,14 @@ export const Suppliers: React.FC = () => {
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن</th>
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين</th>
                         <th className="p-2 text-center w-24 border-l border-gray-200 bg-gray-50">الرصيد</th>
-                        <th className="p-2 text-center w-24 min-w-[90px] whitespace-nowrap">الحالة</th>
+                        <th className="p-2 text-center w-24 min-w-[90px] whitespace-nowrap border-l border-gray-200">الحالة</th>
+                        <th className="p-2 text-center w-12 whitespace-nowrap">إجراءات</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-150">
                       {itemizedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={11} className="p-8 text-center text-gray-400 font-medium">
+                          <td colSpan={12} className="p-8 text-center text-gray-400 font-medium">
                             لا توجد حركات مسجلة لهذا المورد حتى الآن
                           </td>
                         </tr>
@@ -1186,7 +1223,7 @@ export const Suppliers: React.FC = () => {
                             <td className="p-2 text-center font-mono font-black text-gray-900 bg-gray-50/60 border-l border-gray-100" dir="ltr">
                               {parseFloat(String(r.runningBalance || 0)).toLocaleString()}
                             </td>
-                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px]">
+                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px] border-l border-gray-100">
                               {r.status === 'له (علينا)' ? (
                                 <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200 text-[11px] font-bold">
                                   له (علينا)
@@ -1200,6 +1237,56 @@ export const Suppliers: React.FC = () => {
                                   متزن
                                 </span>
                               )}
+                            </td>
+                            <td className="p-2 text-center" key={`action_${r.id || idx}`}>
+                              <button 
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  
+                                  const invNo = r.invoiceNo || r.invoiceId || r.purchaseId || (r.ref && r.ref.startsWith('R') ? r.ref : (r.ref && r.ref !== '-' && r.ref !== 'تسوية' ? r.ref : null));
+                                  if (invNo) {
+                                    if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
+                                      return;
+                                    }
+                                    try {
+                                      await deletePurchase(invNo);
+                                      notify(`تم حذف الفاتورة رقم (${invNo}) بالكامل وإعادة الأصناف للمخزن وضبط الحساب والخزينة.`);
+                                    } catch (err: any) {
+                                      console.error(err);
+                                      notify("حدث خطأ أثناء حذف الفاتورة: " + (err?.message || ""));
+                                    }
+                                    return;
+                                  }
+
+                                  const isPayment = r.type === 'payment' || r.paymentId || (r.itemName && r.itemName.includes('دفعة')) || (r.description && (r.description.includes('سداد') || r.description.includes('دفع') || r.description.includes('صرف')));
+                                  const confirmMsg = isPayment 
+                                    ? `هل أنت متأكد من حذف هذه الدفعة بقيمة (${(r.debit || Math.abs(r.amount || 0)).toLocaleString()} ج.م) بتاريخ ${r.date} وعكس أثرها من الخزينة؟`
+                                    : `هل أنت متأكد من حذف حركة (${r.description || r.itemName}) بتاريخ ${r.date} نهائياً وإعادة احتساب الرصيد؟`;
+
+                                  if (!await askConfirm(confirmMsg)) return;
+
+                                  try {
+                                    await deleteSupplierLedgerMovement(selectedSupplier.code, {
+                                      date: r.date,
+                                      description: r.description || r.itemName,
+                                      credit: r.credit,
+                                      debit: r.debit,
+                                      amount: r.amount,
+                                      isOpeningBalance: r.isOpeningBalance
+                                    });
+                                    notify("تم حذف المعاملة بنجاح وتحديث الرصيد والخزينة.");
+                                  } catch (err: any) {
+                                    console.error(err);
+                                    notify("حدث خطأ أثناء حذف المعاملة: " + (err?.message || ""));
+                                  }
+                                }}
+                                className="p-1.5 rounded hover:bg-red-50 text-red-500 hover:text-red-700 transition-colors inline-flex items-center justify-center cursor-pointer"
+                                title="حذف هذا السطر"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
+                              </button>
                             </td>
                           </tr>
                         ))
@@ -1225,7 +1312,7 @@ export const Suppliers: React.FC = () => {
                           <td className="p-2 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
                             {calculateSupplierBalance.toLocaleString()}
                           </td>
-                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[90px]">
+                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[90px] border-l border-gray-200">
                             {calculateSupplierBalance < 0 ? (
                               <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 font-black">
                                 له (علينا)
@@ -1240,6 +1327,7 @@ export const Suppliers: React.FC = () => {
                               </span>
                             )}
                           </td>
+                          <td className="p-2 text-center"></td>
                         </tr>
                       </tfoot>
                     )}
@@ -1255,12 +1343,13 @@ export const Suppliers: React.FC = () => {
                         <th className="p-2.5 text-center w-28 text-green-700 bg-green-50/50 border-l border-gray-200">دائن</th>
                         <th className="p-2.5 text-center w-28 text-red-700 bg-red-50/50 border-l border-gray-200">مدين</th>
                         <th className="p-2.5 text-center w-28 border-l border-gray-200">الرصيد</th>
-                        <th className="p-2.5 text-center w-24 min-w-[90px] whitespace-nowrap">الحالة</th>
+                        <th className="p-2.5 text-center w-24 min-w-[90px] whitespace-nowrap border-l border-gray-200">الحالة</th>
+                        <th className="p-2.5 text-center w-14">إجراءات</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {itemizedRows.length === 0 ? (
-                        <tr><td colSpan={7} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
+                        <tr><td colSpan={8} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
                       ) : (
                         itemizedRows.map((r, idx) => (
                           <tr key={idx} className={`hover:bg-gray-50 ${r.isOpeningBalance ? 'bg-amber-50/70 border-r-4 border-r-amber-500 font-bold' : ''}`}>
@@ -1296,7 +1385,7 @@ export const Suppliers: React.FC = () => {
                             <td className="p-2.5 text-center font-black font-mono text-gray-900 border-l border-gray-100" dir="ltr">
                               {parseFloat(String(r.runningBalance || 0)).toLocaleString()}
                             </td>
-                            <td className="p-2.5 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px]">
+                            <td className="p-2.5 text-center font-bold text-[11px] whitespace-nowrap min-w-[90px] border-l border-gray-100">
                               {r.status === 'له (علينا)' ? (
                                 <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-green-700 bg-green-50 px-2 py-0.5 rounded border border-green-200 text-[11px] font-bold">
                                   له (علينا)
@@ -1310,6 +1399,56 @@ export const Suppliers: React.FC = () => {
                                   متزن
                                 </span>
                               )}
+                            </td>
+                            <td className="p-2.5 text-center" key={`action_${r.id || idx}`}>
+                              <button 
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  
+                                  const invNo = r.invoiceNo || r.invoiceId || r.purchaseId || (r.ref && r.ref.startsWith('R') ? r.ref : (r.ref && r.ref !== '-' && r.ref !== 'تسوية' ? r.ref : null));
+                                  if (invNo) {
+                                    if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
+                                      return;
+                                    }
+                                    try {
+                                      await deletePurchase(invNo);
+                                      notify(`تم حذف الفاتورة رقم (${invNo}) بالكامل وإعادة الأصناف للمخزن وضبط الحساب والخزينة.`);
+                                    } catch (err: any) {
+                                      console.error(err);
+                                      notify("حدث خطأ أثناء حذف الفاتورة: " + (err?.message || ""));
+                                    }
+                                    return;
+                                  }
+
+                                  const isPayment = r.type === 'payment' || r.paymentId || (r.itemName && r.itemName.includes('دفعة')) || (r.description && (r.description.includes('سداد') || r.description.includes('دفع') || r.description.includes('صرف')));
+                                  const confirmMsg = isPayment 
+                                    ? `هل أنت متأكد من حذف هذه الدفعة بقيمة (${(r.debit || Math.abs(r.amount || 0)).toLocaleString()} ج.م) بتاريخ ${r.date} وعكس أثرها من الخزينة؟`
+                                    : `هل أنت متأكد من حذف حركة (${r.description || r.itemName}) بتاريخ ${r.date} نهائياً وإعادة احتساب الرصيد؟`;
+
+                                  if (!await askConfirm(confirmMsg)) return;
+
+                                  try {
+                                    await deleteSupplierLedgerMovement(selectedSupplier.code, {
+                                      date: r.date,
+                                      description: r.description || r.itemName,
+                                      credit: r.credit,
+                                      debit: r.debit,
+                                      amount: r.amount,
+                                      isOpeningBalance: r.isOpeningBalance
+                                    });
+                                    notify("تم حذف المعاملة بنجاح وتحديث الرصيد والخزينة.");
+                                  } catch (err: any) {
+                                    console.error(err);
+                                    notify("حدث خطأ أثناء حذف المعاملة: " + (err?.message || ""));
+                                  }
+                                }}
+                                className="p-1.5 rounded hover:bg-red-50 text-red-500 hover:text-red-700 transition-colors inline-flex items-center justify-center cursor-pointer"
+                                title="حذف هذا السطر"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
+                              </button>
                             </td>
                           </tr>
                         ))
@@ -1770,6 +1909,7 @@ export const Suppliers: React.FC = () => {
         </div>
       )}
 
+      {dialog}
       {/* Consolidated Statement Modal */}
       <ConsolidatedLedgerModal
         isOpen={isConsolidatedModalOpen}

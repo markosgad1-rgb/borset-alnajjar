@@ -3,9 +3,11 @@ import { useERP } from '../context/ERPContext';
 import { Banknote, Save, Search, CheckCircle, AlertCircle, Building2, Wallet, Smartphone, History, Building, MapPin, Check, X } from 'lucide-react';
 import { PaymentMethod, BranchId, BRANCHES, getBranchAreas, Customer } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useDialog } from '../utils/useDialog';
 
 export const Collections: React.FC = () => {
   const { customers, addCollection, treasury } = useERP();
+  const { notify, dialog } = useDialog();
   
   const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
@@ -182,16 +184,34 @@ export const Collections: React.FC = () => {
     }
   };
 
+  // Filter and sort collections strictly descending: newest first
+  const recentCollections = useMemo(() => {
+    return treasury
+      .filter(t => 
+        t.source === 'COLLECTION' || 
+        t.id.startsWith('T_COL_') || 
+        t.description.includes('تحصيل من عميل') || 
+        t.description.includes('تحصيل من العميل') ||
+        t.description.startsWith('تحصيل')
+      )
+      .sort((a, b) => {
+        const timeA = a.timestamp || (a.createdAt ? new Date(a.createdAt).getTime() : (a.date ? new Date(a.date).getTime() : 0));
+        const timeB = b.timestamp || (b.createdAt ? new Date(b.createdAt).getTime() : (b.date ? new Date(b.date).getTime() : 0));
+        if (timeB !== timeA) return timeB - timeA;
+        return (b.date || '').localeCompare(a.date || '');
+      });
+  }, [treasury]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(formData.amount);
 
     if (!formData.customerCode || !formData.customerName) {
-      alert('الرجاء اختيار العميل من القائمة');
+      notify('الرجاء اختيار العميل من القائمة');
       return;
     }
     if (amount <= 0) {
-      alert('الرجاء إدخال مبلغ تحصيل صحيح');
+      notify('الرجاء إدخال مبلغ تحصيل صحيح أكبر من الصفر');
       return;
     }
 
@@ -206,7 +226,7 @@ export const Collections: React.FC = () => {
         notes: formData.notes?.trim() || undefined
       });
 
-      // Reset Form
+      // Immediate Form Reset
       setFormData({
         invoiceId: '',
         customerCode: '',
@@ -218,9 +238,10 @@ export const Collections: React.FC = () => {
       });
       setCustomerSearchText('');
       setCustomerBalance(null);
-      alert('تم حفظ عملية التحصيل بنجاح وتحديث رصيد العميل والخزنة فوراً.');
+      notify('تم حفظ عملية التحصيل بنجاح وتحديث رصيد العميل وسجل الخزنة فوراً.');
     } catch (err: any) {
-      alert('حدث خطأ أثناء حفظ التحصيل: ' + (err?.message || err));
+      console.error(err);
+      notify('حدث خطأ أثناء حفظ التحصيل: ' + (err?.message || err));
     }
   };
 
@@ -607,13 +628,16 @@ export const Collections: React.FC = () => {
           <h3 className="font-bold text-brand-900 flex items-center gap-2">
             <History size={20} className="text-brand-600" />
             سجل عمليات التحصيل الأخيرة المسجلة بالخزنة
+            <span className="px-2 py-0.5 rounded-full bg-brand-200/60 text-brand-800 text-xs font-mono font-bold">
+              ({recentCollections.length})
+            </span>
           </h3>
-          <span className="text-xs text-brand-700 font-bold">
-            محدثة تلقائياً مع الخزنة
+          <span className="text-xs text-brand-700 font-bold bg-white/80 px-2.5 py-1 rounded-md border border-brand-200">
+            محدثة تلقائياً والأحدث دائماً في الأعلى
           </span>
         </div>
         
-        {treasury.filter(t => t.id.startsWith('T_COL_') || t.description.includes('تحصيل من عميل')).length === 0 ? (
+        {recentCollections.length === 0 ? (
           <div className="p-8 text-center text-gray-400">
             <p>لا توجد عمليات تحصيل مسجلة بعد</p>
           </div>
@@ -622,39 +646,42 @@ export const Collections: React.FC = () => {
             <table className="w-full text-right text-sm">
               <thead className="bg-gray-50 text-gray-600 font-bold">
                 <tr>
-                  <th className="p-3">التاريخ</th>
+                  <th className="p-3 w-12 text-center">#</th>
+                  <th className="p-3">التاريخ والوقت</th>
                   <th className="p-3">الحساب / الخزنة</th>
                   <th className="p-3">البيان</th>
                   <th className="p-3 text-emerald-700 font-bold">المبلغ المسدد</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {treasury
-                  .filter(t => t.id.startsWith('T_COL_') || t.description.includes('تحصيل من عميل'))
-                  .slice(-8)
-                  .reverse()
-                  .map((t) => (
-                    <tr key={t.id} className="hover:bg-brand-50/40 transition-colors">
-                      <td className="p-3 text-gray-600 whitespace-nowrap">{t.date}</td>
-                      <td className="p-3">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
-                          t.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 text-green-700 border-green-200' :
-                          t.paymentMethod === 'BANK_MISR' ? 'bg-red-50 text-red-700 border-red-200' :
-                          t.paymentMethod === 'VF_CASH_AYMAN' || t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-100 text-red-800 border-red-200' :
-                          'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        }`}>
-                          {t.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' :
-                           t.paymentMethod === 'BANK_MISR' ? 'بنك مصر' :
-                           t.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون أيمن' :
-                           t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كيرلس' : 'خزنة كاش'}
-                        </span>
-                      </td>
-                      <td className="p-3 text-gray-800 font-medium">{t.description}</td>
-                      <td className="p-3 font-bold text-emerald-600">
-                        {t.credit > 0 ? `${t.credit.toLocaleString()} ج.م` : '-'}
-                      </td>
-                    </tr>
-                  ))}
+                {recentCollections.slice(0, 30).map((t, idx) => (
+                  <tr key={t.id} className="hover:bg-brand-50/40 transition-colors">
+                    <td className="p-3 text-center text-gray-400 font-mono text-xs">{idx + 1}</td>
+                    <td className="p-3 text-gray-600 whitespace-nowrap">
+                      <div className="font-mono font-bold text-xs">{t.date?.split(' ')[0] || t.date}</div>
+                      {t.date?.includes(' ') && (
+                        <div className="text-[10px] text-gray-400 font-mono" dir="ltr">{t.date.split(' ')[1]}</div>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                        t.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 text-green-700 border-green-200' :
+                        t.paymentMethod === 'BANK_MISR' ? 'bg-red-50 text-red-700 border-red-200' :
+                        t.paymentMethod === 'VF_CASH_AYMAN' || t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-100 text-red-800 border-red-200' :
+                        'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      }`}>
+                        {t.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' :
+                         t.paymentMethod === 'BANK_MISR' ? 'بنك مصر' :
+                         t.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون أيمن' :
+                         t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كيرلس' : 'خزنة كاش'}
+                      </span>
+                    </td>
+                    <td className="p-3 text-gray-800 font-medium">{t.description}</td>
+                    <td className="p-3 font-bold text-emerald-600 font-mono text-sm">
+                      {t.credit > 0 ? `${t.credit.toLocaleString()} ج.م` : (t.amount ? `${t.amount.toLocaleString()} ج.م` : '-')}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -672,6 +699,8 @@ export const Collections: React.FC = () => {
           <p>سيتم خصم المبلغ من مديونية العميل وتحديث كشف الحساب تلقائياً.</p>
         </div>
       </div>
+
+      {dialog}
     </div>
   );
 };
