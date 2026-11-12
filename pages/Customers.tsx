@@ -248,8 +248,13 @@ export const Customers: React.FC = () => {
         });
         handleCloseModal();
       } else {
-        if (customers.some(c => c.code === formData.code)) {
-          notify('هذا الكود مستخدم بالفعل لعميل آخر!');
+        const duplicateCustomer = customers.find(c => c.code === formData.code);
+        if (duplicateCustomer) {
+          if (duplicateCustomer.isDeleted) {
+            notify(`هذا الكود (${duplicateCustomer.code}) محجوز لعميل محذوف (${duplicateCustomer.name}) وموجود في سلة المهملات. لإعادة استخدام الكود: افتح سلة المهملات واعمل "حذف نهائي" لهذا العميل، أو اختر كوداً آخر.`);
+          } else {
+            notify('هذا الكود مستخدم بالفعل لعميل آخر!');
+          }
           return;
         }
         const initialHistory: CustomerHistory[] = [];

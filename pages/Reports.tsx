@@ -128,6 +128,7 @@ export const Reports: React.FC = () => {
   // --- Filtered Customers ---
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => {
+      if (c.isDeleted) return false; // deleted customers (in the trash) must not appear in the reports
       const cBranch = c.branchId || 'MARG';
       if (selectedBranch !== 'ALL' && cBranch !== selectedBranch) return false;
 

@@ -95,11 +95,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
         </div>
       )}
       {offlineSaveToast && (
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-sm font-bold px-4 py-3 rounded-xl shadow-2xl z-[60] max-w-[92vw] md:max-w-xl text-center print:hidden" onClick={() => setOfflineSaveToast(null)}>
+        <div className="fixed top-14 md:top-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs md:text-sm font-bold px-3 py-2 md:px-4 md:py-3 rounded-xl shadow-2xl z-[60] max-w-[92vw] md:max-w-xl text-center print:hidden" onClick={() => setOfflineSaveToast(null)}>
           {offlineSaveToast}
         </div>
       )}
-      <div className="fixed bottom-3 left-3 flex flex-col gap-2 z-50 print:hidden pointer-events-none">
+      <div className="fixed bottom-3 left-3 hidden xl:flex flex-col gap-2 z-50 print:hidden pointer-events-none">
         {!netUp && (
           <div className="bg-red-600 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg">
             أوفلاين: لا يوجد إنترنت، الشغل مستمر وسيتم رفع البيانات تلقائياً عند عودة الاتصال
@@ -142,6 +142,20 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
             </button>
           )}
           <h1 className="text-base font-bold truncate">بورصة النجار</h1>
+          {netUp ? (
+            <span className="flex items-center gap-1 bg-green-600/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+              <span className="w-1.5 h-1.5 bg-white rounded-full"></span>متصل
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 animate-pulse">
+              <span className="w-1.5 h-1.5 bg-white rounded-full"></span>أوفلاين
+            </span>
+          )}
+          {pendingWrites > 0 && (
+            <span className="bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+              {netUp ? 'جاري الرفع' : 'لم تُرفع'}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {canManageBackup && (
@@ -275,6 +289,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                 {netUp && (
                   <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-green-200">
                      <Wifi size={12}/> متصل (Online)
+                  </span>
+                )}
+                {pendingWrites > 0 && (
+                  <span className="xl:hidden bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-lg border border-amber-300">
+                     {netUp ? 'جاري رفع البيانات...' : 'بيانات لم تُرفع بعد'}
                   </span>
                 )}
              </div>
