@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
 export const firebaseConfig = {
@@ -21,22 +21,7 @@ export const isFirebaseConfigured = (): boolean => {
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 // Initialize & Export live Firestore instance
-// Offline-first: local persistent cache (works across multiple tabs). Falls back to the
-// default Firestore instance if persistence is unavailable (e.g. private mode / old browser).
-const createDb = () => {
-  try {
-    return initializeFirestore(app, {
-      localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
-        cacheSizeBytes: 200 * 1024 * 1024
-      })
-    });
-  } catch (e) {
-    console.warn('Offline persistence unavailable, using default Firestore:', e);
-    return getFirestore(app);
-  }
-};
-export const db = createDb();
+export const db = getFirestore(app);
 
 // Initialize & Export Auth
 export const auth = getAuth(app);

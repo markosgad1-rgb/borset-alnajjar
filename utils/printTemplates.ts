@@ -485,6 +485,7 @@ export function getLedgerHtml(options: {
   entityCode: string;
   entityPhone?: string;
   type: 'CUSTOMER' | 'SUPPLIER';
+  forWhatsApp?: boolean;
   rows: Array<{
     num: number;
     date: string;
@@ -502,10 +503,12 @@ export function getLedgerHtml(options: {
   finalBalance: number;
   dateRange?: { from?: string; to?: string };
 }, companyLogo?: string): string {
-  const { title, entityName, entityCode, entityPhone, type, rows, totalDebit, totalCredit, finalBalance, dateRange } = options;
+  const { title, entityName, entityCode, entityPhone, type, rows, totalDebit, totalCredit, finalBalance, dateRange, forWhatsApp } = options;
   const isCustomer = type === 'CUSTOMER';
+  const isSupplierWhatsApp = type === 'SUPPLIER' && Boolean(forWhatsApp);
   const colDebitTitle = 'مدين';
   const colCreditTitle = 'دائن';
+  const numCellExtraStyle = isSupplierWhatsApp ? 'font-size: 12px; white-space: nowrap;' : '';
 
   return `
     <div style="font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; width: 860px; padding: 20px; background: #fff; color: #000; box-sizing: border-box; margin: 0 auto;">
@@ -544,16 +547,29 @@ export function getLedgerHtml(options: {
 
       <table>
         <colgroup>
-          <col style="width: 4.5%;">   <!-- م -->
-          <col style="width: 14%;">    <!-- التاريخ -->
-          <col style="width: 9%;">     <!-- الفاتورة -->
-          <col style="width: 24.5%;">  <!-- الصنف / البيان -->
-          <col style="width: 7%;">     <!-- الكمية -->
-          <col style="width: 7%;">     <!-- السعر -->
-          <col style="width: 10%;">    <!-- الإجمالي -->
-          <col style="width: 8%;">     <!-- مدين -->
-          <col style="width: 8%;">     <!-- دائن -->
-          <col style="width: 8%;">     <!-- الرصيد -->
+          ${isSupplierWhatsApp ? `
+            <col style="width: 4%;">     <!-- م -->
+            <col style="width: 12.5%;">  <!-- التاريخ -->
+            <col style="width: 8%;">     <!-- الفاتورة -->
+            <col style="width: 19.5%;">  <!-- الصنف / البيان -->
+            <col style="width: 6.5%;">   <!-- الكمية -->
+            <col style="width: 6.5%;">   <!-- السعر -->
+            <col style="width: 10%;">    <!-- الإجمالي -->
+            <col style="width: 10%;">    <!-- مدين -->
+            <col style="width: 10%;">    <!-- دائن -->
+            <col style="width: 13%;">    <!-- الرصيد -->
+          ` : `
+            <col style="width: 4.5%;">   <!-- م -->
+            <col style="width: 14%;">    <!-- التاريخ -->
+            <col style="width: 9%;">     <!-- الفاتورة -->
+            <col style="width: 24.5%;">  <!-- الصنف / البيان -->
+            <col style="width: 7%;">     <!-- الكمية -->
+            <col style="width: 7%;">     <!-- السعر -->
+            <col style="width: 10%;">    <!-- الإجمالي -->
+            <col style="width: 8%;">     <!-- مدين -->
+            <col style="width: 8%;">     <!-- دائن -->
+            <col style="width: 8%;">     <!-- الرصيد -->
+          `}
         </colgroup>
         <thead>
           <tr>
@@ -570,20 +586,25 @@ export function getLedgerHtml(options: {
           </tr>
         </thead>
         <tbody>
-          ${rows.map(r => `
+          ${rows.map(r => {
+            const cleanItemName = (r.itemName || '')
+              .replace(/فودافون كاش أيمن/g, 'فودافون كاش')
+              .replace(/فودافون كاش كيرلس/g, 'فودافون كاش');
+
+            return `
             <tr>
               <td><div class="cell-content">${r.num}</div></td>
               <td dir="ltr"><div class="cell-content" dir="ltr">${r.date}</div></td>
               <td><div class="cell-content">${r.ref ? (r.ref.includes('تسوية') ? 'تسوية' : r.ref) : '-'}</div></td>
-              <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.itemName}</div></td>
+              <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${cleanItemName}</div></td>
               <td><div class="cell-content">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</div></td>
               <td><div class="cell-content">${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</div></td>
               <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</div></td>
-              <td style="color: #b91c1c; font-weight: 900;"><div class="cell-content" style="color: #b91c1c; font-weight: 900;">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</div></td>
-              <td style="color: #15803d; font-weight: 900;"><div class="cell-content" style="color: #15803d; font-weight: 900;">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</div></td>
-              <td style="font-weight: 900;" dir="ltr"><div class="cell-content" style="font-weight: 900;" dir="ltr">${r.runningBalance.toLocaleString()}</div></td>
+              <td style="color: #b91c1c; font-weight: 900; ${numCellExtraStyle}"><div class="cell-content" style="color: #b91c1c; font-weight: 900; ${numCellExtraStyle}">${r.debit > 0 ? r.debit.toLocaleString() : '-'}</div></td>
+              <td style="color: #15803d; font-weight: 900; ${numCellExtraStyle}"><div class="cell-content" style="color: #15803d; font-weight: 900; ${numCellExtraStyle}">${r.credit > 0 ? r.credit.toLocaleString() : '-'}</div></td>
+              <td style="font-weight: 900; ${numCellExtraStyle}" dir="ltr"><div class="cell-content" style="font-weight: 900; ${numCellExtraStyle}" dir="ltr">${r.runningBalance.toLocaleString()}</div></td>
             </tr>
-          `).join('')}
+          `;}).join('')}
         </tbody>
       </table>
 

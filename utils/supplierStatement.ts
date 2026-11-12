@@ -22,6 +22,13 @@ export interface SupplierStatementResult {
  */
 export const formatSupplierMovementDesc = (desc: string): string => {
   if (!desc) return '';
+
+  const normalizeVfCash = (text: string): string => {
+    return text
+      .replace(/فودافون كاش أيمن/g, 'فودافون كاش')
+      .replace(/فودافون كاش كيرلس/g, 'فودافون كاش');
+  };
+
   if (
     desc.includes('دفع لـ مورد') || 
     desc.includes('سداد مورد') || 
@@ -30,16 +37,22 @@ export const formatSupplierMovementDesc = (desc: string): string => {
     desc.startsWith('دفع لـ') ||
     desc.startsWith('سداد')
   ) {
+    if (desc.includes('فودافون كاش')) {
+      return 'دفعة (فودافون كاش)';
+    }
+
     const parts = desc.split(' - ');
     if (parts.length > 1) {
-      const last = parts[parts.length - 1].trim();
+      let last = parts[parts.length - 1].trim();
+      last = normalizeVfCash(last);
       if (!last.includes('دفع لـ مورد') && !last.startsWith('فاتورة #') && last !== '') {
         return `دفعة (${last})`;
       }
     }
     return 'دفعة';
   }
-  return desc;
+
+  return normalizeVfCash(desc);
 };
 
 /**
@@ -183,7 +196,7 @@ export function getSupplierStatementTransactions(
         if (m.isOpening) {
           priorBalance += parseFloat(String(m.amount || 0)) || 0;
         } else {
-          const isPurch = m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة');
+          const isPurch = (m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة')) && !m.description.includes('سداد') && !m.description.includes('دفعة');
           const pMatch = m.description.match(/#([A-Za-z0-9-]+)/);
           const pId = pMatch ? pMatch[1].trim() : null;
 
@@ -283,7 +296,7 @@ export function getSupplierStatementTransactions(
       continue;
     }
 
-    const isPurchaseInvoice = m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة');
+    const isPurchaseInvoice = (m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة')) && !m.description.includes('سداد') && !m.description.includes('دفعة');
     const pMatch = m.description.match(/#([A-Za-z0-9-]+)/);
     const pId = pMatch ? pMatch[1].trim() : null;
 

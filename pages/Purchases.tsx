@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator } from 'lucide-react';
-import { InvoiceItem, Purchase, BranchId, BRANCHES } from '../types';
+import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator, Wallet, Building2, Smartphone } from 'lucide-react';
+import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
@@ -22,6 +22,10 @@ export const Purchases: React.FC = () => {
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
   const [isPricePending, setIsPricePending] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Payment State for Purchases
+  const [paidAmountInput, setPaidAmountInput] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
 
   // Current Item State
   const [currentItem, setCurrentItem] = useState<{
@@ -190,9 +194,13 @@ export const Purchases: React.FC = () => {
 
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
   
+  // Payment calculations
+  const paidAmountVal = isPricePending ? 0 : parseNumberFromCommas(paidAmountInput);
+  const remainingOnInvoice = Math.max(0, cartTotal - paidAmountVal);
+
   // Calculate expected new balance for display
   const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, purchases) : 0;
-  const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal);
+  const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal + paidAmountVal);
 
   const handleSaveInvoice = async () => {
     if (isSubmitting) return;
@@ -202,7 +210,7 @@ export const Purchases: React.FC = () => {
       return;
     }
     if (!supplierCode) {
-      if(!confirm("اسم المورد غير مسجل في قاعدة البيانات. هل تريد المتابعة بدون ربط الحساب؟ (لن يظهر في كشف حساب الموردين)")) {
+      if (!await askConfirm("اسم المورد غير مسجل في قاعدة البيانات. هل تريد المتابعة بدون ربط الحساب؟ (لن يظهر في كشف حساب الموردين)")) {
         return;
       }
     }
@@ -217,7 +225,12 @@ export const Purchases: React.FC = () => {
         date: invoiceDate,
         total: isPricePending ? 0 : cartTotal,
         items: cartItems,
-        pricingStatus: isPricePending ? 'PENDING_PRICE' : 'PRICED'
+        pricingStatus: isPricePending ? 'PENDING_PRICE' : 'PRICED',
+        paid: isPricePending ? 0 : paidAmountVal,
+        paidAmount: isPricePending ? 0 : paidAmountVal,
+        remaining: isPricePending ? 0 : remainingOnInvoice,
+        remainingAmount: isPricePending ? 0 : remainingOnInvoice,
+        paymentMethod: (!isPricePending && paidAmountVal > 0) ? paymentMethod : undefined
       });
 
       setCartItems([]);
@@ -225,8 +238,12 @@ export const Purchases: React.FC = () => {
       setSupplierCode('');
       setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
       setIsPricePending(false);
+      setPaidAmountInput('');
+      setPaymentMethod('CASH');
       notify(isPricePending 
         ? "تم حفظ فاتورة المشتريات (سعر معلّق) وإدخال الكميات للمخزن بنجاح دون قيد مديونية للمورد لحين تحديد السعر." 
+        : paidAmountVal > 0
+        ? `تم حفظ فاتورة المشتريات وسداد دفعة قدرها ${paidAmountVal.toLocaleString()} ج.م وتحديث الخزينة وحساب المورد بنجاح.`
         : "تم حفظ فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح."
       );
     } finally {
@@ -686,16 +703,195 @@ export const Purchases: React.FC = () => {
           </table>
         </div>
 
+        {/* Payment Section (سداد دفعة مسددة للمورد) */}
+        {!isPricePending && (
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-4 mb-6 space-y-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-emerald-200/60 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-600 text-white rounded-lg">
+                  <Wallet size={18} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-emerald-950">سداد دفعة للمورد (دفعة مسددة)</h4>
+                  <p className="text-xs text-emerald-700">اترك المبلغ 0 إذا كانت الفاتورة آجلة بالكامل دون سداد فوري</p>
+                </div>
+              </div>
+              {cartTotal > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPaidAmountInput(formatWithCommas(cartTotal))}
+                    className="text-xs px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 font-bold rounded-lg border border-emerald-300 transition-colors shadow-xs cursor-pointer"
+                  >
+                    سداد كامل الفاتورة ({cartTotal.toLocaleString()} ج.م)
+                  </button>
+                  {paidAmountVal > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPaidAmountInput('')}
+                      className="text-xs px-2 py-1 bg-white hover:bg-red-50 text-red-600 font-bold rounded-lg border border-red-200 transition-colors cursor-pointer"
+                    >
+                      تصفير
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+              {/* Paid Input */}
+              <div className="md:col-span-5 space-y-1.5">
+                <label className="block text-xs font-bold text-emerald-900">
+                  المدفوع للمورد (دفعة مسددة)
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    dir="ltr"
+                    className="w-full p-2.5 pl-10 border-2 border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-lg text-center font-mono bg-white text-emerald-950 shadow-inner"
+                    placeholder="0"
+                    value={paidAmountInput}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setPaidAmountInput(val))}
+                  />
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs pointer-events-none">
+                    ج.م
+                  </span>
+                </div>
+                {paidAmountVal > 0 && (
+                  <p className="text-[11px] font-bold text-emerald-700 flex justify-between px-1">
+                    <span>المبلغ المسدد:</span>
+                    <span dir="ltr">{paidAmountVal.toLocaleString()} ج.م</span>
+                  </p>
+                )}
+              </div>
+
+              {/* Remaining On Invoice */}
+              <div className="md:col-span-7 bg-white p-3 rounded-lg border border-emerald-200 flex items-center justify-between shadow-xs">
+                <div>
+                  <span className="block text-xs text-gray-500 font-bold">المتبقي من الفاتورة (آجل)</span>
+                  <span className={`text-xl font-bold font-mono ${remainingOnInvoice > 0 ? 'text-amber-700' : 'text-emerald-600'}`} dir="ltr">
+                    {remainingOnInvoice.toLocaleString()} ج.م
+                  </span>
+                </div>
+                <div className="text-left text-xs">
+                  <span className="text-gray-500 block">إجمالي الفاتورة</span>
+                  <span className="font-bold font-mono text-gray-700" dir="ltr">{cartTotal.toLocaleString()} ج.م</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Payment Method Selector (visible when paidAmountVal > 0) */}
+            {paidAmountVal > 0 && (
+              <div className="pt-2 border-t border-emerald-200/60 space-y-2 animate-fade-in">
+                <label className="block text-xs font-bold text-emerald-900 mb-2">
+                  طريقة الدفع (الخزنة / الحساب المنصرف منه)
+                </label>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="CASH" 
+                      checked={paymentMethod === 'CASH'}
+                      onChange={() => setPaymentMethod('CASH')} 
+                      className="hidden"
+                    />
+                    <Wallet size={20} />
+                    <span className="font-bold text-xs">خزنة (كاش)</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="BANK_AHLY" 
+                      checked={paymentMethod === 'BANK_AHLY'}
+                      onChange={() => setPaymentMethod('BANK_AHLY')} 
+                      className="hidden"
+                    />
+                    <Building2 size={20} />
+                    <span className="font-bold text-xs">البنك الأهلي</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="BANK_MISR" 
+                      checked={paymentMethod === 'BANK_MISR'}
+                      onChange={() => setPaymentMethod('BANK_MISR')} 
+                      className="hidden"
+                    />
+                    <Building2 size={20} />
+                    <span className="font-bold text-xs">بنك مصر</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'VF_CASH_AYMAN' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="VF_CASH_AYMAN" 
+                      checked={paymentMethod === 'VF_CASH_AYMAN'}
+                      onChange={() => setPaymentMethod('VF_CASH_AYMAN')} 
+                      className="hidden"
+                    />
+                    <Smartphone size={20} />
+                    <span className="font-bold text-xs">فودافون كاش أيمن</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="VF_CASH_KYRILLOS" 
+                      checked={paymentMethod === 'VF_CASH_KYRILLOS'}
+                      onChange={() => setPaymentMethod('VF_CASH_KYRILLOS')} 
+                      className="hidden"
+                    />
+                    <Smartphone size={20} />
+                    <span className="font-bold text-xs">فودافون كاش كيرلس</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Footer & Save */}
         <div className="flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
-           <div className="text-base md:text-lg font-bold text-gray-700 flex items-center gap-2">
-             <span>إجمالي الفاتورة:</span>
-             {isPricePending ? (
-               <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 border border-amber-300 text-amber-900 rounded-lg text-sm font-black">
-                 <Clock size={16} /> سعر معلّق (سيحدد لاحقاً)
-               </span>
-             ) : (
-               <span className="text-2xl text-brand-700 mr-2">{cartTotal.toLocaleString()} ج.م</span>
+           <div className="text-base md:text-lg font-bold text-gray-700 flex flex-wrap items-center gap-3">
+             <div className="flex items-center gap-2">
+               <span>إجمالي الفاتورة:</span>
+               {isPricePending ? (
+                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 border border-amber-300 text-amber-900 rounded-lg text-sm font-black">
+                   <Clock size={16} /> سعر معلّق (سيحدد لاحقاً)
+                 </span>
+               ) : (
+                 <span className="text-2xl text-brand-700 mr-1">{cartTotal.toLocaleString()} ج.م</span>
+               )}
+             </div>
+
+             {!isPricePending && paidAmountVal > 0 && (
+               <div className="flex items-center gap-2 text-xs md:text-sm bg-white px-3 py-1.5 rounded-lg border border-emerald-200 shadow-2xs">
+                 <span className="text-emerald-700 font-bold">مسدد: {paidAmountVal.toLocaleString()} ج.م</span>
+                 <span className="text-gray-300">|</span>
+                 <span className="text-amber-700 font-bold">متبقي: {remainingOnInvoice.toLocaleString()} ج.م</span>
+               </div>
              )}
            </div>
            <button 
@@ -706,7 +902,7 @@ export const Purchases: React.FC = () => {
                isPricePending 
                  ? 'bg-amber-600 hover:bg-amber-700' 
                  : 'bg-green-600 hover:bg-green-700'
-             } text-white px-8 py-3 rounded-lg font-bold shadow-md flex items-center gap-2 transition-all disabled:opacity-50`}
+             } text-white px-8 py-3 rounded-lg font-bold shadow-md flex items-center gap-2 transition-all disabled:opacity-50 cursor-pointer`}
            >
              <Save size={20} />
              <span>{isSubmitting ? 'جاري الحفظ...' : isPricePending ? 'حفظ الفاتورة (سعر معلّق)' : 'حفظ الفاتورة'}</span>
@@ -1004,7 +1200,7 @@ export const Purchases: React.FC = () => {
                            safetyTimer = setTimeout(() => {
                              setSharingPdfId(null);
                            }, 3500);
-                           await sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo, supp?.phone);
+                           await sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo || undefined, supp?.phone ? supp.phone : undefined);
                          } catch (err: any) {
                            if (
                              err?.name !== 'AbortError' &&
@@ -1026,8 +1222,18 @@ export const Purchases: React.FC = () => {
                        <MessageCircle size={18}/> {sharingPdfId === viewPurchase.id ? 'جاري تجهيز PDF...' : 'مشاركة PDF واتساب'}
                     </button>
                  </div>
-                 <div className="text-xl font-bold bg-gray-100 px-4 py-2 rounded text-brand-800">
-                   الإجمالي: {viewPurchase.total.toLocaleString()} ج.م
+                 <div className="flex items-center gap-2">
+                   {Boolean(viewPurchase.paid && viewPurchase.paid > 0) && (
+                     <div className="text-xs sm:text-sm font-bold bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg text-emerald-800">
+                       مسدد: {viewPurchase.paid?.toLocaleString()} ج.م
+                       {viewPurchase.remaining !== undefined && (
+                         <span className="mr-2 text-amber-700">| متبقي: {viewPurchase.remaining?.toLocaleString()} ج.م</span>
+                       )}
+                     </div>
+                   )}
+                   <div className="text-xl font-bold bg-gray-100 px-4 py-2 rounded text-brand-800">
+                     الإجمالي: {viewPurchase.total.toLocaleString()} ج.م
+                   </div>
                  </div>
                </div>
             </div>
@@ -1202,8 +1408,8 @@ export const Purchases: React.FC = () => {
                             dir="ltr"
                             placeholder="أدخل السعر"
                             className="w-full p-2 border-2 border-amber-300 rounded-lg text-center font-bold font-mono text-sm focus:border-amber-500 outline-none bg-amber-50/40"
-                            value={item.price === 0 || item.price === '' ? '' : formatWithCommas(item.price)}
-                            onChange={e => handleNumericChangeWithCommas(e.target.value, val => handlePricingPriceChange(idx, val))}
+                            value={!item.price ? '' : formatWithCommas(item.price)}
+                            onChange={e => handleNumericChangeWithCommas(e.target.value, val => handlePricingPriceChange(idx, parseNumberFromCommas(val)))}
                           />
                         </td>
                         <td className="p-3 text-center font-bold text-emerald-600 font-mono text-sm">

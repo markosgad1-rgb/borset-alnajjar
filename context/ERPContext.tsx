@@ -259,6 +259,15 @@ export const cleanDoc = <T = any>(obj: T): T => {
   return obj;
 };
 
+// Helper to convert PaymentMethod enum to friendly Arabic name
+export const getPaymentMethodArabicName = (method?: PaymentMethod): string => {
+  if (method === 'BANK_AHLY') return 'البنك الأهلي';
+  if (method === 'BANK_MISR') return 'بنك مصر';
+  if (method === 'VF_CASH_AYMAN') return 'فودافون كاش أيمن';
+  if (method === 'VF_CASH_KYRILLOS') return 'فودافون كاش كيرلس';
+  return 'خزنة (كاش)';
+};
+
 // Helper to patch user objects with granular permissions
 const sanitizeUser = (user: any): User => {
   if (!user) return user;
@@ -664,6 +673,90 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser));
   }, [users, products, customers, suppliers, employees, purchases, invoices, treasury, currentUser, companyLogo, isOnline]);
+
+  // Self-healing: Ensure any purchase invoice with a recorded down payment (paid > 0) is reflected in supplier history & treasury
+  useEffect(() => {
+    if (purchases.length === 0 || suppliers.length === 0) return;
+
+    purchases.forEach(p => {
+      const paidAmt = Number(p.paidAmount ?? p.paid ?? 0);
+      if (paidAmt > 0 && p.pricingStatus !== 'PENDING_PRICE' && p.supplierCode) {
+        const cleanSuppCode = p.supplierCode.trim().toUpperCase();
+        const supplier = suppliers.find(s => s.code?.trim().toUpperCase() === cleanSuppCode);
+        if (supplier) {
+          const pId = String(p.id).trim().replace(/^#/, '');
+          const hasPaymentInHistory = (supplier.history || []).some(h => 
+            h.description && 
+            h.description.includes(pId) && 
+            (h.description.includes('سداد') || h.description.includes('دفعة'))
+          );
+
+          if (!hasPaymentInHistory) {
+            const pMethod: PaymentMethod = p.paymentMethod || 'CASH';
+            const pLabel = getPaymentMethodArabicName(pMethod);
+            const tId = `T_PUR_${pId}_${Date.now()}`;
+            const paymentEntry: CustomerHistory = {
+              id: `pay_pur_${pId}_${Date.now()}`,
+              date: p.date,
+              description: `سداد دفعة فاتورة مشتريات #${pId} - ${pLabel}`,
+              amount: paidAmt,
+              purchaseId: pId,
+              invoiceId: pId,
+              invoiceNo: pId,
+              paymentId: tId,
+              type: 'payment'
+            };
+
+            const updatedHistory = [...(supplier.history || []), paymentEntry];
+            const updatedBal = calculateSupplierBalance({ ...supplier, history: updatedHistory }, purchases);
+
+            setSuppliers(prev => prev.map(s => s.code?.trim().toUpperCase() === cleanSuppCode ? { ...s, balance: updatedBal, history: updatedHistory } : s));
+
+            if (isOnline) {
+              updateDoc(doc(db, 'suppliers', supplier.code), {
+                balance: updatedBal,
+                history: updatedHistory
+              }).catch(() => {});
+            }
+          }
+
+          // Check if Treasury has the transaction
+          const hasTreasuryTx = treasury.some(t => 
+            (t.invoiceNumber && String(t.invoiceNumber).replace(/^#/, '') === pId) ||
+            (t.id && t.id.includes(pId)) ||
+            (t.description && t.description.includes(pId) && (t.description.includes('سداد دفعة') || t.description.includes('مشتريات') || t.description.includes('فاتورة')))
+          );
+
+          if (!hasTreasuryTx) {
+            const pMethod: PaymentMethod = p.paymentMethod || 'CASH';
+            const tId = `T_PUR_${pId}_${Date.now()}`;
+            const newTx: TreasuryTransaction = {
+              id: tId,
+              branchId: p.branchId || 'MARG',
+              invoiceNumber: pId,
+              date: p.date,
+              credit: 0,
+              debit: paidAmt,
+              balance: 0,
+              paymentMethod: pMethod,
+              description: `سداد دفعة للمورد ${supplier.name} - فاتورة #${pId}`,
+              type: 'EXPENSE',
+              amount: paidAmt,
+              source: 'PURCHASE',
+              createdAt: p.date,
+              timestamp: Date.now()
+            };
+
+            setTreasury(prev => [newTx, ...prev]);
+
+            if (isOnline) {
+              setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {});
+            }
+          }
+        }
+      }
+    });
+  }, [purchases, suppliers.length, treasury.length, isOnline]);
 
 
 
@@ -1300,29 +1393,94 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addPurchase = async (purchaseData: Omit<Purchase, 'previousBalance' | 'currentBalance'>) => {
     // Determine ID if not provided (fallback, but page should provide)
     const id = purchaseData.id || `R${Date.now()}`;
+    const cleanId = String(id).trim().replace(/^#/, '');
     const isPendingPrice = purchaseData.pricingStatus === 'PENDING_PRICE';
     
-    // Calculate balances snapshot
-    const supplier = suppliers.find(s => s.code === purchaseData.supplierCode);
+    const rawPaid = Number(purchaseData.paidAmount ?? purchaseData.paid ?? 0);
+    const paidAmount = isPendingPrice ? 0 : Math.max(0, isNaN(rawPaid) ? 0 : rawPaid);
+    const remainingAmount = isPendingPrice ? 0 : Math.max(0, purchaseData.total - paidAmount);
+    const paymentMethod: PaymentMethod = purchaseData.paymentMethod || 'CASH';
+    const paymentMethodLabel = getPaymentMethodArabicName(paymentMethod);
+
+    const cleanSupplierCode = (purchaseData.supplierCode || '').trim();
+    const supplier = suppliers.find(s => s.code?.trim().toUpperCase() === cleanSupplierCode.toUpperCase());
+    const supplierDisplayName = supplier?.name || purchaseData.supplierName || cleanSupplierCode;
     const prevBalance = supplier ? supplier.balance : 0;
-    // If pending price, supplier balance is unchanged until price is finalized
-    // Buying goods increases liability to supplier:
-    const newBalance = isPendingPrice ? prevBalance : (prevBalance - purchaseData.total);
 
     const pBranch: BranchId = purchaseData.branchId || 'MARG';
-    const nowIso = new Date().toISOString();
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+    const nowIso = now.toISOString();
+    const entryDate = purchaseData.date || nowIso.split('T')[0];
+    const fullDate = entryDate.includes(':') ? entryDate : `${entryDate} ${timeStr}`;
+
+    const newHistoryEntries: CustomerHistory[] = [];
+    
+    // 1. Invoice entry (positive amount represents invoice total)
+    const invoiceDesc = isPendingPrice 
+      ? `استلام بضاعة (سعر معلّق) #${cleanId}` 
+      : (paidAmount > 0
+          ? `فاتورة مشتريات #${cleanId} (إجمالي ${purchaseData.total.toLocaleString()})`
+          : `فاتورة مشتريات #${cleanId}`);
+
+    newHistoryEntries.push({
+      id: `pur_${cleanId}_${now.getTime()}`,
+      date: purchaseData.date,
+      description: invoiceDesc,
+      amount: isPendingPrice ? 0 : purchaseData.total,
+      purchaseId: cleanId,
+      invoiceId: cleanId,
+      invoiceNo: cleanId,
+      type: 'invoice'
+    });
+
+    // 2. Immediate payment entry if paidAmount > 0
+    const tId = `T_PUR_${cleanId}_${now.getTime()}`;
+    if (!isPendingPrice && paidAmount > 0) {
+      newHistoryEntries.push({
+        id: `pay_pur_${cleanId}_${now.getTime()}`,
+        date: purchaseData.date,
+        description: `سداد دفعة فاتورة مشتريات #${cleanId} - ${paymentMethodLabel}`,
+        amount: paidAmount, // Positive amount for debit (سدادات)
+        purchaseId: cleanId,
+        invoiceId: cleanId,
+        invoiceNo: cleanId,
+        paymentId: tId,
+        type: 'payment'
+      });
+    }
+
+    const updatedHistory = supplier 
+      ? [...(supplier.history || []), ...newHistoryEntries] 
+      : newHistoryEntries;
+    
+    const updatedPurchasesList = [
+      { ...purchaseData, id: cleanId, branchId: pBranch, total: isPendingPrice ? 0 : purchaseData.total, paid: paidAmount, paidAmount, remaining: remainingAmount, remainingAmount },
+      ...purchases.filter(p => String(p.id).trim().replace(/^#/, '') !== cleanId)
+    ];
+
+    // Calculate accurate balance matching the supplier statement Single Source of Truth
+    const accurateBalance = supplier 
+      ? calculateSupplierBalance({ ...supplier, history: updatedHistory }, updatedPurchasesList)
+      : (isPendingPrice ? 0 : -purchaseData.total + paidAmount);
+
     const newPurchase: Purchase = { 
       ...purchaseData, 
-      id,
+      id: cleanId,
       branchId: pBranch,
       pricingStatus: isPendingPrice ? 'PENDING_PRICE' : 'PRICED',
+      paid: paidAmount,
+      paidAmount: paidAmount,
+      remaining: remainingAmount,
+      remainingAmount: remainingAmount,
+      ...(paidAmount > 0 ? { paymentMethod } : {}),
       previousBalance: prevBalance, 
-      currentBalance: newBalance,
+      currentBalance: accurateBalance,
       createdAt: (purchaseData as any).createdAt || nowIso
     };
     
     // Optimistic local state update for instant UI feedback
-    setPurchases(prev => [newPurchase, ...prev.filter(p => p.id !== newPurchase.id)]);
+    setPurchases(prev => [newPurchase, ...prev.filter(p => String(p.id).trim().replace(/^#/, '') !== cleanId)]);
     
     setProducts(prev => {
       let tempProducts = [...prev];
@@ -1357,22 +1515,42 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
 
     setSuppliers(prev => prev.map(s => {
-       if (s.code === purchaseData.supplierCode) {
-         const desc = isPendingPrice 
-           ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
-           : `فاتورة مشتريات #${newPurchase.id}`;
+       if (s.code?.trim().toUpperCase() === cleanSupplierCode.toUpperCase()) {
          return { 
            ...s, 
-           balance: newBalance, 
-           history: [...(s.history || []), { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }]
+           balance: accurateBalance, 
+           history: updatedHistory
          };
        }
        return s;
     }));
 
+    // Treasury update if paidAmount > 0
+    let treasuryTransaction: TreasuryTransaction | null = null;
+    if (!isPendingPrice && paidAmount > 0) {
+      treasuryTransaction = {
+        id: tId,
+        branchId: pBranch,
+        invoiceNumber: cleanId,
+        date: fullDate,
+        credit: 0,
+        debit: paidAmount,
+        balance: 0,
+        paymentMethod,
+        description: `سداد دفعة للمورد ${supplierDisplayName} - فاتورة #${cleanId}`,
+        type: 'EXPENSE',
+        amount: paidAmount,
+        source: 'PURCHASE',
+        createdAt: nowIso,
+        timestamp: now.getTime()
+      };
+
+      setTreasury(prev => [treasuryTransaction!, ...prev.filter(t => t.id !== tId && t.invoiceNumber !== cleanId)]);
+    }
+
     if (isOnline) {
       try {
-        await setDoc(doc(db, 'purchases', newPurchase.id), newPurchase);
+        await setDoc(doc(db, 'purchases', cleanId), cleanDoc(newPurchase));
         
         for (const item of purchaseData.items) {
           const productRef = doc(db, 'products', item.itemCode);
@@ -1387,15 +1565,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
             const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
             const newQty = newMarg + newNozha;
-            // Only recompute avgCost if item has a known price > 0
             const newAvgCost = item.price > 0 && newQty > 0
               ? (totalOldValue + totalNewValue) / newQty 
               : (product.avgCost || 0);
-            await updateDoc(productRef, { quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvgCost });
+            await updateDoc(productRef, cleanDoc({ quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvgCost }));
           } else {
             const newMarg = pBranch === 'MARG' ? item.quantity : 0;
             const newNozha = pBranch === 'NOZHA' ? item.quantity : 0;
-            await setDoc(productRef, { 
+            await setDoc(productRef, cleanDoc({ 
               code: item.itemCode, 
               name: item.itemName, 
               quantity: item.quantity, 
@@ -1403,19 +1580,25 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               quantityNozha: newNozha,
               avgCost: item.price || 0, 
               price: (item.price || 0) * 1.2 
-            });
+            }));
           }
         }
 
-        const supplierRef = doc(db, 'suppliers', purchaseData.supplierCode);
-        const supplierSnap = await getDoc(supplierRef);
-        if (supplierSnap.exists()) {
-          const s = supplierSnap.data() as Supplier;
-          const desc = isPendingPrice 
-            ? `استلام بضاعة (سعر معلّق) #${newPurchase.id}` 
-            : `فاتورة مشتريات #${newPurchase.id}`;
-          const newHistory = [...(s.history || []), { date: purchaseData.date, description: desc, amount: isPendingPrice ? 0 : purchaseData.total }];
-          await updateDoc(supplierRef, { balance: newBalance, history: newHistory });
+        if (cleanSupplierCode) {
+          const supplierRef = doc(db, 'suppliers', supplier?.code || cleanSupplierCode);
+          const supplierSnap = await getDoc(supplierRef);
+          if (supplierSnap.exists()) {
+            const s = supplierSnap.data() as Supplier;
+            const currentDocHistory = Array.isArray(s.history) ? s.history : [];
+            const docCleanHistory = currentDocHistory.filter(h => !h.description?.includes(`#${cleanId}`));
+            const docUpdatedHistory = [...docCleanHistory, ...newHistoryEntries];
+            const docAccurateBal = calculateSupplierBalance({ ...s, history: docUpdatedHistory }, updatedPurchasesList);
+            await updateDoc(supplierRef, cleanDoc({ balance: docAccurateBal, history: docUpdatedHistory }));
+          }
+        }
+
+        if (treasuryTransaction) {
+          await setDoc(doc(db, 'treasury', tId), cleanDoc(treasuryTransaction));
         }
       } catch (e) { handleFirebaseError(e); }
     }
@@ -2121,14 +2304,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         handleFirebaseError(e);
       }
     }
-  };
-
-  const getPaymentMethodArabicName = (method?: PaymentMethod): string => {
-    if (method === 'BANK_AHLY') return 'البنك الأهلي';
-    if (method === 'BANK_MISR') return 'بنك مصر';
-    if (method === 'VF_CASH_AYMAN') return 'فودافون كاش أيمن';
-    if (method === 'VF_CASH_KYRILLOS') return 'فودافون كاش كيرلس';
-    return 'خزنة (كاش)';
   };
 
   const addInvoice = async (invoiceData: {
