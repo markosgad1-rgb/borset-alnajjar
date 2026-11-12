@@ -7,9 +7,11 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
 import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
+import { useNetworkStatus } from '../utils/useNetworkStatus';
 
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
+  const netUp = useNetworkStatus();
   
   const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
 
@@ -77,9 +79,25 @@ export const Sales: React.FC = () => {
   useBackHandler(() => setShowSuccessModal(false), showSuccessModal, 'sales-success-modal');
 
   // Auto-generate Invoice ID
+  // Online: same numbering as before (N001, N002, ...).
+  // Offline: a short per-device letter tag is appended (e.g. N046-KQ) so two laptops working
+  // offline can never create the same invoice number and overwrite each other on sync.
+  const getDeviceTag = () => {
+    try {
+      let t = localStorage.getItem('erp_device_tag');
+      if (!t) {
+        const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+        t = L[Math.floor(Math.random() * L.length)] + L[Math.floor(Math.random() * L.length)];
+        localStorage.setItem('erp_device_tag', t);
+      }
+      return t;
+    } catch { return 'XX'; }
+  };
+
   useEffect(() => {
+    const suffix = netUp ? '' : `-${getDeviceTag()}`;
     if (invoices.length === 0) {
-      setInvoiceId('N001');
+      setInvoiceId(`N001${suffix}`);
     } else {
       const nIds = invoices
         .filter(inv => inv.id.startsWith('N'))
@@ -88,12 +106,12 @@ export const Sales: React.FC = () => {
 
       if (nIds.length > 0) {
         const maxId = Math.max(...nIds);
-        setInvoiceId(`N${(maxId + 1).toString().padStart(3, '0')}`);
+        setInvoiceId(`N${(maxId + 1).toString().padStart(3, '0')}${suffix}`);
       } else {
-        setInvoiceId('N001');
+        setInvoiceId(`N001${suffix}`);
       }
     }
-  }, [invoices]);
+  }, [invoices, netUp]);
 
   // Calculated Totals
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);

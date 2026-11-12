@@ -8,15 +8,12 @@ import {
   getFirestore, 
   collection, 
   doc, 
-  setDoc, 
-  getDoc, 
   getDocs, 
-  updateDoc, 
-  deleteDoc, 
   onSnapshot, 
   query, 
   orderBy 
 } from 'firebase/firestore';
+import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
 
 interface ERPContextType {
   products: Product[];

@@ -1,10 +1,12 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2 } from 'lucide-react';
 import { PageView, UserPermissions } from '../types';
 import { useERP } from '../context/ERPContext';
 import { BackupModal } from './BackupModal';
 import { useBackHandler } from '../utils/backNavigation';
+import { useNetworkStatus, usePendingWrites, usePersistenceOk } from '../utils/useNetworkStatus';
+import { onOfflineSave } from '../utils/connectionStatus';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -16,6 +18,30 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const { currentUser, logout, isOnline, permissionError, purchases } = useERP();
+  const netUp = useNetworkStatus();
+  const pendingWrites = usePendingWrites();
+  const persistenceOk = usePersistenceOk();
+  const [offlineSaveToast, setOfflineSaveToast] = useState<string | null>(null);
+
+  // Tell the user when something was saved only on this device (offline)
+  useEffect(() => {
+    let t: any;
+    const off = onOfflineSave((name) => {
+      const what = name === 'invoices' ? 'الفاتورة' : name === 'purchases' ? 'فاتورة المشتريات' : 'العملية';
+      setOfflineSaveToast(`⚠️ أنت الآن في وضع أوفلاين! تم حفظ ${what} على جهازك فقط، وستُرفع تلقائياً عند عودة الإنترنت. لا تمسح بيانات المتصفح ولا تغلق البرنامج قبل أن يتحول المؤشر إلى أخضر (متصل).`);
+      clearTimeout(t);
+      t = setTimeout(() => setOfflineSaveToast(null), 12000);
+    });
+    return () => { off(); clearTimeout(t); };
+  }, []);
+
+  // Warn before closing the page while some data is not uploaded yet
+  useEffect(() => {
+    if (pendingWrites <= 0) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [pendingWrites]);
   
   const canManageBackup = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
 
@@ -63,6 +89,28 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-brand-50 print:bg-white print:block">
+      {!persistenceOk && (
+        <div className="fixed top-0 left-0 right-0 bg-red-700 text-white text-sm font-bold p-2 z-50 text-center print:hidden">
+          ⚠️ هذا المتصفح لا يحفظ البيانات على الجهاز (غالباً وضع التصفح الخاص). لا تعتمد على العمل أوفلاين هنا، واستخدم نافذة عادية.
+        </div>
+      )}
+      {offlineSaveToast && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-sm font-bold px-4 py-3 rounded-xl shadow-2xl z-[60] max-w-[92vw] md:max-w-xl text-center print:hidden" onClick={() => setOfflineSaveToast(null)}>
+          {offlineSaveToast}
+        </div>
+      )}
+      <div className="fixed bottom-3 left-3 flex flex-col gap-2 z-50 print:hidden pointer-events-none">
+        {!netUp && (
+          <div className="bg-red-600 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg">
+            أوفلاين: لا يوجد إنترنت، الشغل مستمر وسيتم رفع البيانات تلقائياً عند عودة الاتصال
+          </div>
+        )}
+        {pendingWrites > 0 && (
+          <div className="bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg">
+            {netUp ? 'جاري رفع البيانات...' : 'بيانات محفوظة على الجهاز ولم تُرفع بعد'}
+          </div>
+        )}
+      </div>
       {/* Error Banner for Permissions */}
       {permissionError && (
         <div className="fixed top-0 left-0 right-0 bg-red-600 text-white p-4 z-50 text-center shadow-xl animate-bounce-in print:hidden">
@@ -122,15 +170,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           <div className="flex items-center gap-2 min-w-0 lg:block">
             <h1 className="text-base lg:text-lg xl:text-xl font-black text-white tracking-wide lg:tracking-wider truncate">بورصة النجار</h1>
             <div className="flex items-center gap-1 lg:gap-1.5 bg-brand-900/60 py-0.5 px-2 lg:py-1 lg:px-3 rounded-full border border-brand-700/40 shrink-0 lg:mt-2 lg:mx-auto lg:w-fit">
-              {isOnline ? (
+              {netUp ? (
                 <>
                   <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-green-500 rounded-full animate-pulse"></div>
                   <span className="text-[10px] lg:text-xs text-green-300 font-bold">متصل (أونلاين)</span>
                 </>
               ) : (
                 <>
-                  <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-gray-400 rounded-full"></div>
-                  <span className="text-[10px] lg:text-xs text-gray-400 font-bold">محلي (أوفلاين)</span>
+                  <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-[10px] lg:text-xs text-red-400 font-bold">غير متصل (أوفلاين)</span>
                 </>
               )}
             </div>
@@ -219,12 +267,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                 <h2 className="text-xl font-bold text-brand-900">
                   {navItems.find(i => i.id === activePage)?.label}
                 </h2>
-                {!isOnline && (
-                  <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-amber-200">
+                {!netUp && (
+                  <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-red-300">
                      <WifiOff size={12}/> وضع غير متصل (Offline)
                   </span>
                 )}
-                {isOnline && (
+                {netUp && (
                   <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-green-200">
                      <Wifi size={12}/> متصل (Online)
                   </span>
