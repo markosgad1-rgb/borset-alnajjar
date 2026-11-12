@@ -1698,152 +1698,278 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updatePurchase = async (oldPurchase: Purchase, newPurchaseData: Purchase) => {
-    const balanceChange = newPurchaseData.total - oldPurchase.total; 
-
-    // Optimistically update local state immediately
-    setPurchases(prev => prev.map(p => p.id === oldPurchase.id ? newPurchaseData : p));
+    const cleanId = String(newPurchaseData.id || oldPurchase.id).trim().replace(/^#/, '');
+    const cleanSupplierCode = (newPurchaseData.supplierCode || oldPurchase.supplierCode || '').trim();
     
-    setSuppliers(prev => prev.map(s => {
-      if(s.code === oldPurchase.supplierCode) {
-        const cleanHistory = (s.history || []).filter(h => 
-          !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
-          !h.description.includes(`تعديل فاتورة مشتريات #${newPurchaseData.id}`)
-        );
-        const pPattern = `#${oldPurchase.id}`;
-        const hasExisting = cleanHistory.some(h => h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات'));
-        const newDesc = `فاتورة مشتريات #${newPurchaseData.id}`;
+    // Normalize amounts
+    const rawPaid = newPurchaseData.paidAmount ?? newPurchaseData.paid ?? 0;
+    const newPaidAmount = Math.max(0, typeof rawPaid === 'number' ? rawPaid : (Number(rawPaid) || 0));
+    const newTotal = Number(newPurchaseData.total) || 0;
+    const newRemainingAmount = Math.max(0, newTotal - newPaidAmount);
+    const newPaymentMethod: PaymentMethod = newPaidAmount > 0 
+      ? (newPurchaseData.paymentMethod || oldPurchase.paymentMethod || 'CASH') 
+      : (oldPurchase.paymentMethod || 'CASH');
+    const paymentMethodLabel = getPaymentMethodArabicName(newPaymentMethod);
 
-        let newHistory;
-        if (hasExisting) {
-          newHistory = cleanHistory.map(h => {
-            if (h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات')) {
-              return {
-                ...h,
-                date: newPurchaseData.date,
-                description: newDesc,
-                amount: newPurchaseData.total
-              };
-            }
-            return h;
-          });
-        } else {
-          newHistory = [...cleanHistory, {
+    const supplierObj = suppliers.find(s => s.code?.trim().toUpperCase() === cleanSupplierCode.toUpperCase());
+    const supplierDisplayName = supplierObj?.name || newPurchaseData.supplierName || oldPurchase.supplierName || cleanSupplierCode;
+    const pBranch: BranchId = newPurchaseData.branchId || oldPurchase.branchId || 'MARG';
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+    const nowIso = now.toISOString();
+    const entryDate = newPurchaseData.date || nowIso.split('T')[0];
+    const fullDate = entryDate.includes(':') ? entryDate : `${entryDate} ${timeStr}`;
+
+    const finalNewPurchase: Purchase = {
+      ...newPurchaseData,
+      id: cleanId,
+      branchId: pBranch,
+      total: newTotal,
+      paid: newPaidAmount,
+      paidAmount: newPaidAmount,
+      remaining: newRemainingAmount,
+      remainingAmount: newRemainingAmount,
+      paymentMethod: newPaidAmount > 0 ? newPaymentMethod : undefined
+    };
+
+    // 1. Update Purchases in local state
+    setPurchases(prev => prev.map(p => {
+      const pId = String(p.id).trim().replace(/^#/, '');
+      return pId === cleanId ? finalNewPurchase : p;
+    }));
+
+    // 2. Update Supplier in local state
+    let updatedSupplierHistory: CustomerHistory[] = [];
+    let accurateSupplierBal = 0;
+
+    setSuppliers(prev => prev.map(s => {
+      if (s.code?.trim().toUpperCase() === cleanSupplierCode.toUpperCase()) {
+        const history = s.history || [];
+        const isInvoiceEntry = (h: CustomerHistory) => {
+          const desc = h.description || '';
+          const rawDesc = h.rawDescription || '';
+          const matchesId = h.purchaseId === cleanId || h.invoiceId === cleanId || h.invoiceNo === cleanId || desc.includes(`#${cleanId}`) || rawDesc.includes(`#${cleanId}`);
+          const isNotPayment = h.type !== 'payment' && !desc.includes('سداد') && !desc.includes('دفعة');
+          return Boolean(matchesId && isNotPayment);
+        };
+
+        const isPaymentEntry = (h: CustomerHistory) => {
+          const desc = h.description || '';
+          const rawDesc = h.rawDescription || '';
+          const matchesId = h.purchaseId === cleanId || h.invoiceId === cleanId || h.invoiceNo === cleanId || desc.includes(`#${cleanId}`) || rawDesc.includes(`#${cleanId}`);
+          const isPay = h.type === 'payment' || desc.includes('سداد') || desc.includes('دفعة');
+          return Boolean(matchesId && isPay);
+        };
+
+        const otherEntries = history.filter(h => !isInvoiceEntry(h) && !isPaymentEntry(h));
+        const existingInv = history.find(isInvoiceEntry);
+        const existingPay = history.find(isPaymentEntry);
+
+        const invoiceDesc = newPaidAmount > 0
+          ? `فاتورة مشتريات #${cleanId} (إجمالي ${newTotal.toLocaleString()})`
+          : `فاتورة مشتريات #${cleanId}`;
+
+        const updatedInvoiceEntry: CustomerHistory = {
+          id: existingInv?.id || `pur_${cleanId}_${Date.now()}`,
+          date: newPurchaseData.date,
+          description: invoiceDesc,
+          amount: newTotal,
+          purchaseId: cleanId,
+          invoiceId: cleanId,
+          invoiceNo: cleanId,
+          type: 'invoice'
+        };
+
+        let updatedPaymentEntry: CustomerHistory | null = null;
+        if (newPaidAmount > 0) {
+          const tId = existingPay?.paymentId || `T_PUR_${cleanId}_${Date.now()}`;
+          updatedPaymentEntry = {
+            id: existingPay?.id || `pay_pur_${cleanId}_${Date.now()}`,
             date: newPurchaseData.date,
-            description: newDesc,
-            amount: newPurchaseData.total
-          }];
+            description: `سداد دفعة فاتورة مشتريات #${cleanId} - ${paymentMethodLabel}`,
+            amount: newPaidAmount,
+            purchaseId: cleanId,
+            invoiceId: cleanId,
+            invoiceNo: cleanId,
+            paymentId: tId,
+            type: 'payment'
+          };
         }
+
+        const newHistoryList = [
+          ...otherEntries,
+          updatedInvoiceEntry,
+          ...(updatedPaymentEntry ? [updatedPaymentEntry] : [])
+        ];
+
+        const updatedPurchasesList = purchases.map(p => {
+          const pId = String(p.id).trim().replace(/^#/, '');
+          return pId === cleanId ? finalNewPurchase : p;
+        });
+
+        const accurateBal = calculateSupplierBalance({ ...s, history: newHistoryList }, updatedPurchasesList);
+
+        updatedSupplierHistory = newHistoryList;
+        accurateSupplierBal = accurateBal;
 
         return {
           ...s,
-          balance: s.balance - balanceChange,
-          history: newHistory
+          balance: accurateBal,
+          history: newHistoryList
         };
       }
       return s;
     }));
 
+    // 3. Update Treasury in local state
+    let finalTreasuryTx: TreasuryTransaction | null = null;
+
+    setTreasury(prev => {
+      const isLinkedTreasuryTx = (t: TreasuryTransaction) => {
+        const inv = String(t.invoiceNumber || '').trim().replace(/^#/, '');
+        if (inv === cleanId) return true;
+        if (t.id && t.id.includes(cleanId) && (t.source === 'PURCHASE' || (t.description && t.description.includes(cleanId)))) return true;
+        if (t.description && (t.description.includes(`#${cleanId}`) || (cleanId.length >= 3 && t.description.includes(cleanId))) && (t.description.includes('سداد') || t.description.includes('دفعة') || t.description.includes('مشتريات') || t.source === 'PURCHASE')) return true;
+        return false;
+      };
+
+      const existingTx = prev.find(isLinkedTreasuryTx);
+
+      if (newPaidAmount > 0) {
+        const tId = existingTx?.id || `T_PUR_${cleanId}_${Date.now()}`;
+        finalTreasuryTx = {
+          id: tId,
+          branchId: pBranch,
+          invoiceNumber: cleanId,
+          date: fullDate,
+          credit: 0,
+          debit: newPaidAmount,
+          balance: 0,
+          paymentMethod: newPaymentMethod,
+          description: `سداد دفعة للمورد ${supplierDisplayName} - فاتورة #${cleanId}`,
+          type: 'EXPENSE',
+          amount: newPaidAmount,
+          source: 'PURCHASE',
+          createdAt: existingTx?.createdAt || nowIso,
+          timestamp: existingTx?.timestamp || now.getTime()
+        };
+
+        const remainingTreasury = prev.filter(t => !isLinkedTreasuryTx(t));
+        return [finalTreasuryTx, ...remainingTreasury];
+      } else {
+        return prev.filter(t => !isLinkedTreasuryTx(t));
+      }
+    });
+
+    // 4. Update Inventory in local state
     setProducts(prev => {
       let tempProducts = [...prev];
-      oldPurchase.items.forEach(item => {
+      // Revert old purchase items
+      (oldPurchase.items || []).forEach(item => {
         const idx = tempProducts.findIndex(p => p.code === item.itemCode);
         if (idx >= 0) {
           const p = tempProducts[idx];
-          const currentVal = p.quantity * p.avgCost;
+          const currentVal = (p.quantity || 0) * (p.avgCost || 0);
           const oldVal = item.quantity * item.price;
-          const revQty = p.quantity - item.quantity;
-          const revAvg = revQty > 0 ? (currentVal - oldVal) / revQty : 0;
-          tempProducts[idx] = { ...p, quantity: revQty, avgCost: revAvg };
+          const revQty = (p.quantity || 0) - item.quantity;
+          const revAvg = revQty > 0 ? Math.max(0, (currentVal - oldVal) / revQty) : 0;
+          const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+          const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+          const newMarg = pBranch === 'MARG' ? Math.max(0, oldMarg - item.quantity) : oldMarg;
+          const newNozha = pBranch === 'NOZHA' ? Math.max(0, oldNozha - item.quantity) : oldNozha;
+          tempProducts[idx] = { ...p, quantity: revQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: revAvg };
         }
       });
-      newPurchaseData.items.forEach(item => {
+      // Apply new purchase items
+      (newPurchaseData.items || []).forEach(item => {
         const idx = tempProducts.findIndex(p => p.code === item.itemCode);
         if (idx >= 0) {
           const p = tempProducts[idx];
-          const currentVal = p.quantity * p.avgCost;
-          const newVal = item.quantity * item.price;
-          const newQty = p.quantity + item.quantity;
-          const newAvg = newQty > 0 ? (currentVal + newVal) / newQty : 0;
-          tempProducts[idx] = { ...p, quantity: newQty, avgCost: newAvg };
+          const currentVal = (p.quantity || 0) * (p.avgCost || 0);
+          const newVal = item.price > 0 ? (item.quantity * item.price) : 0;
+          const newQty = (p.quantity || 0) + item.quantity;
+          const newAvg = item.price > 0 && newQty > 0 ? (currentVal + newVal) / newQty : (p.avgCost || 0);
+          const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+          const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+          const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+          const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+          tempProducts[idx] = { ...p, quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvg };
         }
       });
       return tempProducts;
     });
 
+    // 5. Firestore Synchronization
     if (isOnline) {
       try {
-        await setDoc(doc(db, 'purchases', oldPurchase.id), newPurchaseData);
+        await setDoc(doc(db, 'purchases', cleanId), cleanDoc(finalNewPurchase));
 
-        const supplierRef = doc(db, 'suppliers', oldPurchase.supplierCode);
-        const supplierSnap = await getDoc(supplierRef);
-        if (supplierSnap.exists()) {
-          const s = supplierSnap.data() as Supplier;
-          const newBalance = s.balance - balanceChange;
-          
-          const cleanHistory = (s.history || []).filter(h => 
-            !h.description.includes(`تعديل فاتورة مشتريات #${oldPurchase.id}`) &&
-            !h.description.includes(`تعديل فاتورة مشتريات #${newPurchaseData.id}`)
-          );
-          const pPattern = `#${oldPurchase.id}`;
-          const hasExisting = cleanHistory.some(h => h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات'));
-          const newDesc = `فاتورة مشتريات #${newPurchaseData.id}`;
-
-          let newHistory;
-          if (hasExisting) {
-            newHistory = cleanHistory.map(h => {
-              if (h.description.includes(pPattern) && h.description.includes('فاتورة مشتريات')) {
-                return {
-                  ...h,
-                  date: newPurchaseData.date,
-                  description: newDesc,
-                  amount: newPurchaseData.total
-                };
-              }
-              return h;
-            });
-          } else {
-            newHistory = [...cleanHistory, {
-              date: newPurchaseData.date,
-              description: newDesc,
-              amount: newPurchaseData.total
-            }];
-          }
-
-          await updateDoc(supplierRef, cleanDoc({ balance: newBalance, history: newHistory }));
+        if (cleanSupplierCode) {
+          const supplierRef = doc(db, 'suppliers', cleanSupplierCode);
+          await updateDoc(supplierRef, cleanDoc({ balance: accurateSupplierBal, history: updatedSupplierHistory }));
         }
 
-        // Revert Old Inventory
-        for (const item of oldPurchase.items) {
+        // Treasury in Firestore
+        const qTreasury = query(collection(db, 'treasury'));
+        const snap = await getDocs(qTreasury);
+        const matchedDocs = snap.docs.filter(d => {
+          const data = d.data() as TreasuryTransaction;
+          const inv = String(data.invoiceNumber || '').trim().replace(/^#/, '');
+          const desc = data.description || '';
+          return (
+            inv === cleanId ||
+            (d.id && d.id.includes(cleanId) && data.source === 'PURCHASE') ||
+            (desc.includes(cleanId) && (data.source === 'PURCHASE' || desc.includes('مشتريات') || desc.includes('سداد')))
+          );
+        });
+
+        for (const tDoc of matchedDocs) {
+          await deleteDoc(tDoc.ref).catch(() => {});
+        }
+
+        if (newPaidAmount > 0 && finalTreasuryTx) {
+          await setDoc(doc(db, 'treasury', (finalTreasuryTx as TreasuryTransaction).id), cleanDoc(finalTreasuryTx));
+        }
+
+        // Inventory in Firestore (revert old, apply new)
+        for (const item of (oldPurchase.items || [])) {
           const pRef = doc(db, 'products', item.itemCode);
           const pSnap = await getDoc(pRef);
           if (pSnap.exists()) {
             const p = pSnap.data() as Product;
-            const currentTotalValue = p.quantity * p.avgCost;
-            const oldItemValue = item.quantity * item.price; 
+            const currentTotalValue = (p.quantity || 0) * (p.avgCost || 0);
+            const oldItemValue = item.quantity * item.price;
             const revertedTotalValue = currentTotalValue - oldItemValue;
-            const revertedQty = p.quantity - item.quantity;
-            const revertedAvg = revertedQty > 0 ? revertedTotalValue / revertedQty : 0;
-            
-            await updateDoc(pRef, { quantity: revertedQty, avgCost: revertedAvg });
+            const revertedQty = (p.quantity || 0) - item.quantity;
+            const revertedAvg = revertedQty > 0 ? Math.max(0, revertedTotalValue / revertedQty) : 0;
+            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+            const newMarg = pBranch === 'MARG' ? Math.max(0, oldMarg - item.quantity) : oldMarg;
+            const newNozha = pBranch === 'NOZHA' ? Math.max(0, oldNozha - item.quantity) : oldNozha;
+            await updateDoc(pRef, cleanDoc({ quantity: revertedQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: revertedAvg }));
           }
         }
 
-        // Apply New Inventory
-        for (const item of newPurchaseData.items) {
+        for (const item of (newPurchaseData.items || [])) {
           const pRef = doc(db, 'products', item.itemCode);
-          const pSnap = await getDoc(pRef); 
+          const pSnap = await getDoc(pRef);
           if (pSnap.exists()) {
             const p = pSnap.data() as Product;
-            const currentTotalValue = p.quantity * p.avgCost;
-            const newItemValue = item.quantity * item.price;
+            const currentTotalValue = (p.quantity || 0) * (p.avgCost || 0);
+            const newItemValue = item.price > 0 ? (item.quantity * item.price) : 0;
             const newTotalValue = currentTotalValue + newItemValue;
-            const newQty = p.quantity + item.quantity;
-            const newAvg = newQty > 0 ? newTotalValue / newQty : 0;
-            await updateDoc(pRef, { quantity: newQty, avgCost: newAvg });
+            const newQty = (p.quantity || 0) + item.quantity;
+            const newAvg = item.price > 0 && newQty > 0 ? newTotalValue / newQty : (p.avgCost || 0);
+            const oldMarg = p.quantityMarg !== undefined ? Number(p.quantityMarg) : Number(p.quantity || 0);
+            const oldNozha = p.quantityNozha !== undefined ? Number(p.quantityNozha) : 0;
+            const newMarg = pBranch === 'MARG' ? oldMarg + item.quantity : oldMarg;
+            const newNozha = pBranch === 'NOZHA' ? oldNozha + item.quantity : oldNozha;
+            await updateDoc(pRef, cleanDoc({ quantity: newQty, quantityMarg: newMarg, quantityNozha: newNozha, avgCost: newAvg }));
           }
         }
-
-      } catch (e) { handleFirebaseError(e); }
+      } catch (e) {
+        handleFirebaseError(e);
+      }
     }
   };
 

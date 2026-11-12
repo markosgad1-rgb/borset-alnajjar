@@ -58,6 +58,13 @@ export const Purchases: React.FC = () => {
   const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
   const [editNewItem, setEditNewItem] = useState<{ code: string, quantity: number | '', price: number | '' }>({ code: '', quantity: '', price: '' });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editPaidAmountInput, setEditPaidAmountInput] = useState('');
+  const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>('CASH');
+
+  // Edit Modal Calculated Values
+  const editTotal = editItems.reduce((sum, item) => sum + item.total, 0);
+  const editPaidVal = parseNumberFromCommas(editPaidAmountInput);
+  const editRemaining = Math.max(0, editTotal - editPaidVal);
 
   // Pricing Modal State for Pending Invoices
   const [pricingPurchase, setPricingPurchase] = useState<Purchase | null>(null);
@@ -324,6 +331,9 @@ export const Purchases: React.FC = () => {
       total: purchase.total
     }]);
     setEditNewItem({ code: '', quantity: 1, price: 0 });
+    const initialPaid = Number(purchase.paidAmount ?? purchase.paid ?? 0);
+    setEditPaidAmountInput(initialPaid > 0 ? formatWithCommas(initialPaid) : '');
+    setEditPaymentMethod(purchase.paymentMethod || 'CASH');
   };
 
   const handleEditAddItem = () => {
@@ -370,17 +380,28 @@ export const Purchases: React.FC = () => {
     if (editItems.length === 0) return notify("لا يمكن حفظ فاتورة فارغة");
 
     const newTotal = editItems.reduce((sum, i) => sum + i.total, 0);
+    const newPaidAmount = parseNumberFromCommas(editPaidAmountInput);
+    const newRemaining = Math.max(0, newTotal - newPaidAmount);
+
     const newPurchaseData: Purchase = {
       ...editPurchase,
       items: editItems,
-      total: newTotal
+      total: newTotal,
+      paid: newPaidAmount,
+      paidAmount: newPaidAmount,
+      remaining: newRemaining,
+      remainingAmount: newRemaining,
+      paymentMethod: newPaidAmount > 0 ? editPaymentMethod : undefined
     };
 
     setIsSavingEdit(true);
     try {
       await updatePurchase(editPurchase, newPurchaseData);
       setEditPurchase(null);
-      notify("تم تعديل فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح");
+      notify(newPaidAmount > 0 
+        ? `تم تعديل فاتورة المشتريات وتحديث دفعة السداد (${newPaidAmount.toLocaleString()} ج.م) والمخزن وحساب المورد والخزينة بنجاح`
+        : "تم تعديل فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح"
+      );
     } finally {
       setIsSavingEdit(false);
     }
@@ -1324,16 +1345,197 @@ export const Purchases: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+
+              {/* Payment Section (سداد دفعة مسددة للمورد) */}
+              <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-4 space-y-4 shadow-xs">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-emerald-200/60 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-emerald-600 text-white rounded-lg">
+                      <Wallet size={18} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-emerald-950">سداد دفعة للمورد (دفعة مسددة)</h4>
+                      <p className="text-xs text-emerald-700">اترك المبلغ 0 إذا كانت الفاتورة آجلة بالكامل دون سداد فوري</p>
+                    </div>
+                  </div>
+                  {editTotal > 0 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditPaidAmountInput(formatWithCommas(editTotal))}
+                        className="text-xs px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 font-bold rounded-lg border border-emerald-300 transition-colors shadow-xs cursor-pointer"
+                      >
+                        سداد كامل الفاتورة ({editTotal.toLocaleString()} ج.م)
+                      </button>
+                      {editPaidVal > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setEditPaidAmountInput('')}
+                          className="text-xs px-2 py-1 bg-white hover:bg-red-50 text-red-600 font-bold rounded-lg border border-red-200 transition-colors cursor-pointer"
+                        >
+                          تصفير
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                  {/* Paid Input */}
+                  <div className="md:col-span-5 space-y-1.5">
+                    <label className="block text-xs font-bold text-emerald-900">
+                      المدفوع للمورد (دفعة مسددة)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        dir="ltr"
+                        className="w-full p-2.5 pl-10 border-2 border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-lg text-center font-mono bg-white text-emerald-950 shadow-inner"
+                        placeholder="0"
+                        value={editPaidAmountInput}
+                        onChange={e => handleNumericChangeWithCommas(e.target.value, val => setEditPaidAmountInput(val))}
+                      />
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs pointer-events-none">
+                        ج.م
+                      </span>
+                    </div>
+                    {editPaidVal > 0 && (
+                      <p className="text-[11px] font-bold text-emerald-700 flex justify-between px-1">
+                        <span>المبلغ المسدد:</span>
+                        <span dir="ltr">{editPaidVal.toLocaleString()} ج.م</span>
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Remaining On Invoice */}
+                  <div className="md:col-span-7 bg-white p-3 rounded-lg border border-emerald-200 flex items-center justify-between shadow-xs">
+                    <div>
+                      <span className="block text-xs text-gray-500 font-bold">المتبقي من الفاتورة (آجل)</span>
+                      <span className={`text-xl font-bold font-mono ${editRemaining > 0 ? 'text-amber-700' : 'text-emerald-600'}`} dir="ltr">
+                        {editRemaining.toLocaleString()} ج.م
+                      </span>
+                    </div>
+                    <div className="text-left text-xs">
+                      <span className="text-gray-500 block">إجمالي الفاتورة الجديد</span>
+                      <span className="font-bold font-mono text-gray-700" dir="ltr">{editTotal.toLocaleString()} ج.م</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment Method Selector (visible when editPaidVal > 0) */}
+                {editPaidVal > 0 && (
+                  <div className="pt-2 border-t border-emerald-200/60 space-y-2 animate-fade-in">
+                    <label className="block text-xs font-bold text-emerald-900 mb-2">
+                      طريقة الدفع (الخزنة / الحساب المنصرف منه)
+                    </label>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                      <label className={`
+                        flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                        ${editPaymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                      `}>
+                        <input 
+                          type="radio" 
+                          name="editPurchasePaymentMethod" 
+                          value="CASH" 
+                          checked={editPaymentMethod === 'CASH'}
+                          onChange={() => setEditPaymentMethod('CASH')} 
+                          className="hidden"
+                        />
+                        <Wallet size={20} />
+                        <span className="font-bold text-xs">خزنة (كاش)</span>
+                      </label>
+
+                      <label className={`
+                        flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                        ${editPaymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                      `}>
+                        <input 
+                          type="radio" 
+                          name="editPurchasePaymentMethod" 
+                          value="BANK_AHLY" 
+                          checked={editPaymentMethod === 'BANK_AHLY'}
+                          onChange={() => setEditPaymentMethod('BANK_AHLY')} 
+                          className="hidden"
+                        />
+                        <Building2 size={20} />
+                        <span className="font-bold text-xs">البنك الأهلي</span>
+                      </label>
+
+                      <label className={`
+                        flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                        ${editPaymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                      `}>
+                        <input 
+                          type="radio" 
+                          name="editPurchasePaymentMethod" 
+                          value="BANK_MISR" 
+                          checked={editPaymentMethod === 'BANK_MISR'}
+                          onChange={() => setEditPaymentMethod('BANK_MISR')} 
+                          className="hidden"
+                        />
+                        <Building2 size={20} />
+                        <span className="font-bold text-xs">بنك مصر</span>
+                      </label>
+
+                      <label className={`
+                        flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                        ${editPaymentMethod === 'VF_CASH_AYMAN' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                      `}>
+                        <input 
+                          type="radio" 
+                          name="editPurchasePaymentMethod" 
+                          value="VF_CASH_AYMAN" 
+                          checked={editPaymentMethod === 'VF_CASH_AYMAN'}
+                          onChange={() => setEditPaymentMethod('VF_CASH_AYMAN')} 
+                          className="hidden"
+                        />
+                        <Smartphone size={20} />
+                        <span className="font-bold text-xs">فودافون كاش أيمن</span>
+                      </label>
+
+                      <label className={`
+                        flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                        ${editPaymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                      `}>
+                        <input 
+                          type="radio" 
+                          name="editPurchasePaymentMethod" 
+                          value="VF_CASH_KYRILLOS" 
+                          checked={editPaymentMethod === 'VF_CASH_KYRILLOS'}
+                          onChange={() => setEditPaymentMethod('VF_CASH_KYRILLOS')} 
+                          className="hidden"
+                        />
+                        <Smartphone size={20} />
+                        <span className="font-bold text-xs">فودافون كاش كيرلس</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="p-4 bg-gray-100 border-t flex justify-between items-center shrink-0">
-               <div className="text-lg font-bold text-gray-800">
-                 الإجمالي الجديد: <span className="text-blue-700">{editItems.reduce((s, i) => s + i.total, 0).toLocaleString()} ج.م</span>
+            <div className="p-4 bg-gray-100 border-t flex flex-col sm:flex-row justify-between items-center gap-3 shrink-0">
+               <div className="flex flex-wrap items-center gap-3 text-sm font-bold text-gray-800">
+                 <div>
+                   الإجمالي الجديد: <span className="text-blue-700 font-mono text-base">{editTotal.toLocaleString()} ج.م</span>
+                 </div>
+                 {editPaidVal > 0 && (
+                   <>
+                     <span className="text-gray-300">|</span>
+                     <div>
+                       المدفوع: <span className="text-emerald-700 font-mono text-base">{editPaidVal.toLocaleString()} ج.م</span>
+                     </div>
+                     <span className="text-gray-300">|</span>
+                     <div>
+                       المتبقي: <span className="text-amber-700 font-mono text-base">{editRemaining.toLocaleString()} ج.م</span>
+                     </div>
+                   </>
+                 )}
                </div>
                <button 
                  onClick={handleSaveEdit} 
                  disabled={isSavingEdit}
-                 className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 shadow-lg disabled:opacity-50"
+                 className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50"
                >
                  <Save size={20}/> {isSavingEdit ? 'جاري الحفظ...' : 'حفظ التعديلات'}
                </button>
