@@ -7,9 +7,11 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp, generatePdfFileFromHtml, getSalesInvoicePdfFileName } from '../utils/whatsapp';
 import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
+import { useNetworkStatus } from '../utils/useNetworkStatus';
 
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
+  const netUp = useNetworkStatus();
   
   const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
 
@@ -77,9 +79,25 @@ export const Sales: React.FC = () => {
   useBackHandler(() => setShowSuccessModal(false), showSuccessModal, 'sales-success-modal');
 
   // Auto-generate Invoice ID
+  // Online: same numbering as before (N001, N002, ...).
+  // Offline: a short per-device letter tag is appended (e.g. N046-KQ) so two laptops working
+  // offline can never create the same invoice number and overwrite each other on sync.
+  const getDeviceTag = () => {
+    try {
+      let t = localStorage.getItem('erp_device_tag');
+      if (!t) {
+        const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+        t = L[Math.floor(Math.random() * L.length)] + L[Math.floor(Math.random() * L.length)];
+        localStorage.setItem('erp_device_tag', t);
+      }
+      return t;
+    } catch { return 'XX'; }
+  };
+
   useEffect(() => {
+    const suffix = netUp ? '' : `-${getDeviceTag()}`;
     if (invoices.length === 0) {
-      setInvoiceId('N001');
+      setInvoiceId(`N001${suffix}`);
     } else {
       const nIds = invoices
         .filter(inv => inv.id.startsWith('N'))
@@ -88,12 +106,12 @@ export const Sales: React.FC = () => {
 
       if (nIds.length > 0) {
         const maxId = Math.max(...nIds);
-        setInvoiceId(`N${(maxId + 1).toString().padStart(3, '0')}`);
+        setInvoiceId(`N${(maxId + 1).toString().padStart(3, '0')}${suffix}`);
       } else {
-        setInvoiceId('N001');
+        setInvoiceId(`N001${suffix}`);
       }
     }
-  }, [invoices]);
+  }, [invoices, netUp]);
 
   // Calculated Totals
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
@@ -1365,40 +1383,40 @@ export const Sales: React.FC = () => {
               </div>
             </div>
             
-            {/* Action Buttons: Print, WhatsApp Image, WhatsApp PDF, New Invoice */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-2">
+            {/* Action Buttons: WhatsApp PDF, WhatsApp Image, Print, New Invoice */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
               <button 
-                onClick={handlePrint}
-                className="bg-gray-800 hover:bg-gray-900 active:bg-black text-white py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md cursor-pointer"
+                onClick={handleShareWhatsApp}
+                disabled={isSharingPdf}
+                className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer order-1 sm:order-2"
+                title="إرسال الفاتورة PDF عبر واتساب مباشرة"
               >
-                <Printer size={16} /> طباعة
+                <MessageCircle size={16} /> 
+                <span>{isSharingPdf ? 'جاري التحويل...' : 'مشاركة PDF'}</span>
               </button>
 
               <button 
                 onClick={handleShareWhatsAppImage}
                 disabled={isSharingImage}
-                className="bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer"
+                className="bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer order-2 sm:order-3"
                 title="مشاركة الفاتورة كصورة عبر واتساب"
               >
                 <ImageIcon size={16} /> 
-                <span>{isSharingImage ? 'جاري التحضير...' : 'مشاركة كصورة (واتساب)'}</span>
+                <span>{isSharingImage ? 'جاري التحضير...' : 'مشاركة كصورة'}</span>
               </button>
-              
+
               <button 
-                onClick={handleShareWhatsApp}
-                disabled={isSharingPdf}
-                className="bg-[#25D366] hover:bg-[#20ba5a] active:bg-[#1da851] text-white py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md hover:shadow-lg disabled:opacity-60 cursor-pointer"
-                title="إرسال الفاتورة PDF عبر واتساب مباشرة"
+                onClick={handlePrint}
+                className="bg-gray-800 hover:bg-gray-900 active:bg-black text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md cursor-pointer order-3 sm:order-1"
               >
-                <MessageCircle size={16} className="fill-white/20" /> 
-                <span>{isSharingPdf ? 'جاري التحويل...' : 'إرسال PDF (واتساب)'}</span>
+                <Printer size={16} /> <span>طباعة الفاتورة</span>
               </button>
               
               <button 
                 onClick={handleCloseModal}
-                className="bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md cursor-pointer"
+                className="bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white py-2.5 sm:py-3.5 px-2 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all text-xs sm:text-sm shadow-md cursor-pointer order-4 sm:order-4"
               >
-                <RefreshCcw size={16} /> فاتورة جديدة
+                <RefreshCcw size={16} /> <span>فاتورة جديدة</span>
               </button>
             </div>
           </div>

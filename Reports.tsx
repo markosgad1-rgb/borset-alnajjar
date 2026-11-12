@@ -249,7 +249,14 @@ export const Reports: React.FC = () => {
         lastDate: activity.lastDate,
         invoiceCount: activity.invoiceCount
       };
-    }).sort((a, b) => b.totalPurchased - a.totalPurchased);
+    }).sort((a, b) => {
+      const balA = typeof a.customer.balance === 'number' ? a.customer.balance : (Number(a.customer.balance) || 0);
+      const balB = typeof b.customer.balance === 'number' ? b.customer.balance : (Number(b.customer.balance) || 0);
+      if (balA !== balB) {
+        return balA - balB; // Ascending: highest negative debt first (e.g. -556,050 then -544,500 ...), then balanced (0), then credit (+)
+      }
+      return b.totalPurchased - a.totalPurchased;
+    });
   }, [filteredCustomers, filteredInvoices]);
 
   // Derived labels for print and WhatsApp summary
@@ -364,7 +371,7 @@ export const Reports: React.FC = () => {
     setIsPrinting(true);
     try {
       const options = getReportPrintOptions();
-      const html = getGeneralReportHtml(options, companyLogo);
+      const html = getGeneralReportHtml(options, companyLogo || undefined);
       printHtmlDocument(html);
     } catch (err) {
       console.error('Print error:', err);
@@ -397,7 +404,7 @@ export const Reports: React.FC = () => {
 
     try {
       const options = getReportPrintOptions();
-      await shareReportPdfViaWhatsApp(options, companyLogo, null, syncTab);
+      await shareReportPdfViaWhatsApp(options, companyLogo || undefined, null, syncTab);
     } catch (err: any) {
       if (syncTab && !syncTab.closed) syncTab.close();
       if (

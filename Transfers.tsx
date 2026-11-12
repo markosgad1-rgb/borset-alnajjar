@@ -2,13 +2,16 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
 import { 
   ArrowRightLeft, Save, Search, AlertCircle, ArrowDownCircle, ArrowUpCircle, 
-  Users, Truck, Briefcase, Wallet, Building2, Smartphone, Building, MapPin, Check, X 
+  Users, Truck, Briefcase, Wallet, Building2, Smartphone, Building, MapPin, Check, X,
+  History, Trash2, CheckCircle
 } from 'lucide-react';
 import { PaymentMethod, BranchId, BRANCHES, getBranchAreas, Customer, Supplier, Employee } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useDialog } from '../utils/useDialog';
 
 export const Transfers: React.FC = () => {
-  const { customers, suppliers, employees, addTransfer } = useERP();
+  const { customers, suppliers, employees, treasury, addTransfer, deleteTransfer } = useERP();
+  const { confirm: askConfirm, notify, dialog } = useDialog();
   
   const [entityType, setEntityType] = useState<'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'>('CUSTOMER');
   
@@ -218,16 +221,63 @@ export const Transfers: React.FC = () => {
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Filter and sort transfers strictly descending: newest first
+  const recentTransfers = useMemo(() => {
+    return treasury
+      .filter(t => 
+        t.source === 'TRANSFER' || 
+        t.id.startsWith('TR') || 
+        t.transferType !== undefined ||
+        t.description.includes('صرف لعميل') ||
+        t.description.includes('دفع لمورد') ||
+        t.description.includes('استلام من مورد') ||
+        t.description.includes('صرف لموظف') ||
+        t.description.includes('استرداد من موظف') ||
+        (t.id.startsWith('TR') && t.description.includes('تحصيل من عميل'))
+      )
+      .sort((a, b) => {
+        const timeA = a.timestamp || (a.createdAt ? new Date(a.createdAt).getTime() : (a.date ? new Date(a.date).getTime() : 0));
+        const timeB = b.timestamp || (b.createdAt ? new Date(b.createdAt).getTime() : (b.date ? new Date(b.date).getTime() : 0));
+        if (timeB !== timeA) return timeB - timeA;
+        return (b.date || '').localeCompare(a.date || '');
+      });
+  }, [treasury]);
+
+  const handleDeleteTransfer = async (t: any) => {
+    const isIncoming = t.transferType === 'IN' || t.credit > 0;
+    const amountVal = t.amount || (t.credit > 0 ? t.credit : t.debit);
+    const amountStr = `${amountVal.toLocaleString()} ج.م`;
+    const directionStr = isIncoming ? 'وارد (استلام)' : 'صادر (دفع)';
+    
+    const confirmed = await askConfirm(
+      `هل أنت متأكد من حذف حركة التحويل بقيمة ${amountStr} (${directionStr})؟ سيتم إلغاء أثرها تلقائياً من الخزنة ومن كشف الحساب المرتبط.`
+    );
+    
+    if (!confirmed) return;
+    
+    try {
+      const res = await deleteTransfer(t.id);
+      if (res.success) {
+        notify('تم حذف حركة التحويل وإلغاء أثرها من الخزينة وكشف الحساب بنجاح.');
+      } else {
+        notify('فشل في حذف التحويل: ' + (res.message || 'حدث خطأ غير متوقع'));
+      }
+    } catch (err: any) {
+      console.error('Delete transfer error:', err);
+      notify('حدث خطأ أثناء حذف التحويل: ' + (err?.message || err));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(formData.amount);
 
     if (!formData.code || !formData.name) {
-      alert('الرجاء اختيار ' + getEntityLabel());
+      notify('الرجاء اختيار ' + getEntityLabel());
       return;
     }
     if (amount <= 0) {
-      alert('الرجاء إدخال قيمة صحيحة');
+      notify('الرجاء إدخال قيمة صحيحة أكبر من الصفر');
       return;
     }
 
@@ -258,10 +308,10 @@ export const Transfers: React.FC = () => {
         amount: '',
         notes: ''
       }));
-      alert('تم حفظ عملية التحويل وتحديث الخزنة والحساب بنجاح');
+      notify('تم حفظ عملية التحويل وتحديث الخزنة والحساب بنجاح.');
     } catch (err: any) {
       console.error("Transfer submission error:", err);
-      alert('حدث خطأ أثناء حفظ التحويل: ' + (err?.message || err));
+      notify('حدث خطأ أثناء حفظ التحويل: ' + (err?.message || err));
     } finally {
       setIsSubmitting(false);
     }
@@ -287,7 +337,7 @@ export const Transfers: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto space-y-6">
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
         <div className="p-6 bg-purple-600 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -847,6 +897,130 @@ export const Transfers: React.FC = () => {
           </form>
         </div>
       </div>
+
+      {/* Recent Transfers Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-purple-100 overflow-hidden">
+        <div className="p-4 bg-purple-50 border-b border-purple-100 flex items-center justify-between">
+          <h3 className="font-bold text-purple-900 flex items-center gap-2">
+            <History size={20} className="text-purple-600" />
+            سجل عمليات التحويل الأخيرة المسجلة بالخزنة
+            <span className="px-2 py-0.5 rounded-full bg-purple-200/60 text-purple-800 text-xs font-mono font-bold">
+              ({recentTransfers.length})
+            </span>
+          </h3>
+          <span className="text-xs text-purple-700 font-bold bg-white/80 px-2.5 py-1 rounded-md border border-purple-200">
+            محدثة تلقائياً والأحدث دائماً في الأعلى
+          </span>
+        </div>
+        
+        {recentTransfers.length === 0 ? (
+          <div className="p-8 text-center text-gray-400">
+            <p>لا توجد عمليات تحويل مسجلة بعد</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-gray-50 text-gray-600 font-bold">
+                <tr>
+                  <th className="p-3 w-12 text-center">#</th>
+                  <th className="p-3">التاريخ والوقت</th>
+                  <th className="p-3 text-center">النوع</th>
+                  <th className="p-3">الحساب / الخزنة</th>
+                  <th className="p-3">الطرف / البيان</th>
+                  <th className="p-3 text-center">قيمة التحويل</th>
+                  <th className="p-3 w-16 text-center">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {recentTransfers.slice(0, 30).map((t, idx) => {
+                  const isIncoming = t.transferType === 'IN' || t.credit > 0 || (t.type === 'INCOME' && (!t.debit || t.debit === 0));
+                  const amount = t.amount || (t.credit > 0 ? t.credit : t.debit);
+
+                  return (
+                    <tr key={t.id} className="hover:bg-purple-50/40 transition-colors">
+                      <td className="p-3 text-center text-gray-400 font-mono text-xs">{idx + 1}</td>
+                      <td className="p-3 text-gray-600 whitespace-nowrap">
+                        <div className="font-mono font-bold text-xs">{t.date?.split(' ')[0] || t.date}</div>
+                        {t.date?.includes(' ') && (
+                          <div className="text-[10px] text-gray-400 font-mono" dir="ltr">{t.date.split(' ')[1]}</div>
+                        )}
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {isIncoming ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <ArrowDownCircle size={13} className="text-emerald-600" />
+                            داخل / وارد
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                            <ArrowUpCircle size={13} className="text-rose-600" />
+                            خارج / صادر
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                          t.paymentMethod === 'BANK_AHLY' ? 'bg-green-50 text-green-700 border-green-200' :
+                          t.paymentMethod === 'BANK_MISR' ? 'bg-red-50 text-red-700 border-red-200' :
+                          t.paymentMethod === 'VF_CASH_AYMAN' || t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-100 text-red-800 border-red-200' :
+                          'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}>
+                          {t.paymentMethod === 'BANK_AHLY' ? 'البنك الأهلي' :
+                           t.paymentMethod === 'BANK_MISR' ? 'بنك مصر' :
+                           t.paymentMethod === 'VF_CASH_AYMAN' ? 'فودافون كاش أيمن' :
+                           t.paymentMethod === 'VF_CASH_KYRILLOS' ? 'فودافون كاش كيرلس' : 'خزنة كاش'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-gray-800 font-medium">
+                        <div>
+                          {t.entityName && (
+                            <span className="font-bold text-gray-900 block text-xs">
+                              {t.entityName} {t.entityCode ? `(${t.entityCode})` : ''}
+                            </span>
+                          )}
+                          <span className="text-xs text-gray-600">{t.description}</span>
+                        </div>
+                      </td>
+                      <td className="p-3 text-center font-mono font-bold text-sm whitespace-nowrap">
+                        <span className={isIncoming ? 'text-emerald-600' : 'text-rose-600'} dir="ltr">
+                          {isIncoming ? `+${amount.toLocaleString()} ج.م` : `-${amount.toLocaleString()} ج.م`}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTransfer(t);
+                          }}
+                          className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          title="حذف حركة التحويل وإلغاؤها"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Hint Section */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-500 text-sm">
+        <div className="flex items-start gap-2 bg-purple-50 p-4 rounded-lg border border-purple-100">
+          <CheckCircle size={16} className="mt-1 text-purple-600 shrink-0"/>
+          <p>عند الحفظ، سيتم تحديث <strong>الحساب المختار (خزنة/بنك)</strong> فوراً وتسجيل الحركة في الخزينة وكشف حساب الطرف المعني.</p>
+        </div>
+        <div className="flex items-start gap-2 bg-purple-50 p-4 rounded-lg border border-purple-100">
+          <CheckCircle size={16} className="mt-1 text-purple-600 shrink-0"/>
+          <p>يمكنك التراجع عن أي عملية تحويل أو حذفها عبر أيقونة <strong>سلة المهملات 🗑️</strong> لإلغاء أثرها تلقائياً.</p>
+        </div>
+      </div>
+
+      {dialog}
     </div>
   );
 };

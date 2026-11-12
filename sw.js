@@ -1,5 +1,5 @@
 // Service Worker for بورصة النجار - ERP
-const CACHE_NAME = 'alnajjar-erp-v2';
+const CACHE_NAME = 'alnajjar-erp-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -55,7 +55,9 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        if (response && response.status === 200 && response.type === 'basic') {
+        const isCdn = /(^|\.)(cdn\.tailwindcss\.com|cdnjs\.cloudflare\.com|fonts\.googleapis\.com|fonts\.gstatic\.com|aistudiocdn\.com)$/.test(url.hostname);
+        const cacheable = response && ((response.status === 200 && response.type === 'basic') || (isCdn && (response.status === 200 || response.type === 'opaque')));
+        if (cacheable) {
           const responseToCache = response.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseToCache);

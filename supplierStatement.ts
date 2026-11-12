@@ -22,6 +22,13 @@ export interface SupplierStatementResult {
  */
 export const formatSupplierMovementDesc = (desc: string): string => {
   if (!desc) return '';
+
+  const normalizeVfCash = (text: string): string => {
+    return text
+      .replace(/فودافون كاش أيمن/g, 'فودافون كاش')
+      .replace(/فودافون كاش كيرلس/g, 'فودافون كاش');
+  };
+
   if (
     desc.includes('دفع لـ مورد') || 
     desc.includes('سداد مورد') || 
@@ -30,16 +37,22 @@ export const formatSupplierMovementDesc = (desc: string): string => {
     desc.startsWith('دفع لـ') ||
     desc.startsWith('سداد')
   ) {
+    if (desc.includes('فودافون كاش')) {
+      return 'دفعة (فودافون كاش)';
+    }
+
     const parts = desc.split(' - ');
     if (parts.length > 1) {
-      const last = parts[parts.length - 1].trim();
+      let last = parts[parts.length - 1].trim();
+      last = normalizeVfCash(last);
       if (!last.includes('دفع لـ مورد') && !last.startsWith('فاتورة #') && last !== '') {
         return `دفعة (${last})`;
       }
     }
     return 'دفعة';
   }
-  return desc;
+
+  return normalizeVfCash(desc);
 };
 
 /**
@@ -120,6 +133,8 @@ export function getSupplierStatementTransactions(
     description: string;
     amount: number;
     isOpening?: boolean;
+    historyIndex?: number;
+    id?: string;
   };
 
   const allMovements: UnifiedMovement[] = [];
@@ -135,7 +150,15 @@ export function getSupplierStatementTransactions(
   }
 
   // Add the rest of movements, ensuring any existing 'رصيد افتتاحي' is marked
-  filteredHistory.forEach(h => {
+  rawHistory.forEach((h, originalIndex) => {
+    if (!h) return;
+    if (h.description?.includes('تعديل فاتورة مشتريات')) return;
+    if (h.description?.includes('رصيد افتتاحي')) {
+      if (isS005) return;
+      const amt = Math.abs(parseFloat(String(h.amount || 0)) || 0);
+      if (amt > 100000000) return;
+    }
+
     const amt = parseFloat(String(h.amount || 0)) || 0;
     if (Math.abs(amt) > 100000000) return; // Skip corrupted entries
     if (h.description?.includes('رصيد افتتاحي')) {
@@ -144,12 +167,14 @@ export function getSupplierStatementTransactions(
         ...h,
         amount: amt,
         description: 'رصيد افتتاحي',
-        isOpening: true
+        isOpening: true,
+        historyIndex: h.historyIndex !== undefined ? h.historyIndex : originalIndex
       });
     } else {
       allMovements.push({
         ...h,
-        amount: amt
+        amount: amt,
+        historyIndex: h.historyIndex !== undefined ? h.historyIndex : originalIndex
       });
     }
   });
@@ -171,7 +196,7 @@ export function getSupplierStatementTransactions(
         if (m.isOpening) {
           priorBalance += parseFloat(String(m.amount || 0)) || 0;
         } else {
-          const isPurch = m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة');
+          const isPurch = (m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة')) && !m.description.includes('سداد') && !m.description.includes('دفعة');
           const pMatch = m.description.match(/#([A-Za-z0-9-]+)/);
           const pId = pMatch ? pMatch[1].trim() : null;
 
@@ -216,6 +241,7 @@ export function getSupplierStatementTransactions(
   // Insert prior period summary row if filtering by startDate
   if (startDate && priorBalance !== 0) {
     rows.push({
+      id: `prior_bal_${startDate}`,
       num: counter++,
       date: startDate,
       ref: '-',
@@ -227,7 +253,8 @@ export function getSupplierStatementTransactions(
       debit: priorBalance > 0 ? priorBalance : 0,
       runningBalance: running,
       status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
-      isInvoiceItem: false
+      isInvoiceItem: false,
+      type: 'prior'
     });
   }
 
@@ -246,6 +273,7 @@ export function getSupplierStatementTransactions(
       running = parsedAmount; // starts exactly at opening balance
 
       const row: SupplierStatementRow = {
+        id: `supp_op_${supplier.code}`,
         num: counter++,
         date: m.date,
         ref: '-',
@@ -258,14 +286,17 @@ export function getSupplierStatementTransactions(
         runningBalance: running,
         status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
         isInvoiceItem: false,
-        isOpeningBalance: true
+        isOpeningBalance: true,
+        type: 'opening',
+        description: 'رصيد افتتاحي',
+        amount: parsedAmount
       };
       rows.push(row);
       openingRow = row;
       continue;
     }
 
-    const isPurchaseInvoice = m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة');
+    const isPurchaseInvoice = (m.description.includes('فاتورة مشتريات') || m.description.includes('استلام بضاعة')) && !m.description.includes('سداد') && !m.description.includes('دفعة');
     const pMatch = m.description.match(/#([A-Za-z0-9-]+)/);
     const pId = pMatch ? pMatch[1].trim() : null;
 
@@ -279,7 +310,7 @@ export function getSupplierStatementTransactions(
       if (purchase) {
         if (viewMode === 'ITEMS' && purchase.items && purchase.items.length > 0) {
           // Expand invoice items
-          purchase.items.forEach(item => {
+          purchase.items.forEach((item, itemIdx) => {
             const itemQty = parseFloat(String(item.quantity || 0)) || 0;
             const itemPrice = parseFloat(String(item.price || 0)) || 0;
             const lineTotal = Math.round(itemQty * itemPrice * 100) / 100;
@@ -288,6 +319,7 @@ export function getSupplierStatementTransactions(
             running = Math.round((running - lineTotal) * 100) / 100;
 
             rows.push({
+              id: `p_item_${purchase.id}_${item.itemCode || itemIdx}`,
               num: counter++,
               date: purchase.date || m.date,
               ref: purchase.id,
@@ -300,7 +332,13 @@ export function getSupplierStatementTransactions(
               runningBalance: running,
               status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
               isInvoiceItem: true,
-              purchaseId: purchase.id
+              purchaseId: purchase.id,
+              invoiceId: purchase.id,
+              invoiceNo: purchase.id,
+              type: 'invoice',
+              description: `فاتورة مشتريات #${purchase.id} - ${item.itemName}`,
+              amount: -lineTotal,
+              historyIndex: m.historyIndex
             });
           });
         } else {
@@ -312,6 +350,7 @@ export function getSupplierStatementTransactions(
           running = Math.round((running - pTotal) * 100) / 100;
 
           rows.push({
+            id: `p_sum_${purchase.id}`,
             num: counter++,
             date: purchase.date || m.date,
             ref: purchase.id,
@@ -326,7 +365,13 @@ export function getSupplierStatementTransactions(
             runningBalance: running,
             status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
             isInvoiceItem: false,
-            purchaseId: purchase.id
+            purchaseId: purchase.id,
+            invoiceId: purchase.id,
+            invoiceNo: purchase.id,
+            type: 'invoice',
+            description: `فاتورة مشتريات #${purchase.id}`,
+            amount: -pTotal,
+            historyIndex: m.historyIndex
           });
         }
       } else {
@@ -335,6 +380,7 @@ export function getSupplierStatementTransactions(
         running = Math.round((running - pTotal) * 100) / 100;
 
         rows.push({
+          id: `p_fb_${pId || m.date}_${counter}`,
           num: counter++,
           date: m.date,
           ref: pId || '-',
@@ -347,7 +393,13 @@ export function getSupplierStatementTransactions(
           runningBalance: running,
           status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
           isInvoiceItem: false,
-          purchaseId: pId || undefined
+          purchaseId: pId || undefined,
+          invoiceId: pId || undefined,
+          invoiceNo: pId || undefined,
+          type: 'invoice',
+          description: m.description,
+          amount: -pTotal,
+          historyIndex: m.historyIndex
         });
       }
     } else {
@@ -373,8 +425,11 @@ export function getSupplierStatementTransactions(
       const refCol = pId || (isManualAdj ? 'تسوية' : '-');
 
       const displayName = formatSupplierMovementDesc(m.description);
+      const isPay = m.description.includes('دفع') || m.description.includes('سداد') || m.description.includes('صرف');
 
       rows.push({
+        id: `supp_mvt_${supplier.code}_${m.date}_${counter}`,
+        paymentId: isPay ? `pay_supp_${m.date}_${counter}` : undefined,
         num: counter++,
         date: m.date,
         ref: refCol,
@@ -387,7 +442,13 @@ export function getSupplierStatementTransactions(
         runningBalance: running,
         status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
         isInvoiceItem: false,
-        purchaseId: pId || undefined
+        purchaseId: pId || undefined,
+        invoiceId: pId || undefined,
+        invoiceNo: pId || undefined,
+        type: isPay ? 'payment' : 'adjustment',
+        description: m.description,
+        amount: m.amount,
+        historyIndex: m.historyIndex
       });
     }
   }
@@ -412,6 +473,7 @@ export function getSupplierStatementTransactions(
     seenPurchaseIds.add(unlinked.id);
 
     rows.push({
+      id: `p_unlinked_${unlinked.id}`,
       num: counter++,
       date: unlinked.date || new Date().toISOString().split('T')[0],
       ref: unlinked.id,
@@ -424,7 +486,12 @@ export function getSupplierStatementTransactions(
       runningBalance: running,
       status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
       isInvoiceItem: false,
-      purchaseId: unlinked.id
+      purchaseId: unlinked.id,
+      invoiceId: unlinked.id,
+      invoiceNo: unlinked.id,
+      type: 'invoice',
+      description: `فاتورة مشتريات #${unlinked.id}`,
+      amount: -pTotal
     });
   }
 

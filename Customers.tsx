@@ -3,26 +3,31 @@ import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, X, Check, Download, Phone, Trash2, 
   AlertTriangle, Eye, Printer, Layers, Package, Search, PlusCircle, ArrowRight,
-  Calendar, Filter, MessageCircle, MapPin, Building, Sliders, ArrowUpCircle, ArrowDownCircle
+  Calendar, Filter, MessageCircle, MapPin, Building, Sliders, ArrowUpCircle, ArrowDownCircle,
+  Image as ImageIcon
 } from 'lucide-react';
 import { SalesInvoice, BranchId, BRANCHES, BRANCH_AREAS, getBranchAreas, ManualCustomerTransaction, CustomerHistory } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
-import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
+import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 
 export const Customers: React.FC = () => {
   const { 
     customers, addCustomer, updateCustomer, deleteCustomer, 
     clearLedger, 
-    currentUser, invoices, printInvoice, printLedger, companyLogo 
+    currentUser, invoices, printInvoice, printLedger, companyLogo,
+    deleteCustomerLedgerMovement, deleteInvoice
   } = useERP();
+  const { confirm: askConfirm, notify, dialog } = useDialog();
 
   const canDeleteCustomers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteCustomers);
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
   const [isSharingPdf, setIsSharingPdf] = useState(false);
+  const [isSharingImage, setIsSharingImage] = useState(false);
 
   // Search & Branch Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -208,7 +213,7 @@ export const Customers: React.FC = () => {
     e.preventDefault();
     if (formData.code && formData.name) {
       if (!formData.branchId || !formData.area) {
-        alert("يرجى اختيار الإدارة والمنطقة للعميل");
+        notify("يرجى اختيار الإدارة والمنطقة للعميل");
         return;
       }
       const parsedBal = parseNumberFromCommas(formData.balance);
@@ -221,7 +226,7 @@ export const Customers: React.FC = () => {
 
         if (diff !== 0) {
           if (!formData.adjustmentReason || !formData.adjustmentReason.trim()) {
-            alert("حقل 'سبب/بيان تعديل الرصيد' إجباري لتسجيل حركة التسوية في كشف حساب العميل (مثل: تسوية حساب، رصيد افتتاحي، خصم إضافي).");
+            notify("حقل 'سبب/بيان تعديل الرصيد' إجباري لتسجيل حركة التسوية في كشف حساب العميل (مثل: تسوية حساب، رصيد افتتاحي، خصم إضافي).");
             return;
           }
           const adjustmentMovement: CustomerHistory = {
@@ -244,7 +249,7 @@ export const Customers: React.FC = () => {
         handleCloseModal();
       } else {
         if (customers.some(c => c.code === formData.code)) {
-          alert('هذا الكود مستخدم بالفعل لعميل آخر!');
+          notify('هذا الكود مستخدم بالفعل لعميل آخر!');
           return;
         }
         const initialHistory: CustomerHistory[] = [];
@@ -274,7 +279,7 @@ export const Customers: React.FC = () => {
   const handleDelete = async (e: React.MouseEvent, code: string) => {
     e.stopPropagation();
     if (!canDeleteCustomers) {
-      alert('ليس لديك صلاحية حذف العملاء');
+      notify('ليس لديك صلاحية حذف العملاء');
       return;
     }
     await deleteCustomer(code);
@@ -290,7 +295,7 @@ export const Customers: React.FC = () => {
     const success = await clearLedger('CUSTOMER', selectedCustomer.code);
     if (success) {
        setShowClearLedgerConfirm(false);
-       alert("تم تصفير الحساب ومسح السجلات بنجاح.");
+       notify("تم تصفير الحساب ومسح السجلات بنجاح.");
     }
   };
 
@@ -330,19 +335,19 @@ export const Customers: React.FC = () => {
   const handleSaveManualTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCustomer) {
-      alert('يرجى اختيار عميل أولاً');
+      notify('يرجى اختيار عميل أولاً');
       return;
     }
 
     const amt = parseNumberFromCommas(manualTxAmount);
     if (isNaN(amt) || amt <= 0) {
-      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      notify('يرجى إدخال مبلغ صحيح أكبر من الصفر');
       return;
     }
 
     const desc = manualTxDescription.trim();
     if (!desc) {
-      alert('يرجى كتابة البيان / سبب الحركة (مثال: مرتجع بضاعة، دفعة مسددة، بضاعة بدون فاتورة، خصم خاص)');
+      notify('يرجى كتابة البيان / سبب الحركة (مثال: مرتجع بضاعة، دفعة مسددة، بضاعة بدون فاتورة، خصم خاص)');
       return;
     }
 
@@ -372,7 +377,7 @@ export const Customers: React.FC = () => {
         amount: amt,
         description: desc,
         createdAt: new Date().toISOString(),
-        createdBy: currentUser?.name || currentUser?.username || 'مستخدم'
+        createdBy: (currentUser as any)?.name || currentUser?.username || 'مستخدم'
       };
 
       const updatedHistory = [...(selectedCustomer.history || []), historyMovement];
@@ -387,9 +392,65 @@ export const Customers: React.FC = () => {
       handleCloseManualTxModal();
     } catch (error) {
       console.error('Error saving manual transaction:', error);
-      alert('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
+      notify('حدث خطأ أثناء حفظ الحركة. يرجى المحاولة مرة أخرى.');
     } finally {
       setIsSavingManualTx(false);
+    }
+  };
+
+  const handleDeleteCustomerMovement = async (row: any) => {
+    if (!selectedCustomer) return;
+
+    try {
+      const invId = row.invoiceId || (row.ref && row.ref !== '-' && row.ref !== 'افتتاحي' && row.ref !== 'تسوية' ? row.ref : null);
+      if (row.isInvoiceItem || invId) {
+        const targetInvId = row.invoiceId || invId;
+        const confirmMsg = `هذا البند تابع لفاتورة بيع رقم #${targetInvId}.\n\nهل تريد حذف هذه الفاتورة بالكامل نهائياً من كشف الحساب والمخزن والخزينة؟`;
+        if (!await askConfirm(confirmMsg)) return;
+        await deleteInvoice(targetInvId);
+        notify(`تم حذف فاتورة البيع #${targetInvId} بنجاح وتحديث كشف حساب العميل والمخزن والخزينة.`);
+        return;
+      }
+
+      const desc = row.description || row.itemName || 'حركة كشف الحساب';
+      const amountVal = row.amount !== undefined ? row.amount : ((row.debit && row.debit > 0) ? -row.debit : (row.credit || 0));
+      const confirmMsg = `هل أنت متأكد من حذف حركة (${desc}) بتاريخ ${row.date} نهائياً؟\n\nسيتم عكس أثرها من الرصيد والخزينة وإعادة احتساب الرصيد التراكمي للعميل.`;
+      if (!await askConfirm(confirmMsg)) return;
+
+      await deleteCustomerLedgerMovement(selectedCustomer.code, {
+        date: row.date,
+        description: row.description || row.itemName,
+        amount: amountVal
+      });
+
+      notify("تم حذف الحركة بنجاح وتحديث الرصيد.");
+    } catch (err: any) {
+      console.error('Error deleting customer movement:', err);
+      notify("حدث خطأ أثناء حذف الحركة: " + (err?.message || ""));
+    }
+  };
+
+  const handleDeleteCustomerInvoiceRow = async (h: any) => {
+    if (!selectedCustomer) return;
+    try {
+      const invId = h.invoiceId || (h.rawDescription || h.description || '').match(/#([A-Za-z0-9-]+)/)?.[1];
+      if (invId) {
+        if (!await askConfirm(`هل أنت متأكد من حذف الفاتورة #${invId} نهائياً من كشف الحساب والمخزن والخزينة؟`)) return;
+        await deleteInvoice(invId);
+        notify(`تم حذف الفاتورة #${invId} بنجاح.`);
+        return;
+      }
+      const desc = h.rawDescription || h.description;
+      if (!await askConfirm(`هل أنت متأكد من حذف حركة (${desc}) بتاريخ ${h.date} نهائياً؟`)) return;
+      await deleteCustomerLedgerMovement(selectedCustomer.code, {
+        date: h.date,
+        description: desc,
+        amount: h.amount
+      });
+      notify("تم حذف الحركة بنجاح وتحديث الرصيد.");
+    } catch (err: any) {
+      console.error('Error deleting invoice row:', err);
+      notify("حدث خطأ أثناء حذف الحركة: " + (err?.message || ""));
     }
   };
 
@@ -397,11 +458,11 @@ export const Customers: React.FC = () => {
     const match = description.match(/#([A-Za-z0-9-]+)/);
     if (match) {
       const invoiceId = match[1];
-      const invoice = invoices.find(inv => inv.id === invoiceId);
+      const invoice = invoices.find(inv => inv.id === invoiceId && !inv.isDeleted);
       if (invoice) {
         setViewInvoice(invoice);
       } else {
-        alert("عذراً، تفاصيل هذه الفاتورة غير متوفرة في السجل العام (ربما تم حذفها).");
+        notify("عذراً، تفاصيل هذه الفاتورة غير متوفرة في السجل العام (ربما تم حذفها).");
       }
     }
   };
@@ -437,7 +498,7 @@ export const Customers: React.FC = () => {
 
     for (let i = 0; i < history.length; i++) {
       const h = history[i];
-      if (h.description.includes('تعديل فاتورة')) continue;
+      if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة')) continue;
 
       const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
       if (!isInvoiceSale) continue;
@@ -446,7 +507,8 @@ export const Customers: React.FC = () => {
       const invId = invMatch ? invMatch[1] : null;
       if (!invId) continue;
 
-      const invoice = invoices.find(inv => inv.id === invId);
+      const invoice = invoices.find(inv => inv.id === invId && !inv.isDeleted);
+      if (!invoice) continue;
       const rawPaid = Number(invoice?.paidAmount || 0);
       const invoicePaid = Math.max(0, isNaN(rawPaid) ? 0 : rawPaid);
 
@@ -507,13 +569,14 @@ export const Customers: React.FC = () => {
       for (let i = 0; i < selectedCustomer.history.length; i++) {
         if (consumedPaymentIndices.has(i)) continue; // Prevent double-counting in prior balance
         const h = selectedCustomer.history[i];
-        if (h.description.includes('تعديل فاتورة')) continue;
+        if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة')) continue;
         if (h.date < startDate) {
           const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
           const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
           const invId = invMatch ? invMatch[1] : null;
-          const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+          const invoice = invId ? invoices.find(inv => inv.id === invId && !inv.isDeleted) : null;
 
+          if (isInvoiceSale && invId && !invoice) continue; // Skip deleted invoice
           if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
             const invoiceTotal = invoice.items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
             const invoicePaid = Math.max(0, Number(invoice.paidAmount || 0));
@@ -527,6 +590,7 @@ export const Customers: React.FC = () => {
     }
 
     const rows: Array<{
+      id?: string;
       num: number;
       date: string;
       ref: string;
@@ -540,6 +604,12 @@ export const Customers: React.FC = () => {
       status: 'مدين' | 'دائن' | 'متزن';
       isInvoiceItem: boolean;
       invoiceId?: string;
+      invoiceNo?: string;
+      paymentId?: string;
+      type?: string;
+      description?: string;
+      amount?: number;
+      historyIndex?: number;
     }> = [];
 
     let running = startDate ? priorBalance : 0;
@@ -548,6 +618,7 @@ export const Customers: React.FC = () => {
     // Insert opening balance row if there is a prior balance before the start date
     if (startDate && priorBalance !== 0) {
       rows.push({
+        id: `prior_bal_${startDate}`,
         num: counter++,
         date: startDate,
         ref: '-',
@@ -559,7 +630,8 @@ export const Customers: React.FC = () => {
         credit: priorBalance > 0 ? priorBalance : 0,
         runningBalance: running,
         status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
-        isInvoiceItem: false
+        isInvoiceItem: false,
+        type: 'prior'
       });
     }
 
@@ -569,14 +641,16 @@ export const Customers: React.FC = () => {
       if (consumedPaymentIndices.has(i)) continue;
 
       const h = selectedCustomer.history[i];
-      if (h.description.includes('تعديل فاتورة')) continue;
+      if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة')) continue;
       if (startDate && h.date < startDate) continue;
       if (endDate && h.date > endDate) continue;
 
       const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
       const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
       const invId = invMatch ? invMatch[1] : null;
-      const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+      const invoice = invId ? invoices.find(inv => inv.id === invId && !inv.isDeleted) : null;
+
+      if (isInvoiceSale && invId && !invoice) continue; // Skip deleted invoice
 
       if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
         const rawPaid = Number(invoice.paidAmount || 0);
@@ -591,6 +665,7 @@ export const Customers: React.FC = () => {
           running -= debit;
 
           rows.push({
+            id: `inv_item_${invoice.id}_${item.itemCode || item.itemName}`,
             num: counter++,
             date: invoice.date || h.date,
             ref: invoice.id,
@@ -603,7 +678,11 @@ export const Customers: React.FC = () => {
             runningBalance: running,
             status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
             isInvoiceItem: true,
-            invoiceId: invoice.id
+            invoiceId: invoice.id,
+            invoiceNo: invoice.id,
+            type: 'invoice',
+            description: `فاتورة بيع #${invoice.id} - ${item.itemName}`,
+            amount: -debit
           });
         });
 
@@ -613,6 +692,8 @@ export const Customers: React.FC = () => {
           running += invoicePaid;
 
           rows.push({
+            id: `inv_pay_${invoice.id}`,
+            paymentId: `pay_${invoice.id}`,
             num: counter++,
             date: invoice.date || h.date,
             ref: invoice.id,
@@ -625,7 +706,11 @@ export const Customers: React.FC = () => {
             runningBalance: running,
             status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
             isInvoiceItem: false,
-            invoiceId: invoice.id
+            invoiceId: invoice.id,
+            invoiceNo: invoice.id,
+            type: 'payment',
+            description: `سداد فاتورة بيع #${invoice.id}`,
+            amount: invoicePaid
           });
         }
       } else {
@@ -650,7 +735,11 @@ export const Customers: React.FC = () => {
           refCol = 'تسوية';
         }
 
+        const isPay = h.description.includes('سداد') || h.description.includes('دفعة') || h.description.includes('تحصيل');
+
         rows.push({
+          id: (h as any).id || `cust_mvt_${selectedCustomer.code}_${i}_${h.date}`,
+          paymentId: isPay ? ((h as any).id || `pay_${selectedCustomer.code}_${i}`) : undefined,
           num: counter++,
           date: h.date,
           ref: refCol,
@@ -663,7 +752,12 @@ export const Customers: React.FC = () => {
           runningBalance: running,
           status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
           isInvoiceItem: false,
-          invoiceId: invId || undefined
+          invoiceId: invId || undefined,
+          invoiceNo: invId || undefined,
+          type: isPay ? 'payment' : 'adjustment',
+          description: h.description,
+          amount: h.amount,
+          historyIndex: i
         });
       }
     }
@@ -684,12 +778,13 @@ export const Customers: React.FC = () => {
 
     if (filterStartDate) {
       selectedCustomer.history.forEach((h, i) => {
-        if (h.description.includes('تعديل فاتورة') || consumedPaymentIndices.has(i)) return;
+        if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة') || consumedPaymentIndices.has(i)) return;
         if (h.date < filterStartDate) {
-          const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة');
+          const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
           const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
           const invId = invMatch ? invMatch[1] : null;
-          const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+          const invoice = invId ? invoices.find(inv => inv.id === invId && !inv.isDeleted) : null;
+          if (isInv && invId && !invoice) return;
           if (isInv && invoice) {
             const paid = Math.max(0, Number(invoice.paidAmount || 0));
             prior -= (invoice.total - paid);
@@ -710,26 +805,39 @@ export const Customers: React.FC = () => {
     }
 
     selectedCustomer.history.forEach((h, i) => {
-      if (h.description.includes('تعديل فاتورة') || consumedPaymentIndices.has(i)) return;
+      if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة') || consumedPaymentIndices.has(i)) return;
       if (filterStartDate && h.date < filterStartDate) return;
       if (filterEndDate && h.date > filterEndDate) return;
 
-      const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة');
+      const isInv = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
       const invMatch = h.description.match(/#([A-Za-z0-9-]+)/);
       const invId = invMatch ? invMatch[1] : null;
-      const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
+      const invoice = invId ? invoices.find(inv => inv.id === invId && !inv.isDeleted) : null;
+      if (isInv && invId && !invoice) return;
       const invPaid = (isInv && invoice) ? Math.max(0, Number(invoice.paidAmount || 0)) : 0;
+
+      const isPay = h.description.includes('سداد') || h.description.includes('دفعة') || h.description.includes('تحصيل');
 
       list.push({
         ...h,
+        id: (h as any).id || (invId ? `inv_${invId}` : `cust_inv_row_${i}`),
+        invoiceId: invId || undefined,
+        invoiceNo: invId || undefined,
+        type: isInv ? 'invoice' : (isPay ? 'payment' : 'adjustment'),
         amount: (isInv && invoice) ? -invoice.total : h.amount,
+        rawDescription: h.description,
         description: formatCustomerMovementDesc(h.description)
       });
 
       if (invPaid > 0 && invoice) {
         list.push({
+          id: `inv_pay_${invoice.id}`,
+          invoiceId: invoice.id,
+          invoiceNo: invoice.id,
+          type: 'payment',
           date: invoice.date || h.date,
           description: 'دفعة',
+          rawDescription: `سداد فاتورة بيع #${invoice.id}`,
           amount: invPaid
         });
       }
@@ -1010,8 +1118,9 @@ export const Customers: React.FC = () => {
             ) : (
               filteredCustomers.map((c, idx) => {
                 const isSelected = selectedCustomer?.code === c.code;
-                const isNegative = c.balance < 0;
-                const isPositive = c.balance > 0;
+                const displayBal = (isSelected && typeof finalItemizedBalance === 'number') ? finalItemizedBalance : (c.balance || 0);
+                const isNegative = displayBal < 0;
+                const isPositive = displayBal > 0;
                 const bId = c.branchId || 'MARG';
 
                 return (
@@ -1054,7 +1163,7 @@ export const Customers: React.FC = () => {
                     <div className="text-left flex items-center gap-1.5">
                       <div className="text-left">
                         <p className={`font-black text-xs font-mono ${isNegative ? 'text-red-600' : isPositive ? 'text-green-600' : 'text-gray-600'}`} dir="ltr">
-                          {c.balance.toLocaleString()}
+                          {displayBal.toLocaleString()}
                         </p>
                         <p className="text-[9px] text-gray-400">
                           {isNegative ? 'عليه' : isPositive ? 'له' : 'خالص'}
@@ -1140,18 +1249,18 @@ export const Customers: React.FC = () => {
 
                   {/* Compact Balance Badge */}
                   <div className={`px-2 py-0.5 rounded-lg border flex items-center gap-1 shrink-0 ${
-                    selectedCustomer.balance < 0 
+                    finalItemizedBalance < 0 
                       ? 'bg-red-50 border-red-200 text-red-700' 
-                      : selectedCustomer.balance > 0 
+                      : finalItemizedBalance > 0 
                       ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
                       : 'bg-gray-50 border-gray-200 text-gray-700'
                   }`}>
                     <span className="text-[10px] font-bold text-gray-500">الرصيد:</span>
                     <span className="text-xs font-black font-mono" dir="ltr">
-                      {selectedCustomer.balance.toLocaleString()}
+                      {finalItemizedBalance.toLocaleString()}
                     </span>
                     <span className="text-[9px] font-bold">
-                      {selectedCustomer.balance < 0 ? '(عليه)' : selectedCustomer.balance > 0 ? '(له)' : '(خالص)'}
+                      {finalItemizedBalance < 0 ? '(عليه)' : finalItemizedBalance > 0 ? '(له)' : '(خالص)'}
                     </span>
                   </div>
                 </div>
@@ -1470,13 +1579,14 @@ export const Customers: React.FC = () => {
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-red-700 bg-red-50/50">مدين</th>
                         <th className="p-2 text-center w-20 border-l border-gray-200 text-green-700 bg-green-50/50">دائن</th>
                         <th className="p-2 text-center w-24 border-l border-gray-200 bg-gray-50">الرصيد</th>
-                        <th className="p-2 text-center w-24 min-w-[85px] whitespace-nowrap">الحالة</th>
+                        <th className="p-2 text-center w-24 min-w-[85px] whitespace-nowrap border-l border-gray-200">الحالة</th>
+                        <th className="p-2 text-center w-12 whitespace-nowrap">إجراءات</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-150">
                       {itemizedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={11} className="p-8 text-center text-gray-400 font-medium">
+                          <td colSpan={12} className="p-8 text-center text-gray-400 font-medium">
                             لا توجد حركات مسجلة لهذا العميل حتى الآن
                           </td>
                         </tr>
@@ -1542,7 +1652,7 @@ export const Customers: React.FC = () => {
                             <td className="p-2 text-center font-mono font-black text-gray-900 bg-gray-50/60 border-l border-gray-100" dir="ltr">
                               {r.runningBalance.toLocaleString()}
                             </td>
-                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[85px]">
+                            <td className="p-2 text-center font-bold text-[11px] whitespace-nowrap min-w-[85px] border-l border-gray-100">
                               {r.status === 'مدين' ? (
                                 <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-200">عليه</span>
                               ) : r.status === 'دائن' ? (
@@ -1550,6 +1660,53 @@ export const Customers: React.FC = () => {
                               ) : (
                                 <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-500">متزن</span>
                               )}
+                            </td>
+                            <td className="p-2 text-center" key={`action_${r.id || idx}`}>
+                              <button 
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  
+                                  const invNo = r.invoiceNo || r.invoiceId || (r.ref && r.ref !== '-' && r.ref !== 'افتتاحي' && r.ref !== 'تسوية' ? r.ref : null);
+                                  if (invNo) {
+                                    if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
+                                      return;
+                                    }
+                                    try {
+                                      await deleteInvoice(invNo);
+                                      notify(`تم حذف الفاتورة رقم (${invNo}) بالكامل وإعادة الأصناف للمخزن وضبط الحساب والخزينة.`);
+                                    } catch (err: any) {
+                                      console.error(err);
+                                      notify("حدث خطأ أثناء حذف الفاتورة: " + (err?.message || ""));
+                                    }
+                                    return;
+                                  }
+
+                                  const isPayment = r.type === 'payment' || r.paymentId || (r.itemName && r.itemName.includes('دفعة')) || (r.description && (r.description.includes('سداد') || r.description.includes('دفعة') || r.description.includes('تحصيل')));
+                                  const confirmMsg = isPayment 
+                                    ? `هل أنت متأكد من حذف هذه الدفعة بقيمة (${(r.credit || Math.abs(r.amount || 0)).toLocaleString()} ج.م) بتاريخ ${r.date} وعكس أثرها من الخزينة؟`
+                                    : `هل أنت متأكد من حذف حركة (${r.description || r.itemName}) بتاريخ ${r.date} نهائياً وإعادة احتساب الرصيد؟`;
+
+                                  if (!await askConfirm(confirmMsg)) return;
+
+                                  try {
+                                    await deleteCustomerLedgerMovement(selectedCustomer.code, {
+                                      date: r.date,
+                                      description: r.description || r.itemName,
+                                      amount: r.amount !== undefined ? r.amount : ((r.debit && r.debit > 0) ? -r.debit : (r.credit || 0))
+                                    });
+                                    notify("تم حذف المعاملة بنجاح وتحديث الرصيد والخزينة.");
+                                  } catch (err: any) {
+                                    console.error(err);
+                                    notify("حدث خطأ أثناء حذف المعاملة: " + (err?.message || ""));
+                                  }
+                                }}
+                                className="p-1.5 rounded hover:bg-red-50 text-red-500 hover:text-red-700 transition-colors inline-flex items-center justify-center cursor-pointer"
+                                title="حذف هذا السطر"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
+                              </button>
                             </td>
                           </tr>
                         ))
@@ -1575,7 +1732,7 @@ export const Customers: React.FC = () => {
                           <td className="p-2 text-center font-black font-mono text-brand-900 border-l border-gray-200 bg-brand-50" dir="ltr">
                             {finalItemizedBalance.toLocaleString()}
                           </td>
-                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[85px]">
+                          <td className="p-2 text-center font-bold text-xs whitespace-nowrap min-w-[85px] border-l border-gray-200">
                             {finalItemizedBalance < 0 ? (
                               <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-red-700 font-black">مدين (عليه)</span>
                             ) : finalItemizedBalance > 0 ? (
@@ -1584,6 +1741,7 @@ export const Customers: React.FC = () => {
                               <span className="inline-flex items-center justify-center text-center whitespace-nowrap text-gray-600 font-black">خالص</span>
                             )}
                           </td>
+                          <td className="p-2 text-center"></td>
                         </tr>
                       </tfoot>
                     )}
@@ -1599,11 +1757,12 @@ export const Customers: React.FC = () => {
                         <th className="p-2.5 text-center w-28 text-red-700 bg-red-50/50 border-l border-gray-200">مدين</th>
                         <th className="p-2.5 text-center w-28 text-green-700 bg-green-50/50 border-l border-gray-200">دائن</th>
                         <th className="p-2.5 text-center w-28 border-l border-gray-200">الرصيد</th>
+                        <th className="p-2.5 text-center w-14">إجراءات</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {invoiceRows.length === 0 ? (
-                        <tr><td colSpan={6} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
+                        <tr><td colSpan={7} className="p-6 text-center text-gray-400">لا توجد حركات مسجلة للفترة المحددة</td></tr>
                       ) : (
                         (() => {
                           let runBal = 0;
@@ -1638,8 +1797,55 @@ export const Customers: React.FC = () => {
                                 <td className="p-2.5 text-center font-bold font-mono text-green-600 bg-green-50/30 border-l border-gray-100">
                                   {isCredit ? h.amount.toLocaleString() : '-'}
                                 </td>
-                                <td className="p-2.5 text-center font-black font-mono text-gray-900" dir="ltr">
+                                <td className="p-2.5 text-center font-black font-mono text-gray-900 border-l border-gray-100" dir="ltr">
                                   {runBal.toLocaleString()}
+                                </td>
+                                <td className="p-2.5 text-center" key={`action_inv_${h.id || idx}`}>
+                                  <button 
+                                    type="button"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      
+                                      const invNo = h.invoiceNo || h.invoiceId || (h.rawDescription || h.description || '').match(/#([A-Za-z0-9-]+)/)?.[1];
+                                      if (invNo) {
+                                        if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
+                                          return;
+                                        }
+                                        try {
+                                          await deleteInvoice(invNo);
+                                          notify(`تم حذف الفاتورة رقم (${invNo}) بالكامل وإعادة الأصناف للمخزن وضبط الحساب والخزينة.`);
+                                        } catch (err: any) {
+                                          console.error(err);
+                                          notify("حدث خطأ أثناء حذف الفاتورة: " + (err?.message || ""));
+                                        }
+                                        return;
+                                      }
+
+                                      const isPayment = h.type === 'payment' || (h.description && (h.description.includes('سداد') || h.description.includes('دفعة')));
+                                      const confirmMsg = isPayment 
+                                        ? `هل أنت متأكد من حذف هذه الدفعة بقيمة (${Math.abs(h.amount).toLocaleString()} ج.م) بتاريخ ${h.date} وعكس أثرها من الخزينة؟`
+                                        : `هل أنت متأكد من حذف حركة (${h.rawDescription || h.description}) بتاريخ ${h.date} نهائياً وإعادة احتساب الرصيد؟`;
+
+                                      if (!await askConfirm(confirmMsg)) return;
+
+                                      try {
+                                        await deleteCustomerLedgerMovement(selectedCustomer.code, {
+                                          date: h.date,
+                                          description: h.rawDescription || h.description,
+                                          amount: h.amount
+                                        });
+                                        notify("تم حذف المعاملة بنجاح وتحديث الرصيد والخزينة.");
+                                      } catch (err: any) {
+                                        console.error(err);
+                                        notify("حدث خطأ أثناء حذف المعاملة: " + (err?.message || ""));
+                                      }
+                                    }}
+                                    className="p-1.5 rounded hover:bg-red-50 text-red-500 hover:text-red-700 transition-colors inline-flex items-center justify-center cursor-pointer"
+                                    title="حذف هذا السطر"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
+                                  </button>
                                 </td>
                               </tr>
                             );
@@ -2027,39 +2233,80 @@ export const Customers: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
-              <button 
-                onClick={() => {
-                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
-                  printInvoice({
-                    ...viewInvoice,
-                    currentBalance: curBal,
-                    liveCustomerBalance: curBal
-                  });
-                }} 
-                className="px-3.5 py-1.5 bg-gray-200 text-gray-800 rounded-lg text-xs font-bold hover:bg-gray-300 flex items-center gap-1.5 cursor-pointer"
-              >
-                <Printer size={14}/> طباعة الفاتورة
-              </button>
-              <button 
-                onClick={() => {
-                  const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
-                  shareSalesInvoicePdfViaWhatsApp({
-                    ...viewInvoice,
-                    currentBalance: curBal,
-                    liveCustomerBalance: curBal
-                  }, companyLogo, selectedCustomer.phone);
-                }} 
-                className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
-              >
-                <MessageCircle size={14}/> مشاركة PDF واتساب
-              </button>
-              <button 
-                onClick={() => setViewInvoice(null)} 
-                className="px-5 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-bold hover:bg-brand-700"
-              >
-                إغلاق
-              </button>
+            <div className="bg-gray-50 p-3 sm:p-3.5 border-t border-gray-200 shrink-0">
+              <div className="grid grid-cols-2 sm:flex sm:justify-end sm:items-center sm:flex-wrap gap-2">
+                {/* 1. مشاركة PDF */}
+                <button 
+                  onClick={async () => {
+                    if (!selectedCustomer) return;
+                    const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                    try {
+                      setIsSharingPdf(true);
+                      await shareSalesInvoicePdfViaWhatsApp({
+                        ...viewInvoice,
+                        currentBalance: curBal,
+                        liveCustomerBalance: curBal
+                      } as any, companyLogo, selectedCustomer.phone);
+                    } finally {
+                      setIsSharingPdf(false);
+                    }
+                  }} 
+                  disabled={isSharingPdf}
+                  className="w-full sm:w-auto px-3 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-60 text-white rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-1"
+                  title="مشاركة الفاتورة PDF عبر واتساب"
+                >
+                  <MessageCircle size={15}/>
+                  <span>{isSharingPdf ? 'جاري التحويل...' : 'مشاركة PDF'}</span>
+                </button>
+
+                {/* 2. مشاركة كصورة */}
+                <button 
+                  onClick={async () => {
+                    if (!selectedCustomer) return;
+                    const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                    try {
+                      setIsSharingImage(true);
+                      await shareSalesInvoiceImageViaWhatsApp({
+                        ...viewInvoice,
+                        currentBalance: curBal,
+                        liveCustomerBalance: curBal
+                      } as any, companyLogo, selectedCustomer.phone);
+                    } finally {
+                      setIsSharingImage(false);
+                    }
+                  }}
+                  disabled={isSharingImage}
+                  className="w-full sm:w-auto px-3 py-2 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 disabled:opacity-60 text-white rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer order-2"
+                  title="مشاركة الفاتورة كصورة عبر واتساب"
+                >
+                  <ImageIcon size={15} />
+                  <span>{isSharingImage ? 'جاري التحضير...' : 'مشاركة كصورة'}</span>
+                </button>
+
+                {/* 3. طباعة الفاتورة */}
+                <button 
+                  onClick={() => {
+                    const curBal = customers.find(c => c.code === viewInvoice.customerCode)?.balance ?? viewInvoice.currentBalance;
+                    printInvoice({
+                      ...viewInvoice,
+                      currentBalance: curBal,
+                      liveCustomerBalance: curBal
+                    } as any);
+                  }} 
+                  className="w-full sm:w-auto px-3 py-2 bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 cursor-pointer order-3"
+                >
+                  <Printer size={15}/>
+                  <span>طباعة الفاتورة</span>
+                </button>
+
+                {/* 4. إغلاق */}
+                <button 
+                  onClick={() => setViewInvoice(null)} 
+                  className="w-full sm:w-auto px-3 py-2 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 border border-gray-300 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center cursor-pointer order-4"
+                >
+                  <span>إغلاق</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2410,6 +2657,7 @@ export const Customers: React.FC = () => {
         </div>
       )}
 
+      {dialog}
       {/* Consolidated Statement Modal */}
       <ConsolidatedLedgerModal
         isOpen={isConsolidatedModalOpen}

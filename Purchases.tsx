@@ -1,13 +1,15 @@
 
 import React, { useState, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator } from 'lucide-react';
-import { InvoiceItem, Purchase, BranchId, BRANCHES } from '../types';
+import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator, Wallet, Building2, Smartphone } from 'lucide-react';
+import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
+import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
+  const { confirm: askConfirm, notify, dialog } = useDialog();
   
   // PDF sharing state
   const [sharingPdfId, setSharingPdfId] = useState<string | null>(null);
@@ -21,12 +23,16 @@ export const Purchases: React.FC = () => {
   const [isPricePending, setIsPricePending] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Payment State for Purchases
+  const [paidAmountInput, setPaidAmountInput] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+
   // Current Item State
   const [currentItem, setCurrentItem] = useState<{
     itemCode: string;
     itemName: string;
     quantity: number | '';
-    price: number | '';
+    price: number | '' | string;
   }>({
     itemCode: '',
     itemName: '',
@@ -51,6 +57,7 @@ export const Purchases: React.FC = () => {
   const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
   const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
   const [editNewItem, setEditNewItem] = useState<{ code: string, quantity: number | '', price: number | '' }>({ code: '', quantity: '', price: '' });
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Pricing Modal State for Pending Invoices
   const [pricingPurchase, setPricingPurchase] = useState<Purchase | null>(null);
@@ -58,6 +65,9 @@ export const Purchases: React.FC = () => {
   const [isFinalizing, setIsFinalizing] = useState(false);
 
   const currentSupplier = suppliers.find(s => s.code === supplierCode);
+
+  const canEditPurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPurchases);
+  const canDeletePurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeletePurchases || currentUser?.permissions?.canEditPurchases);
 
   // Auto-generate Purchase ID (R001 series)
   useEffect(() => {
@@ -135,17 +145,17 @@ export const Purchases: React.FC = () => {
       : (typeof rawPrice === 'number' ? rawPrice : parseNumberFromCommas(rawPrice));
 
     if (!currentItem.itemCode || !currentItem.itemName) {
-      alert("الرجاء اختيار صنف صحيح");
+      notify("الرجاء اختيار صنف صحيح");
       itemCodeRef.current?.focus();
       return;
     }
     if (qty <= 0) {
-      alert("الكمية يجب أن تكون أكبر من صفر");
+      notify("الكمية يجب أن تكون أكبر من صفر");
       quantityRef.current?.focus();
       return;
     }
     if (!isPricePending && price <= 0) {
-      alert("الرجاء إدخال سعر الشراء (أو قم بتفعيل خيار 'سعر معلّق' إذا لم يتم الاتفاق على السعر بعد)");
+      notify("الرجاء إدخال سعر الشراء (أو قم بتفعيل خيار 'سعر معلّق' إذا لم يتم الاتفاق على السعر بعد)");
       priceRef.current?.focus();
       return;
     }
@@ -184,19 +194,23 @@ export const Purchases: React.FC = () => {
 
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
   
+  // Payment calculations
+  const paidAmountVal = isPricePending ? 0 : parseNumberFromCommas(paidAmountInput);
+  const remainingOnInvoice = Math.max(0, cartTotal - paidAmountVal);
+
   // Calculate expected new balance for display
   const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, purchases) : 0;
-  const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal);
+  const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal + paidAmountVal);
 
   const handleSaveInvoice = async () => {
     if (isSubmitting) return;
 
     if (cartItems.length === 0) {
-      alert("الفاتورة فارغة! أضف أصناف أولاً.");
+      notify("الفاتورة فارغة! أضف أصناف أولاً.");
       return;
     }
     if (!supplierCode) {
-      if(!confirm("اسم المورد غير مسجل في قاعدة البيانات. هل تريد المتابعة بدون ربط الحساب؟ (لن يظهر في كشف حساب الموردين)")) {
+      if (!await askConfirm("اسم المورد غير مسجل في قاعدة البيانات. هل تريد المتابعة بدون ربط الحساب؟ (لن يظهر في كشف حساب الموردين)")) {
         return;
       }
     }
@@ -211,7 +225,12 @@ export const Purchases: React.FC = () => {
         date: invoiceDate,
         total: isPricePending ? 0 : cartTotal,
         items: cartItems,
-        pricingStatus: isPricePending ? 'PENDING_PRICE' : 'PRICED'
+        pricingStatus: isPricePending ? 'PENDING_PRICE' : 'PRICED',
+        paid: isPricePending ? 0 : paidAmountVal,
+        paidAmount: isPricePending ? 0 : paidAmountVal,
+        remaining: isPricePending ? 0 : remainingOnInvoice,
+        remainingAmount: isPricePending ? 0 : remainingOnInvoice,
+        paymentMethod: (!isPricePending && paidAmountVal > 0) ? paymentMethod : undefined
       });
 
       setCartItems([]);
@@ -219,8 +238,12 @@ export const Purchases: React.FC = () => {
       setSupplierCode('');
       setCurrentItem({ itemCode: '', itemName: '', quantity: '', price: '' });
       setIsPricePending(false);
-      alert(isPricePending 
+      setPaidAmountInput('');
+      setPaymentMethod('CASH');
+      notify(isPricePending 
         ? "تم حفظ فاتورة المشتريات (سعر معلّق) وإدخال الكميات للمخزن بنجاح دون قيد مديونية للمورد لحين تحديد السعر." 
+        : paidAmountVal > 0
+        ? `تم حفظ فاتورة المشتريات وسداد دفعة قدرها ${paidAmountVal.toLocaleString()} ج.م وتحديث الخزينة وحساب المورد بنجاح.`
         : "تم حفظ فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح."
       );
     } finally {
@@ -258,7 +281,7 @@ export const Purchases: React.FC = () => {
     // Check that all items have price > 0
     const hasZero = pricingItems.some(item => !item.price || Number(item.price) <= 0);
     if (hasZero) {
-      alert("يرجى إدخال سعر شراء صحيح (أكبر من صفر) لجميع الأصناف في الفاتورة");
+      notify("يرجى إدخال سعر شراء صحيح (أكبر من صفر) لجميع الأصناف في الفاتورة");
       return;
     }
 
@@ -268,7 +291,7 @@ export const Purchases: React.FC = () => {
     try {
       const success = await finalizePurchasePrice(pricingPurchase.id, pricingItems, newTotal);
       if (success) {
-        alert(`تم اعتماد وتسعير فاتورة المشتريات #${pricingPurchase.id} بنجاح!\nالإجمالي الجديد: ${newTotal.toLocaleString()} ج.م، وتم ترحيل المديونية لحساب المورد وتحديث تكلفة الأصناف بالمخزن.`);
+        notify(`تم اعتماد وتسعير فاتورة المشتريات #${pricingPurchase.id} بنجاح!\nالإجمالي الجديد: ${newTotal.toLocaleString()} ج.م، وتم ترحيل المديونية لحساب المورد وتحديث تكلفة الأصناف بالمخزن.`);
         setPricingPurchase(null);
       }
     } finally {
@@ -277,8 +300,17 @@ export const Purchases: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    await deletePurchase(id);
-    setDeleteConfirmId(null);
+    const p = purchases.find(x => x.id === id);
+    const confirmMsg = `هل أنت متأكد من حذف فاتورة المشتريات #${id}${p?.supplierName ? ` للمورد (${p.supplierName})` : ''} نهائياً؟\n\nسيتم:\n1. خصم كميات الأصناف من المخزن لمنع تضخم الرصيد.\n2. حذف الفاتورة وبنودها من كشف حساب المورد وإعادة ضبط الرصيد.\n3. إلغاء أي دفعة مسددة من الخزينة إن وُجدت.`;
+    if (!await askConfirm(confirmMsg)) return;
+
+    try {
+      await deletePurchase(id);
+      notify(`تم حذف فاتورة المشتريات #${id} بنجاح وتحديث المخزن وحساب المورد والخزينة.`);
+    } catch (err: any) {
+      console.error(err);
+      notify("حدث خطأ أثناء حذف الفاتورة: " + (err.message || ""));
+    }
   };
 
   // --- Edit Logic ---
@@ -295,7 +327,9 @@ export const Purchases: React.FC = () => {
   };
 
   const handleEditAddItem = () => {
-    if (!editNewItem.code || editNewItem.quantity <= 0 || editNewItem.price <= 0) return;
+    const qty = Number(editNewItem.quantity) || 0;
+    const prc = Number(editNewItem.price) || 0;
+    if (!editNewItem.code || qty <= 0 || prc <= 0) return;
     const product = products.find(p => p.code === editNewItem.code);
     const itemName = product ? product.name : editNewItem.code;
 
@@ -303,16 +337,16 @@ export const Purchases: React.FC = () => {
       const existingIdx = prev.findIndex(i => i.itemCode === editNewItem.code);
       if (existingIdx >= 0) {
         const updated = [...prev];
-        updated[existingIdx].quantity += editNewItem.quantity;
+        updated[existingIdx].quantity += qty;
         updated[existingIdx].total = updated[existingIdx].quantity * updated[existingIdx].price; 
         return updated;
       }
       return [...prev, {
         itemCode: editNewItem.code,
         itemName: itemName,
-        quantity: editNewItem.quantity,
-        price: editNewItem.price,
-        total: editNewItem.quantity * editNewItem.price
+        quantity: qty,
+        price: prc,
+        total: qty * prc
       }];
     });
     setEditNewItem({ code: '', quantity: 1, price: 0 });
@@ -332,8 +366,8 @@ export const Purchases: React.FC = () => {
   };
 
   const handleSaveEdit = async () => {
-    if (!editPurchase) return;
-    if (editItems.length === 0) return alert("لا يمكن حفظ فاتورة فارغة");
+    if (!editPurchase || isSavingEdit) return;
+    if (editItems.length === 0) return notify("لا يمكن حفظ فاتورة فارغة");
 
     const newTotal = editItems.reduce((sum, i) => sum + i.total, 0);
     const newPurchaseData: Purchase = {
@@ -342,20 +376,34 @@ export const Purchases: React.FC = () => {
       total: newTotal
     };
 
-    await updatePurchase(editPurchase, newPurchaseData);
-    setEditPurchase(null);
-    alert("تم تعديل فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح");
+    setIsSavingEdit(true);
+    try {
+      await updatePurchase(editPurchase, newPurchaseData);
+      setEditPurchase(null);
+      notify("تم تعديل فاتورة المشتريات وتحديث المخزن وحساب المورد بنجاح");
+    } finally {
+      setIsSavingEdit(false);
+    }
   };
 
   const activePurchases = purchases.filter(p => !p.isDeleted);
   const pendingPurchasesCount = activePurchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
   const pricedPurchasesCount = activePurchases.filter(p => p.pricingStatus !== 'PENDING_PRICE').length;
 
-  const filteredPurchases = activePurchases.filter(p => {
-    if (historyFilter === 'PENDING_PRICE') return p.pricingStatus === 'PENDING_PRICE';
-    if (historyFilter === 'PRICED') return p.pricingStatus !== 'PENDING_PRICE';
-    return true;
-  });
+  const filteredPurchases = activePurchases
+    .filter(p => {
+      if (historyFilter === 'PENDING_PRICE') return p.pricingStatus === 'PENDING_PRICE';
+      if (historyFilter === 'PRICED') return p.pricingStatus !== 'PENDING_PRICE';
+      return true;
+    })
+    .sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.date ? new Date(a.date).getTime() : 0);
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.date ? new Date(b.date).getTime() : 0);
+      if (dateB !== dateA) return dateB - dateA;
+      const numA = parseInt((a.id || '').replace(/\D/g, '')) || 0;
+      const numB = parseInt((b.id || '').replace(/\D/g, '')) || 0;
+      return numB - numA;
+    });
 
   return (
     <div className="space-y-8">
@@ -655,16 +703,195 @@ export const Purchases: React.FC = () => {
           </table>
         </div>
 
+        {/* Payment Section (سداد دفعة مسددة للمورد) */}
+        {!isPricePending && (
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-4 mb-6 space-y-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-emerald-200/60 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-600 text-white rounded-lg">
+                  <Wallet size={18} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-emerald-950">سداد دفعة للمورد (دفعة مسددة)</h4>
+                  <p className="text-xs text-emerald-700">اترك المبلغ 0 إذا كانت الفاتورة آجلة بالكامل دون سداد فوري</p>
+                </div>
+              </div>
+              {cartTotal > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPaidAmountInput(formatWithCommas(cartTotal))}
+                    className="text-xs px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 font-bold rounded-lg border border-emerald-300 transition-colors shadow-xs cursor-pointer"
+                  >
+                    سداد كامل الفاتورة ({cartTotal.toLocaleString()} ج.م)
+                  </button>
+                  {paidAmountVal > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPaidAmountInput('')}
+                      className="text-xs px-2 py-1 bg-white hover:bg-red-50 text-red-600 font-bold rounded-lg border border-red-200 transition-colors cursor-pointer"
+                    >
+                      تصفير
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+              {/* Paid Input */}
+              <div className="md:col-span-5 space-y-1.5">
+                <label className="block text-xs font-bold text-emerald-900">
+                  المدفوع للمورد (دفعة مسددة)
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    dir="ltr"
+                    className="w-full p-2.5 pl-10 border-2 border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-lg text-center font-mono bg-white text-emerald-950 shadow-inner"
+                    placeholder="0"
+                    value={paidAmountInput}
+                    onChange={e => handleNumericChangeWithCommas(e.target.value, val => setPaidAmountInput(val))}
+                  />
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs pointer-events-none">
+                    ج.م
+                  </span>
+                </div>
+                {paidAmountVal > 0 && (
+                  <p className="text-[11px] font-bold text-emerald-700 flex justify-between px-1">
+                    <span>المبلغ المسدد:</span>
+                    <span dir="ltr">{paidAmountVal.toLocaleString()} ج.م</span>
+                  </p>
+                )}
+              </div>
+
+              {/* Remaining On Invoice */}
+              <div className="md:col-span-7 bg-white p-3 rounded-lg border border-emerald-200 flex items-center justify-between shadow-xs">
+                <div>
+                  <span className="block text-xs text-gray-500 font-bold">المتبقي من الفاتورة (آجل)</span>
+                  <span className={`text-xl font-bold font-mono ${remainingOnInvoice > 0 ? 'text-amber-700' : 'text-emerald-600'}`} dir="ltr">
+                    {remainingOnInvoice.toLocaleString()} ج.م
+                  </span>
+                </div>
+                <div className="text-left text-xs">
+                  <span className="text-gray-500 block">إجمالي الفاتورة</span>
+                  <span className="font-bold font-mono text-gray-700" dir="ltr">{cartTotal.toLocaleString()} ج.م</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Payment Method Selector (visible when paidAmountVal > 0) */}
+            {paidAmountVal > 0 && (
+              <div className="pt-2 border-t border-emerald-200/60 space-y-2 animate-fade-in">
+                <label className="block text-xs font-bold text-emerald-900 mb-2">
+                  طريقة الدفع (الخزنة / الحساب المنصرف منه)
+                </label>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'CASH' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="CASH" 
+                      checked={paymentMethod === 'CASH'}
+                      onChange={() => setPaymentMethod('CASH')} 
+                      className="hidden"
+                    />
+                    <Wallet size={20} />
+                    <span className="font-bold text-xs">خزنة (كاش)</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'BANK_AHLY' ? 'bg-green-50 border-green-600 text-green-800 ring-1 ring-green-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="BANK_AHLY" 
+                      checked={paymentMethod === 'BANK_AHLY'}
+                      onChange={() => setPaymentMethod('BANK_AHLY')} 
+                      className="hidden"
+                    />
+                    <Building2 size={20} />
+                    <span className="font-bold text-xs">البنك الأهلي</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'BANK_MISR' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="BANK_MISR" 
+                      checked={paymentMethod === 'BANK_MISR'}
+                      onChange={() => setPaymentMethod('BANK_MISR')} 
+                      className="hidden"
+                    />
+                    <Building2 size={20} />
+                    <span className="font-bold text-xs">بنك مصر</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'VF_CASH_AYMAN' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="VF_CASH_AYMAN" 
+                      checked={paymentMethod === 'VF_CASH_AYMAN'}
+                      onChange={() => setPaymentMethod('VF_CASH_AYMAN')} 
+                      className="hidden"
+                    />
+                    <Smartphone size={20} />
+                    <span className="font-bold text-xs">فودافون كاش أيمن</span>
+                  </label>
+
+                  <label className={`
+                    flex flex-col items-center justify-center gap-2 p-3 rounded-lg border cursor-pointer transition-all text-center
+                    ${paymentMethod === 'VF_CASH_KYRILLOS' ? 'bg-red-50 border-red-600 text-red-800 ring-1 ring-red-600 font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}
+                  `}>
+                    <input 
+                      type="radio" 
+                      name="purchasePaymentMethod" 
+                      value="VF_CASH_KYRILLOS" 
+                      checked={paymentMethod === 'VF_CASH_KYRILLOS'}
+                      onChange={() => setPaymentMethod('VF_CASH_KYRILLOS')} 
+                      className="hidden"
+                    />
+                    <Smartphone size={20} />
+                    <span className="font-bold text-xs">فودافون كاش كيرلس</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Footer & Save */}
         <div className="flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
-           <div className="text-base md:text-lg font-bold text-gray-700 flex items-center gap-2">
-             <span>إجمالي الفاتورة:</span>
-             {isPricePending ? (
-               <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 border border-amber-300 text-amber-900 rounded-lg text-sm font-black">
-                 <Clock size={16} /> سعر معلّق (سيحدد لاحقاً)
-               </span>
-             ) : (
-               <span className="text-2xl text-brand-700 mr-2">{cartTotal.toLocaleString()} ج.م</span>
+           <div className="text-base md:text-lg font-bold text-gray-700 flex flex-wrap items-center gap-3">
+             <div className="flex items-center gap-2">
+               <span>إجمالي الفاتورة:</span>
+               {isPricePending ? (
+                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 border border-amber-300 text-amber-900 rounded-lg text-sm font-black">
+                   <Clock size={16} /> سعر معلّق (سيحدد لاحقاً)
+                 </span>
+               ) : (
+                 <span className="text-2xl text-brand-700 mr-1">{cartTotal.toLocaleString()} ج.م</span>
+               )}
+             </div>
+
+             {!isPricePending && paidAmountVal > 0 && (
+               <div className="flex items-center gap-2 text-xs md:text-sm bg-white px-3 py-1.5 rounded-lg border border-emerald-200 shadow-2xs">
+                 <span className="text-emerald-700 font-bold">مسدد: {paidAmountVal.toLocaleString()} ج.م</span>
+                 <span className="text-gray-300">|</span>
+                 <span className="text-amber-700 font-bold">متبقي: {remainingOnInvoice.toLocaleString()} ج.م</span>
+               </div>
              )}
            </div>
            <button 
@@ -675,7 +902,7 @@ export const Purchases: React.FC = () => {
                isPricePending 
                  ? 'bg-amber-600 hover:bg-amber-700' 
                  : 'bg-green-600 hover:bg-green-700'
-             } text-white px-8 py-3 rounded-lg font-bold shadow-md flex items-center gap-2 transition-all disabled:opacity-50`}
+             } text-white px-8 py-3 rounded-lg font-bold shadow-md flex items-center gap-2 transition-all disabled:opacity-50 cursor-pointer`}
            >
              <Save size={20} />
              <span>{isSubmitting ? 'جاري الحفظ...' : isPricePending ? 'حفظ الفاتورة (سعر معلّق)' : 'حفظ الفاتورة'}</span>
@@ -823,7 +1050,7 @@ export const Purchases: React.FC = () => {
                           const supp = suppliers.find(s => s.code === purchase.supplierCode);
                           setSharingPdfId(purchase.id);
                           try {
-                            await sharePurchaseInvoicePdfViaWhatsApp(purchase, companyLogo, supp?.phone);
+                            await sharePurchaseInvoicePdfViaWhatsApp(purchase, companyLogo || undefined, supp?.phone);
                           } finally {
                             setSharingPdfId(null);
                           }
@@ -835,43 +1062,36 @@ export const Purchases: React.FC = () => {
                         <MessageCircle size={18} />
                       </button>
                       
-                      {currentUser?.permissions.canEditPurchases && (
-                        <>
-                          <button 
-                            onClick={() => openEditModal(purchase)}
-                            className="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded transition-colors"
-                            title="تعديل"
-                          >
-                            <Edit size={18} />
-                          </button>
-                          {deleteConfirmId === purchase.id ? (
-                            <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-100 shadow-sm animate-fade-in">
-                               <button 
-                                 onClick={() => handleDelete(purchase.id)} 
-                                 className="bg-red-500 text-white p-1.5 rounded hover:bg-red-600 transition-colors shadow-sm" 
-                                 title="تأكيد الحذف"
-                               >
-                                 <Check size={16}/>
-                               </button>
-                               <button 
-                                 onClick={() => setDeleteConfirmId(null)} 
-                                 className="bg-white text-gray-500 p-1.5 rounded border border-gray-200 hover:bg-gray-100 transition-colors" 
-                                 title="إلغاء"
-                               >
-                                 <X size={16}/>
-                               </button>
-                             </div>
-                          ) : (
-                            <button 
-                              onClick={() => setDeleteConfirmId(purchase.id)}
-                              className="text-red-400 hover:bg-red-50 hover:text-red-600 p-2 rounded transition-colors"
-                              title="حذف السجل"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                          )}
-                        </>
+                      {canEditPurchases && (
+                        <button 
+                          onClick={() => openEditModal(purchase)}
+                          className="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded transition-colors"
+                          title="تعديل"
+                        >
+                          <Edit size={18} />
+                        </button>
                       )}
+
+                      <button 
+                        type="button"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          if (!await askConfirm("هل أنت متأكد من حذف الفاتورة؟")) return;
+                          try {
+                            const deleteFn = deletePurchaseInvoice || deletePurchase;
+                            await deleteFn(purchase.id);
+                            notify(`تم حذف الفاتورة #${purchase.id} بنجاح.`);
+                          } catch (err: any) {
+                            console.error(err);
+                            notify("حدث خطأ أثناء حذف الفاتورة: " + (err?.message || ""));
+                          }
+                        }}
+                        className="text-red-500 hover:bg-red-50 hover:text-red-700 p-2 rounded transition-colors cursor-pointer"
+                        title="حذف فاتورة المشتريات"
+                      >
+                        <Trash2 size={18} />
+                      </button>
                     </td>
                   </tr>
                 );
@@ -980,7 +1200,7 @@ export const Purchases: React.FC = () => {
                            safetyTimer = setTimeout(() => {
                              setSharingPdfId(null);
                            }, 3500);
-                           await sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo, supp?.phone);
+                           await sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo || undefined, supp?.phone ? supp.phone : undefined);
                          } catch (err: any) {
                            if (
                              err?.name !== 'AbortError' &&
@@ -1002,8 +1222,18 @@ export const Purchases: React.FC = () => {
                        <MessageCircle size={18}/> {sharingPdfId === viewPurchase.id ? 'جاري تجهيز PDF...' : 'مشاركة PDF واتساب'}
                     </button>
                  </div>
-                 <div className="text-xl font-bold bg-gray-100 px-4 py-2 rounded text-brand-800">
-                   الإجمالي: {viewPurchase.total.toLocaleString()} ج.م
+                 <div className="flex items-center gap-2">
+                   {Boolean(viewPurchase.paid && viewPurchase.paid > 0) && (
+                     <div className="text-xs sm:text-sm font-bold bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg text-emerald-800">
+                       مسدد: {viewPurchase.paid?.toLocaleString()} ج.م
+                       {viewPurchase.remaining !== undefined && (
+                         <span className="mr-2 text-amber-700">| متبقي: {viewPurchase.remaining?.toLocaleString()} ج.م</span>
+                       )}
+                     </div>
+                   )}
+                   <div className="text-xl font-bold bg-gray-100 px-4 py-2 rounded text-brand-800">
+                     الإجمالي: {viewPurchase.total.toLocaleString()} ج.م
+                   </div>
                  </div>
                </div>
             </div>
@@ -1100,8 +1330,12 @@ export const Purchases: React.FC = () => {
                <div className="text-lg font-bold text-gray-800">
                  الإجمالي الجديد: <span className="text-blue-700">{editItems.reduce((s, i) => s + i.total, 0).toLocaleString()} ج.م</span>
                </div>
-               <button onClick={handleSaveEdit} className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 shadow-lg">
-                 <Save size={20}/> حفظ التعديلات
+               <button 
+                 onClick={handleSaveEdit} 
+                 disabled={isSavingEdit}
+                 className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 shadow-lg disabled:opacity-50"
+               >
+                 <Save size={20}/> {isSavingEdit ? 'جاري الحفظ...' : 'حفظ التعديلات'}
                </button>
             </div>
           </div>
@@ -1174,8 +1408,8 @@ export const Purchases: React.FC = () => {
                             dir="ltr"
                             placeholder="أدخل السعر"
                             className="w-full p-2 border-2 border-amber-300 rounded-lg text-center font-bold font-mono text-sm focus:border-amber-500 outline-none bg-amber-50/40"
-                            value={item.price === 0 || item.price === '' ? '' : formatWithCommas(item.price)}
-                            onChange={e => handleNumericChangeWithCommas(e.target.value, val => handlePricingPriceChange(idx, val))}
+                            value={!item.price ? '' : formatWithCommas(item.price)}
+                            onChange={e => handleNumericChangeWithCommas(e.target.value, val => handlePricingPriceChange(idx, parseNumberFromCommas(val)))}
                           />
                         </td>
                         <td className="p-3 text-center font-bold text-emerald-600 font-mono text-sm">
@@ -1218,6 +1452,9 @@ export const Purchases: React.FC = () => {
         </div>
       )}
 
+
+      {dialog}
     </div>
   );
 };
+

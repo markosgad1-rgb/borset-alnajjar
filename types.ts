@@ -170,11 +170,17 @@ export interface Purchase {
   total: number;
   items: InvoiceItem[]; // Multiple items support
   pricingStatus?: 'PRICED' | 'PENDING_PRICE'; // Support for pending purchase prices
+  paid?: number; // Immediate down payment to supplier
+  paidAmount?: number;
+  remaining?: number; // Remaining debt on invoice
+  remainingAmount?: number;
+  paymentMethod?: PaymentMethod; // Treasury account used for payment
   previousBalance?: number; // Snapshot of balance before this invoice
   currentBalance?: number; // Snapshot of balance after this invoice
   createdAt?: string;
   isDeleted?: boolean;
   deletedAt?: string;
+  supplierPhone?: string;
   // Deprecated single-item fields (kept optional for backward compatibility if needed)
   itemCode?: string;
   itemName?: string;
@@ -201,7 +207,9 @@ export interface SalesInvoice {
   customerPhone?: string;
   items: InvoiceItem[];
   total: number;
+  paid?: number;
   paidAmount?: number; // Amount paid immediately
+  remaining?: number;
   remainingAmount?: number; // Total - paidAmount
   paymentMethod?: PaymentMethod; // Treasury account where payment was deposited
   previousBalance: number;

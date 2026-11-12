@@ -1248,7 +1248,8 @@ export async function shareSupplierStatementPdfViaWhatsApp(
     entityCode: code,
     entityPhone: phone,
     title: options.title || `كشف حساب مورد - ${name}`,
-    type: 'SUPPLIER'
+    type: 'SUPPLIER',
+    forWhatsApp: true
   }, companyLogo);
 
   const fileName = getSupplierStatementPdfFileName(name);
