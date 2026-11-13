@@ -11,6 +11,7 @@ import {
   getDocFromCache
 } from 'firebase/firestore';
 import { ensureConnectionMonitor, isConnected, trackWrite, emitOfflineSave } from './connectionStatus';
+import { captureBefore, recordWrite } from './auditLog';
 
 ensureConnectionMonitor();
 
@@ -50,14 +51,26 @@ const write = (p: Promise<void>, ref: any): Promise<void> => {
   return settle<void>(p, () => undefined);
 };
 
-export const setDoc = ((ref: any, data: any, options?: any) =>
-  write(options ? fsSetDoc(ref, data, options) : fsSetDoc(ref, data), ref)) as typeof fsSetDoc;
+export const setDoc = ((ref: any, data: any, options?: any) => {
+  const before = captureBefore(ref);   // reads the local cache BEFORE the write is queued
+  const p = options ? fsSetDoc(ref, data, options) : fsSetDoc(ref, data);
+  recordWrite('set', ref, data, before);
+  return write(p, ref);
+}) as typeof fsSetDoc;
 
-export const updateDoc = ((ref: any, ...rest: any[]) =>
-  write((fsUpdateDoc as any)(ref, ...rest), ref)) as typeof fsUpdateDoc;
+export const updateDoc = ((ref: any, ...rest: any[]) => {
+  const before = captureBefore(ref);
+  const p = (fsUpdateDoc as any)(ref, ...rest);
+  recordWrite('update', ref, rest, before);
+  return write(p, ref);
+}) as typeof fsUpdateDoc;
 
-export const deleteDoc = ((ref: any) =>
-  write(fsDeleteDoc(ref), ref)) as typeof fsDeleteDoc;
+export const deleteDoc = ((ref: any) => {
+  const before = captureBefore(ref);
+  const p = fsDeleteDoc(ref);
+  recordWrite('delete', ref, undefined, before);
+  return write(p, ref);
+}) as typeof fsDeleteDoc;
 
 // Reads: if the server does not answer quickly, serve the local cache (which already contains pending local writes).
 export const getDoc = ((ref: any) =>

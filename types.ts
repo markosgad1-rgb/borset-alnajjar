@@ -282,7 +282,7 @@ export interface User {
   permissions: UserPermissions;
 }
 
-export type PageView = 'dashboard' | 'reports' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users' | 'trash';
+export type PageView = 'dashboard' | 'reports' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users' | 'trash' | 'activity';
 
 export interface SystemBackup {
   version: string;

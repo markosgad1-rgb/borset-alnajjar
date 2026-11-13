@@ -14,6 +14,7 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
+import { logEvent } from '../utils/auditLog';
 
 interface ERPContextType {
   products: Product[];
@@ -783,6 +784,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
          permissions: {} 
        });
        setCurrentUser(adminUser);
+       logEvent('login', 'تسجيل دخول', adminUser);
        if (isOnline) {
          setDoc(doc(db, 'users', '1'), adminUser).catch((e: any) => console.log("Admin seed check:", e));
        }
@@ -792,13 +794,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const user = users.find(u => u.username === username && u.password === password);
     if (user) {
       setCurrentUser(sanitizeUser(user));
+      logEvent('login', 'تسجيل دخول', user);
       return true;
     }
     
     return false;
   };
 
-  const logout = () => setCurrentUser(null);
+  const logout = () => { logEvent('logout', 'تسجيل خروج'); setCurrentUser(null); };
 
   const addProduct = async (product: Product): Promise<boolean> => {
     const cleanCode = (product.code || '').trim();

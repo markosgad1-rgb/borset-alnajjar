@@ -18,6 +18,7 @@ import { UserManagement } from './pages/UserManagement';
 import { SalesHistory } from './pages/SalesHistory';
 import { Reports } from './pages/Reports';
 import { Trash } from './pages/Trash';
+import { ActivityLog } from './pages/ActivityLog';
 import { PageView, User, UserPermissions } from './types';
 import { setupBackNavigation, clearAllBackHandlers } from './utils/backNavigation';
 
@@ -104,6 +105,13 @@ const AppContent: React.FC = () => {
         }
       }
 
+      if (activePage === 'activity') {
+        if (currentUser.username !== 'admin' && (currentUser.role as string) !== 'ADMIN') {
+          setActivePage(getInitialPage(currentUser));
+        }
+        return;
+      }
+
       if (activePage === 'trash') {
         const canTrash = Boolean(
           currentUser.permissions.canDeleteInvoices ||
@@ -147,6 +155,7 @@ const AppContent: React.FC = () => {
       case 'expenses': return <Expenses />;
       case 'trash': return <Trash />;
       case 'users': return <UserManagement />;
+      case 'activity': return <ActivityLog />;
       default: return <Dashboard />;
     }
   };
