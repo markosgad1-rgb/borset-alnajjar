@@ -63,7 +63,7 @@ export const SystemAdmin: React.FC = () => {
     setErr('');
     try { await fn(); } catch (e: any) { setErr('تعذر تنفيذ العملية: ' + (e?.message || '')); }
   };
-  const setStatus = (d: DeviceDoc, status: DeviceStatus) => run(() => updateDoc(doc(db, DEVICES_COLLECTION, d.id), { status, online: status === 'blocked' ? false : d.online }));
+  const setStatus = (d: DeviceDoc, status: DeviceStatus) => run(() => updateDoc(doc(db, DEVICES_COLLECTION, d.id), status === 'blocked' ? { status, online: false } : { status }));
   const removeDevice = (d: DeviceDoc) => run(async () => { await deleteDoc(doc(db, DEVICES_COLLECTION, d.id)); setConfirmDeleteId(null); });
   const saveName = () => { if (!renaming) return; const r = renaming; setRenaming(null); const text = r.text.trim(); if (text) run(() => updateDoc(doc(db, DEVICES_COLLECTION, r.id), { deviceName: text })); };
   const toggleEnforce = (value: boolean) => run(async () => { await setDoc(doc(db, SECURITY_DOC[0], SECURITY_DOC[1]), { enforce: value }, { merge: true }); setConfirmEnforce(false); });

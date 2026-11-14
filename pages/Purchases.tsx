@@ -6,6 +6,7 @@ import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../typ
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { CartNumberInput } from '../components/CartNumberInput';
 
 export const Purchases: React.FC = () => {
   const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
@@ -193,6 +194,16 @@ export const Purchases: React.FC = () => {
       itemCodeRef.current?.focus();
       itemCodeRef.current?.select();
     }, 60);
+  };
+
+  const updateCartQuantity = (index: number, q: number): boolean => {
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, quantity: q, total: q * it.price } : it));
+    return true;
+  };
+
+  const updateCartPrice = (index: number, pr: number): boolean => {
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, price: pr, total: it.quantity * pr } : it));
+    return true;
   };
 
   const removeFromCart = (index: number) => {
@@ -693,15 +704,11 @@ export const Purchases: React.FC = () => {
               {cartItems.map((item, idx) => (
                 <tr key={idx} className="hover:bg-gray-50">
                   <td className="p-3">{item.itemName} <span className="text-xs text-gray-400">({item.itemCode})</span></td>
-                  <td className="p-3 font-bold">{item.quantity}</td>
                   <td className="p-3">
-                    {item.price > 0 ? (
-                      item.price.toLocaleString()
-                    ) : (
-                      <span className="text-xs text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        معلّق
-                      </span>
-                    )}
+                    <CartNumberInput value={item.quantity} onCommit={v => updateCartQuantity(idx, v)} className="w-20" />
+                  </td>
+                  <td className="p-3">
+                    <CartNumberInput value={item.price} onCommit={v => updateCartPrice(idx, v)} allowZero={isPricePending} className="w-24" title={isPricePending ? 'السعر معلّق (يمكن تركه 0)' : undefined} />
                   </td>
                   <td className="p-3 font-bold text-green-600">
                     {item.total > 0 ? (
