@@ -7,6 +7,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
 import { CartNumberInput } from '../components/CartNumberInput';
+import { canDo } from '../utils/permissions';
 
 export const Purchases: React.FC = () => {
   const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
@@ -74,8 +75,8 @@ export const Purchases: React.FC = () => {
 
   const currentSupplier = suppliers.find(s => s.code === supplierCode);
 
-  const canEditPurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPurchases);
-  const canDeletePurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeletePurchases || currentUser?.permissions?.canEditPurchases);
+  const canEditPurchases = canDo(currentUser, 'purchase.edit');
+  const canDeletePurchases = canDo(currentUser, 'purchase.delete');
 
   // Auto-generate Purchase ID (R001 series)
   useEffect(() => {

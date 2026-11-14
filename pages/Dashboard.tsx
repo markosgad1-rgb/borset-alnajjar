@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { TrendingUp, Users, Package, Truck, Trash2, Check, X, AlertTriangle, Clock, ShoppingCart } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { canDo } from '../utils/permissions';
 
 export const Dashboard: React.FC = () => {
   const { 
@@ -19,7 +20,7 @@ export const Dashboard: React.FC = () => {
   } = useERP();
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  const canDeleteInvoices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteInvoices);
+  const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
 
   // Filter out deleted items (Soft Delete)
   const activeCustomers = customers.filter(c => !c.isDeleted);

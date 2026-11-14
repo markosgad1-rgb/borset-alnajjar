@@ -12,6 +12,7 @@ import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsAp
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
+import { canDo } from '../utils/permissions';
 
 export const Suppliers: React.FC = () => {
   const { 
@@ -22,7 +23,10 @@ export const Suppliers: React.FC = () => {
   } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();
 
-  const canDeleteSuppliers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteSuppliers);
+  const canDeleteSuppliers = canDo(currentUser, 'supplier.delete');
+  const canAddSupplier = canDo(currentUser, 'supplier.add');
+  const canEditSupplier = canDo(currentUser, 'supplier.edit');
+  const canDeleteMovement = canDo(currentUser, 'ledger.deleteMovement');
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
@@ -651,12 +655,12 @@ export const Suppliers: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button 
+          {canAddSupplier && (<button 
             onClick={handleOpenAddModal}
             className="flex items-center gap-1.5 bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 transition-colors shadow-xs"
           >
             <PlusCircle size={15} /> إضافة مورد جديد
-          </button>
+          </button>)}
           
           <button 
             onClick={() => {
@@ -730,13 +734,13 @@ export const Suppliers: React.FC = () => {
                         </p>
                       </div>
 
-                      <button 
+                      {canEditSupplier && (<button 
                         onClick={(e) => handleOpenEditModal(e, s)}
                         className="opacity-0 group-hover:opacity-100 p-1 text-blue-600 hover:bg-blue-50 rounded transition-all"
                         title="تعديل بيانات المورد"
                       >
                         <Edit size={13} />
-                      </button>
+                      </button>)}
                       {canDeleteSuppliers && (
                         <button 
                           onClick={(e) => handleInitiateDelete(e, s)}
@@ -782,13 +786,13 @@ export const Suppliers: React.FC = () => {
                           {selectedSupplier.code}
                         </span>
                       </h2>
-                      <button 
+                      {canEditSupplier && (<button 
                         onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
                         className="p-1 text-gray-500 hover:text-orange-700 bg-gray-50 hover:bg-orange-50 border border-gray-200 rounded transition-colors shrink-0"
                         title="تعديل بيانات المورد"
                       >
                         <Edit size={11} />
-                      </button>
+                      </button>)}
                       {canDeleteSuppliers && (
                         <button 
                           onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
@@ -916,13 +920,13 @@ export const Suppliers: React.FC = () => {
                         >
                           <PlusCircle size={12} className="stroke-[2.5]" /> + تسوية
                         </button>
-                        <button 
+                        {canEditSupplier && (<button 
                           onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
                           className="text-xs font-normal text-gray-500 hover:text-orange-700 bg-white border border-gray-200 hover:border-orange-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
                           title="تعديل بيانات المورد"
                         >
                           <Edit size={12}/> تعديل
-                        </button>
+                        </button>)}
                         {canDeleteSuppliers && (
                           <button 
                             onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
@@ -1049,7 +1053,7 @@ export const Suppliers: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {currentUser?.permissions.canDeleteLedgers && (
+                    {canDo(currentUser, 'ledger.clear') && (
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
@@ -1239,7 +1243,7 @@ export const Suppliers: React.FC = () => {
                               )}
                             </td>
                             <td className="p-2 text-center" key={`action_${r.id || idx}`}>
-                              <button 
+                              {canDeleteMovement && (<button 
                                 type="button"
                                 onClick={async (e) => {
                                   e.stopPropagation();
@@ -1286,7 +1290,7 @@ export const Suppliers: React.FC = () => {
                                 title="حذف هذا السطر"
                               >
                                 <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
-                              </button>
+                              </button>)}
                             </td>
                           </tr>
                         ))
@@ -1401,7 +1405,7 @@ export const Suppliers: React.FC = () => {
                               )}
                             </td>
                             <td className="p-2.5 text-center" key={`action_${r.id || idx}`}>
-                              <button 
+                              {canDeleteMovement && (<button 
                                 type="button"
                                 onClick={async (e) => {
                                   e.stopPropagation();
@@ -1448,7 +1452,7 @@ export const Suppliers: React.FC = () => {
                                 title="حذف هذا السطر"
                               >
                                 <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
-                              </button>
+                              </button>)}
                             </td>
                           </tr>
                         ))

@@ -22,6 +22,7 @@ import { ActivityLog } from './pages/ActivityLog';
 import { SystemAdmin } from './pages/SystemAdmin';
 import { PageView, User, UserPermissions } from './types';
 import { setupBackNavigation, clearAllBackHandlers } from './utils/backNavigation';
+import { canViewPage, firstAllowedPage } from './utils/permissions';
 
 const AppContent: React.FC = () => {
   const { currentUser } = useERP();
@@ -74,71 +75,12 @@ const AppContent: React.FC = () => {
     setActivePage(page);
   };
 
-  // Security Check: Validate Page Permissions on User Change or Navigation
+  // Security Check: if the current page is not allowed for this user, move to the first allowed page
   useEffect(() => {
-    if (currentUser) {
-      // Admins have unrestricted access to all pages
-      if (currentUser.role === 'ADMIN' || currentUser.username === 'admin') {
-        return;
-      }
-
-      // Map pages to required granular permissions
-      const permissionsMap: Partial<Record<PageView, keyof UserPermissions>> = {
-        'reports': 'canViewReports',
-        'sales': 'canViewSales',
-        'sales-history': 'canViewInvoicesLog',
-        'purchases': 'canViewPurchases',
-        'warehouse': 'canViewInventory',
-        'customers': 'canViewCustomers',
-        'suppliers': 'canViewSuppliers',
-        'treasury': 'canViewTreasury',
-        'collections': 'canViewTreasury',
-        'transfers': 'canViewTreasury',
-        'expenses': 'canViewTreasury',
-        'employees': 'canViewTreasury',
-        'users': 'admin',
-      };
-
-      if (activePage === 'users') {
-        if (currentUser.username !== 'admin') {
-          setActivePage(getInitialPage(currentUser));
-          return;
-        }
-      }
-
-      if (activePage === 'system') {
-        if (currentUser.username !== 'admin' && (currentUser.role as string) !== 'ADMIN') {
-          setActivePage(getInitialPage(currentUser));
-        }
-        return;
-      }
-
-      if (activePage === 'activity') {
-        if (currentUser.username !== 'admin' && (currentUser.role as string) !== 'ADMIN') {
-          setActivePage(getInitialPage(currentUser));
-        }
-        return;
-      }
-
-      if (activePage === 'trash') {
-        const canTrash = Boolean(
-          currentUser.permissions.canDeleteInvoices ||
-          currentUser.permissions.canDeleteCustomers ||
-          currentUser.permissions.canDeleteSuppliers
-        );
-        if (!canTrash) {
-          setActivePage(getInitialPage(currentUser));
-        }
-        return;
-      }
-
-      const requiredPerm = permissionsMap[activePage];
-
-      // If the current page requires a permission AND the user doesn't have it
-      if (requiredPerm && !currentUser.permissions[requiredPerm]) {
-        // Redirect to their allowed homepage
-        setActivePage(getInitialPage(currentUser));
-      }
+    if (!currentUser) return;
+    if (!canViewPage(currentUser, activePage)) {
+      const next = firstAllowedPage(currentUser);
+      if (next && next !== activePage) setActivePage(next as PageView);
     }
   }, [currentUser, activePage]);
 
@@ -147,6 +89,9 @@ const AppContent: React.FC = () => {
   }
 
   const renderPage = () => {
+    if (!canViewPage(currentUser, activePage)) {
+      return <div className="p-10 text-center text-gray-500 font-bold">ليس لديك صلاحية لفتح هذه الصفحة. تواصل مع المدير.</div>;
+    }
     switch (activePage) {
       case 'dashboard': return <Dashboard />;
       case 'reports': return <Reports />;

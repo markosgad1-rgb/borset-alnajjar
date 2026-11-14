@@ -12,6 +12,7 @@ import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
 
 export const Customers: React.FC = () => {
   const { 
@@ -22,7 +23,10 @@ export const Customers: React.FC = () => {
   } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();
 
-  const canDeleteCustomers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteCustomers);
+  const canDeleteCustomers = canDo(currentUser, 'customer.delete');
+  const canAddCustomer = canDo(currentUser, 'customer.add');
+  const canEditCustomer = canDo(currentUser, 'customer.edit');
+  const canDeleteMovement = canDo(currentUser, 'ledger.deleteMovement');
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
@@ -1081,12 +1085,12 @@ export const Customers: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button 
+          {canAddCustomer && (<button 
             onClick={handleOpenAddModal}
             className="flex items-center gap-1.5 bg-brand-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-brand-700 transition-colors shadow-xs"
           >
             <PlusCircle size={15} /> إضافة عميل جديد
-          </button>
+          </button>)}
           
           <button 
             onClick={() => {
@@ -1177,13 +1181,13 @@ export const Customers: React.FC = () => {
 
                       {/* Quick Action Buttons (Edit / Delete) */}
                       <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
+                        {canEditCustomer && (<button 
                           onClick={(e) => handleOpenEditModal(e, c)}
                           className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
                           title="تعديل بيانات العميل"
                         >
                           <Edit size={13} />
-                        </button>
+                        </button>)}
 
                         {canDeleteCustomers && (
                           deleteConfirmId === c.code ? (
@@ -1360,13 +1364,13 @@ export const Customers: React.FC = () => {
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <h2 className="text-lg md:text-xl font-black text-brand-900 flex items-center gap-2">
                         {selectedCustomer.name}
-                        <button 
+                        {canEditCustomer && (<button 
                           onClick={(e) => handleOpenEditModal(e, selectedCustomer)}
                           className="text-xs font-normal text-gray-500 hover:text-brand-700 bg-white border border-gray-200 hover:border-brand-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
                           title="تعديل بيانات العميل"
                         >
                           <Edit size={12}/> تعديل
-                        </button>
+                        </button>)}
                       </h2>
                       <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-mono font-bold border border-gray-200">
                         كود: {selectedCustomer.code}
@@ -1496,7 +1500,7 @@ export const Customers: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {currentUser?.permissions.canDeleteLedgers && (
+                    {canDo(currentUser, 'ledger.clear') && (
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
@@ -1667,7 +1671,7 @@ export const Customers: React.FC = () => {
                               )}
                             </td>
                             <td className="p-2 text-center" key={`action_${r.id || idx}`}>
-                              <button 
+                              {canDeleteMovement && (<button 
                                 type="button"
                                 onClick={async (e) => {
                                   e.stopPropagation();
@@ -1711,7 +1715,7 @@ export const Customers: React.FC = () => {
                                 title="حذف هذا السطر"
                               >
                                 <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
-                              </button>
+                              </button>)}
                             </td>
                           </tr>
                         ))
@@ -1806,7 +1810,7 @@ export const Customers: React.FC = () => {
                                   {runBal.toLocaleString()}
                                 </td>
                                 <td className="p-2.5 text-center" key={`action_inv_${h.id || idx}`}>
-                                  <button 
+                                  {canDeleteMovement && (<button 
                                     type="button"
                                     onClick={async (e) => {
                                       e.stopPropagation();
@@ -1850,7 +1854,7 @@ export const Customers: React.FC = () => {
                                     title="حذف هذا السطر"
                                   >
                                     <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
-                                  </button>
+                                  </button>)}
                                 </td>
                               </tr>
                             );

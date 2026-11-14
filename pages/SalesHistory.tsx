@@ -25,13 +25,14 @@ import { SalesInvoice, InvoiceItem, PaymentMethod, BranchId, BRANCHES, BRANCH_AR
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
 
 export const SalesHistory: React.FC = () => {
   const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, currentUser, companyLogo } = useERP();
   
-  const canDeleteInvoices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteInvoices);
-  const canEditInvoices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditInvoices);
-  const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
+  const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
+  const canEditInvoices = canDo(currentUser, 'invoice.edit');
+  const canEditPrices = canDo(currentUser, 'price.edit');
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -325,7 +326,7 @@ export const SalesHistory: React.FC = () => {
             <p className="text-xs text-gray-500 mt-0.5">استعراض وتدقيق الفواتير حسب التاريخ، الإدارة والمنطقة</p>
           </div>
            
-          {currentUser?.permissions.canDeleteLedgers && (
+          {canDo(currentUser, 'invoice.clearAll') && (
             showClearConfirm ? (
               <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
                 <AlertTriangle size={16} className="text-red-500" />

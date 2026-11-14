@@ -21,6 +21,7 @@ import {
 import { Product, BranchId, BRANCHES } from '../types';
 import { parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
 
 export const Warehouse: React.FC = () => {
   const { 
@@ -455,18 +456,18 @@ export const Warehouse: React.FC = () => {
             />
           </div>
 
-          {currentUser?.permissions.canEditWarehouse && (
+          {(canDo(currentUser, 'stock.transfer') || canDo(currentUser, 'product.add') || canDo(currentUser, 'product.clearAll')) && (
             <div className="flex items-center gap-2">
-              <button 
+              {canDo(currentUser, 'stock.transfer') && (<button 
                 onClick={() => handleOpenTransferModal()}
                 className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer shadow-xs"
                 title="تحويل بضاعة بين مخزن المرج ومخزن النزهة"
               >
                 <ArrowLeftRight size={16} />
                 <span>تحويل بين المخازن</span>
-              </button>
+              </button>)}
 
-              <button 
+              {canDo(currentUser, 'product.add') && (<button 
                 onClick={() => setShowAddForm(!showAddForm)}
                 className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors cursor-pointer
                   ${showAddForm ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-brand-600 text-white hover:bg-brand-700 shadow-sm'}
@@ -474,9 +475,9 @@ export const Warehouse: React.FC = () => {
               >
                 {showAddForm ? <X size={16}/> : <PlusCircle size={16}/>}
                 <span>{showAddForm ? 'إلغاء' : 'صنف جديد'}</span>
-              </button>
+              </button>)}
 
-              <button 
+              {canDo(currentUser, 'product.clearAll') && (<button 
                 onClick={() => setShowClearAllModal(true)}
                 disabled={products.length === 0}
                 className="px-3 py-2 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-1.5 bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
@@ -484,7 +485,7 @@ export const Warehouse: React.FC = () => {
               >
                 <Trash2 size={16} className="text-red-600" />
                 <span className="hidden sm:inline">مسح الأصناف</span>
-              </button>
+              </button>)}
             </div>
           )}
         </div>
@@ -643,7 +644,7 @@ export const Warehouse: React.FC = () => {
               </p>
             </div>
           </div>
-          {currentUser?.permissions.canEditWarehouse && (
+          {canDo(currentUser, 'product.clearAll') && (
             <button
               type="button"
               onClick={handleDeduplicate}
@@ -667,7 +668,7 @@ export const Warehouse: React.FC = () => {
       )}
 
       {/* Add New Product Form */}
-      {showAddForm && currentUser?.permissions.canEditWarehouse && (
+      {showAddForm && canDo(currentUser, 'product.add') && (
         <div className="bg-blue-50/80 p-5 rounded-xl border border-blue-200 animate-fade-in space-y-3">
           <h4 className="font-bold text-brand-900 flex items-center gap-2 text-sm">
             <PlusCircle size={17} className="text-brand-600"/> تعريف صنف جديد وتحديد أرصدة المخازن
@@ -827,7 +828,7 @@ export const Warehouse: React.FC = () => {
                       : 'إجمالي القيمة (بيع)'}
                 </th>
 
-                {currentUser?.permissions.canEditWarehouse && <th className="p-3.5 w-36 text-center">إجراءات</th>}
+                {(canDo(currentUser, 'product.edit') || canDo(currentUser, 'product.delete') || canDo(currentUser, 'stock.transfer')) && <th className="p-3.5 w-36 text-center">إجراءات</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -1021,7 +1022,7 @@ export const Warehouse: React.FC = () => {
                     </td>
 
                     {/* Actions */}
-                    {currentUser?.permissions.canEditWarehouse && (
+                    {(canDo(currentUser, 'product.edit') || canDo(currentUser, 'product.delete') || canDo(currentUser, 'stock.transfer')) && (
                       <td className="p-3.5 text-center">
                         {isEditingThisRow ? (
                           <div className="flex gap-1.5 justify-center">
@@ -1062,27 +1063,27 @@ export const Warehouse: React.FC = () => {
                           </div>
                         ) : (
                           <div className="flex gap-1.5 justify-center">
-                            <button 
+                            {canDo(currentUser, 'stock.transfer') && <button 
                               onClick={() => handleOpenTransferModal(product.code)}
                               className="text-indigo-600 bg-indigo-50 hover:bg-indigo-100 p-1.5 rounded-lg transition-colors cursor-pointer"
                               title="تحويل من هذا الصنف بين المخازن"
                             >
                               <ArrowLeftRight size={15} />
-                            </button>
-                            <button 
+                            </button>}
+                            {canDo(currentUser, 'product.edit') && <button 
                               onClick={() => startEdit(product, rowKey)} 
                               className="text-blue-600 bg-blue-50 hover:bg-blue-100 p-1.5 rounded-lg transition-colors cursor-pointer"
                               title="تعديل بيانات ورصيد الصنف"
                             >
                               <Edit2 size={15} />
-                            </button>
-                            <button 
+                            </button>}
+                            {canDo(currentUser, 'product.delete') && <button 
                               onClick={() => setDeleteConfirmKey(rowKey)} 
                               className="text-red-600 bg-red-50 hover:bg-red-100 p-1.5 rounded-lg transition-colors cursor-pointer"
                               title="حذف هذا الصنف"
                             >
                               <Trash2 size={15} />
-                            </button>
+                            </button>}
                           </div>
                         )}
                       </td>

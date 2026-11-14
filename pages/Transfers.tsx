@@ -8,9 +8,11 @@ import {
 import { PaymentMethod, BranchId, BRANCHES, getBranchAreas, Customer, Supplier, Employee } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
+import { canDo } from '../utils/permissions';
 
 export const Transfers: React.FC = () => {
   const { customers, suppliers, employees, treasury, addTransfer, deleteTransfer } = useERP();
+  const __me = useERP().currentUser;
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
   const [entityType, setEntityType] = useState<'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'>('CUSTOMER');
@@ -987,7 +989,7 @@ export const Transfers: React.FC = () => {
                         </span>
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
-                        <button
+                        {canDo(__me, 'transfer.delete') && (<button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -997,7 +999,7 @@ export const Transfers: React.FC = () => {
                           title="حذف حركة التحويل وإلغاؤها"
                         >
                           <Trash2 className="w-4 h-4" />
-                        </button>
+                        </button>)}
                       </td>
                     </tr>
                   );

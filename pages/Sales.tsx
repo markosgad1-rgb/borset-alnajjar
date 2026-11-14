@@ -9,12 +9,13 @@ import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
 import { useNetworkStatus } from '../utils/useNetworkStatus';
 import { CartNumberInput } from '../components/CartNumberInput';
+import { canDo } from '../utils/permissions';
 
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
   const netUp = useNetworkStatus();
   
-  const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
+  const canEditPrices = canDo(currentUser, 'price.edit');
 
   // Cascading Branch & Area State
   const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');

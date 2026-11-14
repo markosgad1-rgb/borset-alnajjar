@@ -18,6 +18,7 @@ import {
 import { PaymentMethod, BranchId, BRANCHES } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
 
 export const Treasury: React.FC = () => {
   const { 
@@ -191,7 +192,7 @@ export const Treasury: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {currentUser?.permissions.canManageTreasury && (
+          {canDo(currentUser, 'treasury.manage') && (
             <>
               <button 
                 onClick={() => setShowCashTransferModal(true)}
@@ -209,7 +210,7 @@ export const Treasury: React.FC = () => {
             </>
           )}
 
-          {currentUser?.permissions.canDeleteLedgers && (
+          {canDo(currentUser, 'treasury.clear') && (
             showClearConfirm ? (
                <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
                  <AlertTriangle size={16} className="text-red-500" />

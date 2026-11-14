@@ -271,6 +271,8 @@ export interface UserPermissions {
   canManageTreasury?: boolean;
   canEditPurchases?: boolean;
   canDeletePurchases?: boolean;
+  // التحكم التفصيلي (مفتاح لكل صفحة ولكل إجراء) - انظر utils/permissions.ts
+  perms?: Record<string, boolean>;
 }
 
 export interface User {

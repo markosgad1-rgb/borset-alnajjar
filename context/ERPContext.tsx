@@ -16,6 +16,7 @@ import {
 import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
 import { logEvent, setAuditUser, runAsSystem } from '../utils/auditLog';
 import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
+import { canDo, getPermLabel } from '../utils/permissions';
 
 interface ERPContextType {
   products: Product[];
@@ -331,6 +332,8 @@ const sanitizeUser = (user: any): User => {
       canEditWarehouse: Boolean(p.canEditWarehouse ?? p.canEditPrices ?? false),
       canManageTreasury: Boolean(p.canManageTreasury ?? false),
       canEditPurchases: Boolean(p.canEditPurchases ?? false),
+      canDeletePurchases: Boolean(p.canDeletePurchases ?? false),
+      ...(p.perms && typeof p.perms === 'object' ? { perms: p.perms } : {}),
     }
   };
 };
@@ -4840,16 +4843,59 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // ---- Permission gate -------------------------------------------------------------------------
+  // Every sensitive action that pages can call goes through here, so a user without the permission is
+  // refused even if a button is visible somewhere. Internal calls between functions are not gated.
+  const gate = <F extends (...a: any[]) => any>(key: string, fn: F, denied?: any): F =>
+    ((...args: any[]) => {
+      if (canDo(currentUser, key)) return fn(...args);
+      alert(`ليس لديك صلاحية: ${getPermLabel(key)}`);
+      return Promise.resolve(denied);
+    }) as unknown as F;
+  const noPerm = (key: string) => ({ success: false, message: `ليس لديك صلاحية: ${getPermLabel(key)}` });
+
+  const gAddProduct = gate('product.add', addProduct, false);
+  const gUpdateProduct = gate('product.edit', updateProduct, false);
+  const gDeleteProduct = gate('product.delete', deleteProduct, false);
+  const gClearAllProducts = gate('product.clearAll', clearAllProducts, false);
+  const gDeduplicateProducts = gate('product.clearAll', deduplicateProducts, { duplicatesRemoved: 0 });
+  const gTransferStock = gate('stock.transfer', transferStockBetweenBranches, false);
+  const gTransferCash = gate('treasury.manage', transferCashBetweenBranches, false);
+  const gAddOpeningBalance = gate('treasury.manage', addOpeningBalance);
+  const gClearTreasury = gate('treasury.clear', clearTreasury, false);
+  const gUpdatePurchase = gate('purchase.edit', updatePurchase);
+  const gFinalizePrice = gate('purchase.edit', finalizePurchasePrice, false);
+  const gDeletePurchase = gate('purchase.delete', deletePurchase);
+  const gUpdateInvoice = gate('invoice.edit', updateInvoice);
+  const gDeleteInvoice = gate('invoice.delete', deleteInvoice);
+  const gClearAllInvoices = gate('invoice.clearAll', clearAllInvoices, false);
+  const gDeleteTransfer = gate('transfer.delete', deleteTransfer, noPerm('transfer.delete'));
+  const gAddCustomer = gate('customer.add', addCustomer);
+  const gUpdateCustomer = gate('customer.edit', updateCustomer);
+  const gDeleteCustomer = gate('customer.delete', deleteCustomer);
+  const gAddSupplier = gate('supplier.add', addSupplier);
+  const gUpdateSupplier = gate('supplier.edit', updateSupplier);
+  const gDeleteSupplier = gate('supplier.delete', deleteSupplier, noPerm('supplier.delete'));
+  const gAddEmployee = gate('employee.add', addEmployee);
+  const gUpdateEmployee = gate('employee.edit', updateEmployee);
+  const gDeleteEmployee = gate('employee.delete', deleteEmployee);
+  const gDeleteCustLedger = gate('ledger.deleteMovement', deleteCustomerLedgerMovement);
+  const gDeleteSuppLedger = gate('ledger.deleteMovement', deleteSupplierLedgerMovement);
+  const gClearLedger = gate('ledger.clear', clearLedger, false);
+  const gRestoreEntity = gate('trash.restore', restoreEntity, noPerm('trash.restore'));
+  const gPurgeEntity = gate('trash.purge', permanentDeleteEntity, noPerm('trash.purge'));
+  const gRestoreBackup = gate('backup', restoreBackupData, { success: false, message: 'ليس لديك صلاحية: النسخ الاحتياطي والاسترجاع' });
+
   return (
     <ERPContext.Provider value={{
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
-      login, logout, addUser, updateUser, deleteUser, addProduct, updateProduct, deleteProduct, clearAllProducts, deduplicateProducts, deletePurchase, deletePurchaseInvoice: deletePurchase,
-      transferStockBetweenBranches, transferCashBetweenBranches,
-      addPurchase, updatePurchase, finalizePurchasePrice, addInvoice, updateInvoice, deleteInvoice, clearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, deleteTransfer, addExpense, addOpeningBalance, addCustomer, updateCustomer, deleteCustomer, addSupplier, updateSupplier, deleteSupplier, addEmployee, updateEmployee, deleteEmployee,
-      deleteCustomerLedgerMovement, deleteSupplierLedgerMovement,
-      restoreEntity, permanentDeleteEntity,
-      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury, updateSystemLogo,
-      exportBackupData, restoreBackupData,
+      login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
+      transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: gTransferCash,
+      addPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
+      deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
+      restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity,
+      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, updateSystemLogo,
+      exportBackupData, restoreBackupData: gRestoreBackup,
       currentTreasuryBalance, currentTreasuryBalanceMarg, currentTreasuryBalanceNozha, balances
     }}>
       {children}

@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { canViewPage, canDo } from '../utils/permissions';
 import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2, Activity, MonitorSmartphone } from 'lucide-react';
 import { PageView, UserPermissions } from '../types';
 import { useERP } from '../context/ERPContext';
@@ -43,7 +44,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
     return () => window.removeEventListener('beforeunload', h);
   }, [pendingWrites]);
   
-  const canManageBackup = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
+  const canManageBackup = canDo(currentUser, 'backup');
 
   const pendingPurchasesCount = purchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
 
@@ -71,26 +72,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
     { id: 'system', label: 'إدارة السيستم', icon: <MonitorSmartphone size={20} /> },
   ];
 
-  // Filter items based on permission
-  const filteredNav = navItems.filter(item => {
-    // إتاحة صفحة إدارة المستخدمين للسوبر أدمن الأساسي فقط (admin)
-    if (item.id === 'users') {
-      return currentUser?.username === 'admin';
-    }
-    if (item.id === 'activity' || item.id === 'system') {
-      return currentUser?.username === 'admin' || currentUser?.role === 'ADMIN';
-    }
-    if (currentUser?.role === 'ADMIN' || currentUser?.username === 'admin') return true;
-    if (item.id === 'trash') {
-      return Boolean(
-        currentUser?.permissions?.canDeleteInvoices ||
-        currentUser?.permissions?.canDeleteCustomers ||
-        currentUser?.permissions?.canDeleteSuppliers
-      );
-    }
-    if (!item.permission) return true; 
-    return Boolean(currentUser?.permissions?.[item.permission]);
-  });
+  // Filter items based on permission (see utils/permissions.ts)
+  const filteredNav = navItems.filter(item => canViewPage(currentUser, item.id));
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-brand-50 print:bg-white print:block">

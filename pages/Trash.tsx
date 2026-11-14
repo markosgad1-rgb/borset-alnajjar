@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { SalesInvoice, Purchase, Customer, Supplier } from '../types';
 import { formatWithCommas } from '../utils/formatters';
+import { canDo } from '../utils/permissions';
 
 type TrashTab = 'INVOICES' | 'CUSTOMERS' | 'SUPPLIERS';
 
@@ -21,6 +22,7 @@ export const Trash: React.FC = () => {
     invoices, purchases, customers, suppliers, 
     restoreEntity, permanentDeleteEntity 
   } = useERP();
+  const __me = useERP().currentUser;
 
   const [activeTab, setActiveTab] = useState<TrashTab>('INVOICES');
   const [searchTerm, setSearchTerm] = useState('');
@@ -340,7 +342,7 @@ export const Trash: React.FC = () => {
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-1.5">
                               {/* Restore Button */}
-                              <button
+                              {canDo(__me, 'trash.restore') && (<button
                                 type="button"
                                 disabled={isProcessing}
                                 onClick={() => handleRestore(
@@ -353,10 +355,10 @@ export const Trash: React.FC = () => {
                               >
                                 <RotateCcw size={12} />
                                 <span>استرجاع</span>
-                              </button>
+                              </button>)}
 
                               {/* Permanent Delete Button */}
-                              <button
+                              {canDo(__me, 'trash.purge') && (<button
                                 type="button"
                                 disabled={isProcessing}
                                 onClick={() => setConfirmDeleteTarget({
@@ -370,7 +372,7 @@ export const Trash: React.FC = () => {
                               >
                                 <Trash2 size={12} />
                                 <span>حذف نهائي</span>
-                              </button>
+                              </button>)}
                             </div>
                           </td>
                         </tr>
@@ -442,7 +444,7 @@ export const Trash: React.FC = () => {
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-1.5">
                               {/* Restore Button */}
-                              <button
+                              {canDo(__me, 'trash.restore') && (<button
                                 type="button"
                                 disabled={isProcessing}
                                 onClick={() => handleRestore('customer', c.code, c.name)}
@@ -451,10 +453,10 @@ export const Trash: React.FC = () => {
                               >
                                 <RotateCcw size={12} />
                                 <span>استرجاع</span>
-                              </button>
+                              </button>)}
 
                               {/* Permanent Delete Button */}
-                              <button
+                              {canDo(__me, 'trash.purge') && (<button
                                 type="button"
                                 disabled={isProcessing}
                                 onClick={() => setConfirmDeleteTarget({
@@ -468,7 +470,7 @@ export const Trash: React.FC = () => {
                               >
                                 <Trash2 size={12} />
                                 <span>حذف نهائي</span>
-                              </button>
+                              </button>)}
                             </div>
                           </td>
                         </tr>
@@ -533,7 +535,7 @@ export const Trash: React.FC = () => {
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-1.5">
                               {/* Restore Button */}
-                              <button
+                              {canDo(__me, 'trash.restore') && (<button
                                 type="button"
                                 disabled={isProcessing}
                                 onClick={() => handleRestore('supplier', s.code, s.name)}
@@ -542,10 +544,10 @@ export const Trash: React.FC = () => {
                               >
                                 <RotateCcw size={12} />
                                 <span>استرجاع</span>
-                              </button>
+                              </button>)}
 
                               {/* Permanent Delete Button */}
-                              <button
+                              {canDo(__me, 'trash.purge') && (<button
                                 type="button"
                                 disabled={isProcessing}
                                 onClick={() => setConfirmDeleteTarget({
@@ -559,7 +561,7 @@ export const Trash: React.FC = () => {
                               >
                                 <Trash2 size={12} />
                                 <span>حذف نهائي</span>
-                              </button>
+                              </button>)}
                             </div>
                           </td>
                         </tr>
