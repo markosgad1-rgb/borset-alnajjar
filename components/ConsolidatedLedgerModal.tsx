@@ -424,6 +424,16 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
     return activeBalanceRows.reduce((sum, r) => sum + r.finalBalance, 0);
   }, [activeBalanceRows]);
 
+  // Printed / shared statement only: biggest debt first. The on-screen view keeps the code order.
+  // Customers: negative balance = the customer owes us -> most negative first.
+  // Suppliers: positive balance = we owe the supplier -> most positive first.
+  const getPrintBalanceRows = () => {
+    const rows = [...activeBalanceRows];
+    if (activeTab === 'CUSTOMERS') rows.sort((a, b) => a.finalBalance - b.finalBalance);
+    else if (activeTab === 'SUPPLIERS') rows.sort((a, b) => b.finalBalance - a.finalBalance);
+    return rows;
+  };
+
   // Handle Print Action
   const handlePrint = () => {
     const reportTitle = activeTab === 'CUSTOMERS'
@@ -433,7 +443,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       : 'كشف حساب مجمع شامل (عملاء وموردين)';
 
     if (viewMode === 'BALANCES') {
-      const balanceRowsForPrint = activeBalanceRows.map((r, i) => ({
+      const balanceRowsForPrint = getPrintBalanceRows().map((r, i) => ({
         num: i + 1,
         code: r.code,
         name: r.name,
@@ -501,7 +511,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       }, 3500);
 
       if (viewMode === 'BALANCES') {
-        const balanceRowsForPrint = activeBalanceRows.map((r, i) => ({
+        const balanceRowsForPrint = getPrintBalanceRows().map((r, i) => ({
           num: i + 1,
           code: r.code,
           name: r.name,
