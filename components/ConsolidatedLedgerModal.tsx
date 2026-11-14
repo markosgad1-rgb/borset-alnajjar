@@ -429,8 +429,8 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
   // Suppliers: positive balance = we owe the supplier -> most positive first.
   const getPrintBalanceRows = () => {
     const rows = [...activeBalanceRows];
-    if (activeTab === 'CUSTOMERS') rows.sort((a, b) => a.finalBalance - b.finalBalance);
-    else if (activeTab === 'SUPPLIERS') rows.sort((a, b) => b.finalBalance - a.finalBalance);
+    if (activeTab === 'CUSTOMERS') rows.sort((a, b) => (Number(a.finalBalance) || 0) - (Number(b.finalBalance) || 0) || String(a.code).localeCompare(String(b.code)));
+    else if (activeTab === 'SUPPLIERS') rows.sort((a, b) => (Number(b.finalBalance) || 0) - (Number(a.finalBalance) || 0) || String(a.code).localeCompare(String(b.code)));
     return rows;
   };
 
@@ -457,7 +457,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       }));
 
       printConsolidatedLedger({
-        title: reportTitle,
+        title: activeTab === 'ALL' ? reportTitle : `${reportTitle} (مرتب بالأعلى مديونية)`,
         reportType: activeTab,
         dateRange: (filterStartDate || filterEndDate) ? { from: filterStartDate, to: filterEndDate } : undefined,
         mode: 'BALANCES',
@@ -525,7 +525,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
         }));
 
         await shareConsolidatedStatementPdfViaWhatsApp({
-          title: reportTitle,
+          title: activeTab === 'ALL' ? reportTitle : `${reportTitle} (مرتب بالأعلى مديونية)`,
           reportType: activeTab,
           dateRange: (filterStartDate || filterEndDate) ? { from: filterStartDate, to: filterEndDate } : undefined,
           mode: 'BALANCES',
