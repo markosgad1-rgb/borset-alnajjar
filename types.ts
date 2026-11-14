@@ -216,6 +216,12 @@ export interface SalesInvoice {
   currentBalance: number;
   isDeleted?: boolean;
   deletedAt?: string;
+  // مراجعة الفواتير: الفاتورة الجديدة تبقى PENDING_REVIEW لحين اعتمادها. الفواتير القديمة بدون هذا الحقل تُعتبر مراجَعة.
+  reviewStatus?: 'PENDING_REVIEW' | 'REVIEWED';
+  createdBy?: string;
+  createdByName?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
 }
 
 export type PaymentMethod = 'CASH' | 'BANK_MISR' | 'BANK_AHLY' | 'VF_CASH_AYMAN' | 'VF_CASH_KYRILLOS';

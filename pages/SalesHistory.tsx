@@ -28,7 +28,7 @@ import { useBackHandler } from '../utils/backNavigation';
 import { canDo } from '../utils/permissions';
 
 export const SalesHistory: React.FC = () => {
-  const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, currentUser, companyLogo } = useERP();
+  const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo } = useERP();
   
   const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
   const canEditInvoices = canDo(currentUser, 'invoice.edit');
@@ -37,6 +37,16 @@ export const SalesHistory: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>('ALL');
+  // فلتر المراجعة: ALL = الكل، PENDING = لم تُراجع (من كل التواريخ)، REVIEWED = تمت مراجعتها
+  const [reviewFilter, setReviewFilter] = useState<'ALL' | 'PENDING' | 'REVIEWED'>(() => {
+    try {
+      const v = sessionStorage.getItem('erp_hist_review_filter');
+      if (v) sessionStorage.removeItem('erp_hist_review_filter');
+      return v === 'PENDING' ? 'PENDING' : 'ALL';
+    } catch { return 'ALL'; }
+  });
+  const canReview = canDo(currentUser, 'invoice.review');
+  const [reviewing, setReviewing] = useState(false);
   const [selectedAreaFilter, setSelectedAreaFilter] = useState<string>('ALL');
   
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
@@ -176,7 +186,10 @@ export const SalesHistory: React.FC = () => {
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       if (inv.isDeleted) return false;
-      const matchesDate = inv.date === selectedDate;
+      const matchesDate = reviewFilter === 'PENDING' || inv.date === selectedDate;
+      const isPendingReview = inv.reviewStatus === 'PENDING_REVIEW';
+      if (reviewFilter === 'PENDING' && !isPendingReview) return false;
+      if (reviewFilter === 'REVIEWED' && isPendingReview) return false;
       const matchesSearch = 
         inv.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
         inv.customerName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -190,7 +203,15 @@ export const SalesHistory: React.FC = () => {
 
       return matchesDate && matchesSearch && matchesBranch && matchesArea;
     });
-  }, [invoices, selectedDate, searchTerm, selectedBranchFilter, selectedAreaFilter, customers]);
+  }, [invoices, selectedDate, searchTerm, selectedBranchFilter, selectedAreaFilter, customers, reviewFilter]);
+
+  const pendingReviewTotal = useMemo(() => invoices.filter(i => !i.isDeleted && i.reviewStatus === 'PENDING_REVIEW').length, [invoices]);
+
+  const handleReview = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setReviewing(true);
+    try { await markInvoicesReviewed(ids); } finally { setReviewing(false); }
+  };
 
   const dayTotal = filteredInvoices.reduce((sum, inv) => sum + inv.total, 0);
   const dayPaidTotal = filteredInvoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
@@ -298,6 +319,14 @@ export const SalesHistory: React.FC = () => {
       currentBalance: oldInvoice.previousBalance - newTotal + finalPaid
     };
 
+    // تعديل أصناف/إجمالي فاتورة معتمدة بواسطة من لا يملك صلاحية المراجعة يعيدها لقائمة المراجعة
+    const contentChanged = newTotal !== oldInvoice.total || JSON.stringify(editItems) !== JSON.stringify(oldInvoice.items);
+    if (contentChanged && !canReview) {
+      newInvoiceData.reviewStatus = 'PENDING_REVIEW';
+      delete (newInvoiceData as any).reviewedBy;
+      delete (newInvoiceData as any).reviewedAt;
+    }
+
     await updateInvoice(oldInvoice, newInvoiceData);
     setIsEditing(false);
     alert("تم تعديل الفاتورة وتصحيح الخزنة والمخزن والرصيد بنجاح");
@@ -352,6 +381,32 @@ export const SalesHistory: React.FC = () => {
                 <Trash2 size={15} className="text-red-600" /> تصفير سجل الفواتير
               </button>
             )
+          )}
+        </div>
+
+        {/* Review filter */}
+        <div className="p-3 bg-rose-50/60 rounded-xl border border-rose-200/70 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-rose-900 ml-1">مراجعة الفواتير:</span>
+          {([['ALL', 'الكل'], ['PENDING', `لم تُراجع (${pendingReviewTotal})`], ['REVIEWED', 'تمت مراجعتها']] as const).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setReviewFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${reviewFilter === k ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'}`}
+            >
+              {label}
+            </button>
+          ))}
+          {reviewFilter === 'PENDING' && <span className="text-[11px] text-rose-700">تظهر من كل التواريخ</span>}
+          {canReview && reviewFilter === 'PENDING' && filteredInvoices.length > 0 && (
+            <button
+              type="button"
+              disabled={reviewing}
+              onClick={() => handleReview(filteredInvoices.map(i => i.id))}
+              className="mr-auto bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+            >
+              <Check size={14} /> اعتماد كل المعروض ({filteredInvoices.length})
+            </button>
           )}
         </div>
 
@@ -505,8 +560,15 @@ export const SalesHistory: React.FC = () => {
                 const areaName = inv.area || cust?.area;
 
                 return (
-                  <tr key={inv.id} className="hover:bg-gray-50/80 transition-colors">
-                    <td className="p-3 font-mono font-bold text-brand-700">{inv.id}</td>
+                  <tr key={inv.id} className={`hover:bg-gray-50/80 transition-colors ${inv.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : ''}`}>
+                    <td className="p-3 font-mono font-bold text-brand-700">
+                      {inv.id}
+                      {inv.reviewStatus === 'PENDING_REVIEW' && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold font-sans">جديدة - لم تُراجع</span>
+                      )}
+                      {inv.createdByName && <span className="block text-[10px] font-normal text-gray-500 font-sans">بواسطة: {inv.createdByName}</span>}
+                      {inv.reviewStatus === 'REVIEWED' && inv.reviewedBy && <span className="block text-[10px] font-normal text-emerald-700 font-sans">راجعها: {inv.reviewedBy}</span>}
+                    </td>
                     <td className="p-3 text-gray-500 font-mono">{inv.time}</td>
                     <td className="p-3">
                       <div className="space-y-1">
@@ -591,6 +653,17 @@ export const SalesHistory: React.FC = () => {
                       >
                         <Printer size={15} />
                       </button>
+
+                      {canReview && inv.reviewStatus === 'PENDING_REVIEW' && (
+                        <button
+                          disabled={reviewing}
+                          onClick={() => handleReview([inv.id])}
+                          className="bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                          title="تمت المراجعة - اعتماد الفاتورة"
+                        >
+                          <Check size={14} /> تمت المراجعة
+                        </button>
+                      )}
 
                       {canEditInvoices && (
                         <button 

@@ -18,7 +18,7 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
-  const { currentUser, logout, isOnline, permissionError, purchases } = useERP();
+  const { currentUser, logout, isOnline, permissionError, purchases, invoices } = useERP();
   const netUp = useNetworkStatus();
   const pendingWrites = usePendingWrites();
   const persistenceOk = usePersistenceOk();
@@ -47,6 +47,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   const canManageBackup = canDo(currentUser, 'backup');
 
   const pendingPurchasesCount = purchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
+  // فواتير بيع جديدة لم تُراجع بعد (التنبيه لمن عنده صلاحية المراجعة فقط)
+  const canReviewInvoices = canDo(currentUser, 'invoice.review');
+  const pendingReviewCount = canReviewInvoices ? invoices.filter(i => !i.isDeleted && i.reviewStatus === 'PENDING_REVIEW').length : 0;
 
   // Back Button integration for mobile sidebar menu & backup modal
   useBackHandler(() => setIsSidebarOpen(false), isSidebarOpen, 'layout-mobile-sidebar');
@@ -215,6 +218,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
             >
               <span className="shrink-0 [&>svg]:w-4.5 [&>svg]:h-4.5 lg:[&>svg]:w-5 lg:[&>svg]:h-5">{item.icon}</span>
               <span className="truncate">{item.label}</span>
+              {(item.id === 'sales' || item.id === 'sales-history') && pendingReviewCount > 0 && (
+                <span className="mr-auto bg-rose-500 text-white text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs" title="فواتير جديدة لم تُراجع">
+                  {pendingReviewCount}
+                </span>
+              )}
               {item.id === 'purchases' && pendingPurchasesCount > 0 && (
                 <span className="mr-auto bg-amber-400 text-amber-950 text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs">
                   {pendingPurchasesCount}
@@ -301,6 +309,33 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
              </div>
           </header>
         )}
+        {/* Persistent New-Invoices-To-Review Banner */}
+        {pendingReviewCount > 0 && activePage !== 'sales-history' && (
+          <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
+                <FileText size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm md:text-base text-rose-900 flex items-center gap-2">
+                  <span>تنبيه: فواتير بيع جديدة بانتظار المراجعة</span>
+                  <span className="bg-rose-200 text-rose-950 text-xs px-2 py-0.5 rounded-full font-black">{pendingReviewCount}</span>
+                </h4>
+                <p className="text-xs md:text-sm text-rose-800">
+                  يوجد ({pendingReviewCount}) فواتير بيع تم إنشاؤها ولم تتم مراجعتها واعتمادها بعد (قد لا تكون خرجت للعميل).
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { try { sessionStorage.setItem('erp_hist_review_filter', 'PENDING'); } catch { /* ignore */ } onNavigate('sales-history'); }}
+              className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
+            >
+              <FileText size={16} />
+              <span>مراجعة الفواتير الآن</span>
+            </button>
+          </div>
+        )}
+
         {/* Persistent Pending Price Alert Banner */}
         {pendingPurchasesCount > 0 && activePage !== 'purchases' && (
           <div className="mb-4 bg-amber-500/10 border-2 border-amber-500/40 rounded-xl p-3 md:p-4 text-amber-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">

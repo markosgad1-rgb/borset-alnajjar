@@ -35,6 +35,7 @@ export const ACTION_GROUPS: ActionGroup[] = [
   { title: 'فواتير البيع', items: [
     ac('invoice.edit', 'تعديل الفواتير السابقة', p => !!p.canEditInvoices),
     ac('invoice.delete', 'حذف فاتورة بيع', p => !!p.canDeleteInvoices),
+    ac('invoice.review', 'مراجعة واعتماد الفواتير الجديدة (والتنبيه بها)', () => false),
     ac('invoice.clearAll', 'مسح كل الفواتير', p => !!p.canDeleteLedgers),
     ac('price.edit', 'تعديل السعر داخل الفاتورة', p => !!p.canEditPrices),
   ]},

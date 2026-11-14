@@ -1292,7 +1292,7 @@ export const Sales: React.FC = () => {
                <tbody className="divide-y">
                  {invoices.slice(0, 10).map(inv => (
                    <tr key={inv.id} className="hover:bg-gray-50">
-                     <td className="p-2 text-xs font-mono text-gray-500">{inv.id}</td>
+                     <td className="p-2 text-xs font-mono text-gray-500">{inv.id}{inv.reviewStatus === 'PENDING_REVIEW' && <span className="mr-1 inline-block px-1 rounded bg-rose-100 text-rose-700 text-[9px] font-bold" title="بانتظار المراجعة">جديدة</span>}</td>
                      <td className="p-2 text-xs">{inv.customerName}</td>
                      <td className="p-2 font-bold text-gray-800 text-xs">{inv.total.toLocaleString()}</td>
                    </tr>
