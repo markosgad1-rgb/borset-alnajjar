@@ -598,12 +598,25 @@ export const Collections: React.FC = () => {
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
-                {parseNumberFromCommas(formData.amount) > 0 && (
+                {parseNumberFromCommas(formData.amount) > 0 && (customerBalance !== null ? (() => {
+                  // Expected balance after this collection: current balance + collected amount.
+                  // Negative = customer still owes us (shown with minus), positive = customer has credit (no minus).
+                  let projectedBal = Math.round((customerBalance + parseNumberFromCommas(formData.amount)) * 100) / 100;
+                  if (Object.is(projectedBal, -0) || Math.abs(projectedBal) < 0.005) projectedBal = 0;
+                  return (
+                    <p className="text-xs font-bold text-gray-700 bg-gray-50 p-2 rounded border border-gray-200 flex justify-between items-center">
+                      <span>الرصيد المتوقع بعد التحصيل:</span>
+                      <span className={`font-mono font-bold ${projectedBal < 0 ? 'text-red-600' : projectedBal > 0 ? 'text-green-700' : 'text-gray-800'}`} dir="ltr">
+                        {projectedBal.toLocaleString()} ج.م
+                      </span>
+                    </p>
+                  );
+                })() : (
                   <p className="text-xs font-bold text-emerald-700 bg-emerald-50 p-2 rounded border border-emerald-100 flex justify-between">
                     <span>المبلغ المحدد:</span>
                     <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
                   </p>
-                )}
+                ))}
               </div>
             </div>
 

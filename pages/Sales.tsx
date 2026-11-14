@@ -9,6 +9,40 @@ import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
 import { useNetworkStatus } from '../utils/useNetworkStatus';
 
+// حقل رقم داخل سلة الفاتورة: يسمح بالكتابة الحرة ويثبّت القيمة الصحيحة عند الخروج
+const CartNumberInput: React.FC<{
+  value: number;
+  onCommit: (v: number) => boolean;
+  readOnly?: boolean;
+  className?: string;
+  title?: string;
+}> = ({ value, onCommit, readOnly, className = '', title }) => {
+  const [text, setText] = useState<string>(String(value));
+  const [bad, setBad] = useState(false);
+  useEffect(() => { setText(String(value)); setBad(false); }, [value]);
+  const handle = (raw: string) => {
+    const cleaned = raw.replace(/[^0-9.]/g, '');
+    setText(cleaned);
+    const n = parseFloat(cleaned);
+    if (!isFinite(n) || n <= 0) { setBad(true); return; }
+    setBad(!onCommit(n));
+  };
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={text}
+      readOnly={readOnly}
+      title={title}
+      onFocus={e => e.target.select()}
+      onChange={e => !readOnly && handle(e.target.value)}
+      onBlur={() => { setText(String(value)); setBad(false); }}
+      className={`${className} border rounded p-1 text-center font-bold outline-none focus:ring-1 focus:ring-brand-500 ${bad ? 'border-red-500 bg-red-50 text-red-600' : readOnly ? 'bg-gray-100 border-gray-200 text-gray-600' : 'bg-white border-gray-300'}`}
+      dir="ltr"
+    />
+  );
+};
+
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
   const netUp = useNetworkStatus();
@@ -392,6 +426,27 @@ export const Sales: React.FC = () => {
       itemCodeRef.current?.focus();
       itemCodeRef.current?.select();
     }, 60);
+  };
+
+  const getBranchStockFor = (code: string): number => {
+    const prod = products.find(p => p.code === code);
+    if (!prod) return Infinity;
+    return selectedBranch === 'NOZHA'
+      ? (prod.quantityNozha !== undefined ? prod.quantityNozha : 0)
+      : (prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity);
+  };
+
+  const updateCartQuantity = (index: number, q: number): boolean => {
+    const item = cartItems[index];
+    if (!item) return false;
+    if (q > getBranchStockFor(item.itemCode)) return false;
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, quantity: q, total: q * it.price } : it));
+    return true;
+  };
+
+  const updateCartPrice = (index: number, pr: number): boolean => {
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, price: pr, total: it.quantity * pr } : it));
+    return true;
   };
 
   const removeFromCart = (index: number) => {
@@ -990,8 +1045,8 @@ export const Sales: React.FC = () => {
               <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="p-2 whitespace-nowrap">الصنف</th>
-                  <th className="p-2 w-16 text-center">الكمية</th>
-                  <th className="p-2 w-20">السعر</th>
+                  <th className="p-2 w-20 text-center">الكمية</th>
+                  <th className="p-2 w-24">السعر</th>
                   <th className="p-2 w-24">الإجمالي</th>
                   <th className="p-2 w-10"></th>
                 </tr>
@@ -1005,8 +1060,12 @@ export const Sales: React.FC = () => {
                         <span className="text-[10px] text-gray-400 font-mono">{item.itemCode}</span>
                       </div>
                     </td>
-                    <td className="p-2 font-bold text-center">{item.quantity}</td>
-                    <td className="p-2">{item.price.toLocaleString()}</td>
+                    <td className="p-2 text-center">
+                      <CartNumberInput value={item.quantity} onCommit={v => updateCartQuantity(idx, v)} className="w-16" title={`المتاح بالمخزن: ${getBranchStockFor(item.itemCode)}`} />
+                    </td>
+                    <td className="p-2">
+                      <CartNumberInput value={item.price} onCommit={v => updateCartPrice(idx, v)} readOnly={!canEditPrices} className="w-20" title={!canEditPrices ? 'ليس لديك صلاحية تعديل السعر يدوياً' : undefined} />
+                    </td>
                     <td className="p-2 font-bold text-brand-600">{item.total.toLocaleString()}</td>
                     <td className="p-2">
                       <button onClick={() => removeFromCart(idx)} className="text-red-500 hover:bg-red-50 p-1 rounded">

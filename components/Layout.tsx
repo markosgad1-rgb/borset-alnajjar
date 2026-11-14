@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2, Activity } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2, Activity, MonitorSmartphone } from 'lucide-react';
 import { PageView, UserPermissions } from '../types';
 import { useERP } from '../context/ERPContext';
 import { BackupModal } from './BackupModal';
@@ -68,6 +68,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
     { id: 'trash', label: 'سلة المهملات', icon: <Trash2 size={20} /> },
     { id: 'users', label: 'المستخدمين', icon: <Shield size={20} />, permission: 'admin' },
     { id: 'activity', label: 'سجل النشاط', icon: <Activity size={20} /> },
+    { id: 'system', label: 'إدارة السيستم', icon: <MonitorSmartphone size={20} /> },
   ];
 
   // Filter items based on permission
@@ -76,7 +77,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
     if (item.id === 'users') {
       return currentUser?.username === 'admin';
     }
-    if (item.id === 'activity') {
+    if (item.id === 'activity' || item.id === 'system') {
       return currentUser?.username === 'admin' || currentUser?.role === 'ADMIN';
     }
     if (currentUser?.role === 'ADMIN' || currentUser?.username === 'admin') return true;

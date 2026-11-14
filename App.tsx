@@ -19,6 +19,7 @@ import { SalesHistory } from './pages/SalesHistory';
 import { Reports } from './pages/Reports';
 import { Trash } from './pages/Trash';
 import { ActivityLog } from './pages/ActivityLog';
+import { SystemAdmin } from './pages/SystemAdmin';
 import { PageView, User, UserPermissions } from './types';
 import { setupBackNavigation, clearAllBackHandlers } from './utils/backNavigation';
 
@@ -105,6 +106,13 @@ const AppContent: React.FC = () => {
         }
       }
 
+      if (activePage === 'system') {
+        if (currentUser.username !== 'admin' && (currentUser.role as string) !== 'ADMIN') {
+          setActivePage(getInitialPage(currentUser));
+        }
+        return;
+      }
+
       if (activePage === 'activity') {
         if (currentUser.username !== 'admin' && (currentUser.role as string) !== 'ADMIN') {
           setActivePage(getInitialPage(currentUser));
@@ -156,6 +164,7 @@ const AppContent: React.FC = () => {
       case 'trash': return <Trash />;
       case 'users': return <UserManagement />;
       case 'activity': return <ActivityLog />;
+      case 'system': return <SystemAdmin />;
       default: return <Dashboard />;
     }
   };

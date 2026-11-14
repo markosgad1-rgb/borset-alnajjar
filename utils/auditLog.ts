@@ -24,12 +24,13 @@ export interface AuditEntry {
   changes?: Record<string, { from: any; to: any }>;
   items?: string;
   itemsBefore?: string;
+  system?: boolean;    // written automatically by the app itself (not by a person)
   derived?: boolean;   // automatic side effect of another action (balance / stock updates)
   offline?: boolean;   // the user was offline when it happened
   device: string;
 }
 
-const AUDITED = new Set(['invoices', 'purchases', 'treasury', 'customers', 'suppliers', 'products', 'employees', 'users']);
+const AUDITED = new Set(['devices', 'settings', 'invoices', 'purchases', 'treasury', 'customers', 'suppliers', 'products', 'employees', 'users']);
 // fields that change automatically as a consequence of invoices / payments / purchases
 const DERIVED_KEYS = new Set(['balance', 'history', 'quantity', 'quantityMarg', 'quantityNozha', 'avgCost', 'currentBalance', 'branchQuantities', 'cost']);
 const MASKED_KEYS = new Set(['password']);
@@ -41,13 +42,26 @@ const norm = (v: any) => (v === undefined ? null : v);
 const fmt = (n: any) => (isFinite(Number(n)) && n !== '' && n !== null ? Number(n).toLocaleString('en-US') : '');
 
 const LABELS: Record<string, string> = {
-  invoices: 'فاتورة بيع', purchases: 'فاتورة مشتريات', treasury: 'حركة خزنة', customers: 'عميل',
+  devices: 'جهاز', settings: 'إعدادات البرنامج', invoices: 'فاتورة بيع', purchases: 'فاتورة مشتريات', treasury: 'حركة خزنة', customers: 'عميل',
   suppliers: 'مورد', products: 'صنف', employees: 'موظف', users: 'مستخدم'
+};
+
+// The signed-in user is kept IN MEMORY for this window (set by the context on login/logout/reload).
+// localStorage is shared by every window/tab of the same browser, so reading it here could
+// attribute an action to whoever logged in last in another window. It is only a fallback now.
+let memUser: any = undefined;   // undefined = not set yet, null = signed out
+export const setAuditUser = (u: any) => { memUser = u ?? null; };
+
+// Automatic writes (self-healing, migrations) are recorded as "النظام" instead of the person who happened to open the app.
+let systemDepth = 0;
+export const runAsSystem = <T,>(fn: () => T): T => {
+  systemDepth++;
+  try { return fn(); } finally { systemDepth--; }
 };
 
 const getUser = (override?: any) => {
   try {
-    const u = override || JSON.parse(localStorage.getItem('erp_current_user') || 'null');
+    const u = override || (memUser !== undefined ? memUser : JSON.parse(localStorage.getItem('erp_current_user') || 'null'));
     if (!u) return { userId: '', username: '', userName: 'غير معروف', role: '' };
     return { userId: String(u.id ?? ''), username: String(u.username ?? ''), userName: String(u.fullName || u.name || u.username || ''), role: String(u.role ?? '') };
   } catch { return { userId: '', username: '', userName: 'غير معروف', role: '' }; }
@@ -76,6 +90,7 @@ const describe = (coll: string, id: string, d: any): string => {
     case 'invoices': return `${base} ${id} - ${d.customerName || ''} - إجمالي ${fmt(d.total)}${d.paidAmount ?? d.paid ? ` - مدفوع ${fmt(d.paidAmount ?? d.paid)}` : ''}`;
     case 'purchases': return `${base} ${id} - ${d.supplierName || ''} - إجمالي ${fmt(d.total)}`;
     case 'treasury': return `${base}: ${d.description || ''} - ${fmt(d.amount ?? (d.credit || d.debit))}${d.paymentMethod ? ` (${d.paymentMethod})` : ''}`;
+    case 'devices': return `${base}: ${d.deviceName || ''} - ${d.userName || d.username || ''} (${d.status === 'approved' ? 'معتمد' : d.status === 'blocked' ? 'محظور' : 'بانتظار الموافقة'})`;
     case 'users': return `${base} ${d.fullName || d.username || id}`;
     default: return `${base} ${d.name || ''} (${id})`;
   }
@@ -90,6 +105,7 @@ const diffPrimitives = (before: any, after: any, keys: string[]) => {
       if (Array.isArray(a) && (!Array.isArray(b) || a.length !== b.length)) out[k] = { from: Array.isArray(b) ? `[${b.length}]` : null, to: `[${a.length}]` };
       continue;
     }
+    if (k === 'logo') { if (norm(a) !== norm(b)) out[k] = { from: null, to: '(تغيير الشعار)' }; continue; }
     if (isPrim(a) && isPrim(b)) {
       if (norm(a) !== norm(b)) out[k] = MASKED_KEYS.has(k) ? { from: '***', to: '***' } : { from: clip(norm(b)), to: clip(norm(a)) };
     } else if (!isPrim(a) && JSON.stringify(a) !== JSON.stringify(b)) {
@@ -144,6 +160,8 @@ export const recordWrite = (op: 'set' | 'update' | 'delete', ref: any, payload: 
   if (!isAuditedRef(ref)) return;
   const ts = Date.now();
   const offline = !isConnected();
+  const sys = systemDepth > 0;
+  const who = getUser();   // captured NOW (synchronously), not after the async cache read
   beforeP.then((before) => {
     try {
       const parts = String(ref.path).split('/');
@@ -184,9 +202,9 @@ export const recordWrite = (op: 'set' | 'update' | 'delete', ref: any, payload: 
       if (action === 'update' && (changes as any)?.isDeleted?.to === true) summary = `حذف (نقل لسلة المهملات): ${summary}`;
       else if (action === 'update' && (changes as any)?.isDeleted?.to === false) summary = `استرجاع من سلة المهملات: ${summary}`;
 
-      const u = getUser();
+      const u = sys ? { userId: 'system', username: 'system', userName: 'النظام (تلقائي)', role: 'SYSTEM' } : who;
       send({
-        ts, at: new Date(ts).toISOString(), ...u, action, collection: coll, docId, summary,
+        ts, at: new Date(ts).toISOString(), ...u, system: sys || undefined, action, collection: coll, docId, summary,
         changes: changes && Object.keys(changes).length ? changes : undefined,
         items: itemsNow, itemsBefore: itemsPrev,
         derived: derived || undefined, offline: offline || undefined, device: getDevice()

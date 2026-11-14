@@ -14,7 +14,8 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
-import { logEvent } from '../utils/auditLog';
+import { logEvent, setAuditUser, runAsSystem } from '../utils/auditLog';
+import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
 
 interface ERPContextType {
   products: Product[];
@@ -31,7 +32,7 @@ interface ERPContextType {
   companyLogo: string | null;
   
   // Auth
-  login: (username: string, password: string) => boolean;
+  login: (username: string, password: string) => Promise<{ ok: boolean; message?: string }>;
   logout: () => void;
   
   // CRUD
@@ -354,8 +355,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // --- State ---
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
-      return saved ? sanitizeUser(JSON.parse(saved)) : null;
+      // sessionStorage is per window/tab, so a reload keeps THIS window's user even if someone else
+      // logged in from another window (localStorage is shared and holds the last login anywhere).
+      let saved: string | null = null;
+      try { saved = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER); } catch { /* ignore */ }
+      if (!saved) saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+      const initial = saved ? sanitizeUser(JSON.parse(saved)) : null;
+      setAuditUser(initial);
+      return initial;
     }
     return null;
   });
@@ -518,11 +525,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             // One-time self-healing in Firestore for S005 if corrupted data was stored
             const hasCorruptedHistory = rawHistory.some((h: any) => h.description?.includes('رصيد افتتاحي') || Math.abs(parseFloat(String(h.amount || 0)) || 0) > 100000000);
             if (isOnline && isS005 && (Math.abs(Number(data.openingBalance) || 0) > 100000000 || Math.abs(Number(data.balance) || 0) > 100000000 || hasCorruptedHistory)) {
-              updateDoc(doc(db, 'suppliers', code), {
+              runAsSystem(() => updateDoc(doc(db, 'suppliers', code), {
                 openingBalance: 0,
                 balance: -200000,
                 history: cleanHistory
-              }).catch(() => {});
+              }).catch(() => {}));
             }
 
             map.set(key, {
@@ -670,7 +677,25 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if(companyLogo) localStorage.setItem(STORAGE_KEYS.COMPANY_LOGO, companyLogo);
     }
     localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser));
+    try { sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser)); } catch { /* ignore */ }
+    setAuditUser(currentUser);
   }, [users, products, customers, suppliers, employees, purchases, invoices, treasury, currentUser, companyLogo, isOnline]);
+
+  // Device protection: re-check restored sessions, sign out if the admin blocks this device, and keep a "last seen" heartbeat.
+  useEffect(() => {
+    if (!currentUser) return;
+    let stopped = false;
+    const kick = (msg: string) => {
+      if (stopped) return;
+      alert(msg);
+      setAuditUser(null);
+      setCurrentUser(null);
+    };
+    checkDevice(currentUser, { strict: false }).then(r => { if (!r.allowed) kick(r.message || 'هذا الجهاز غير معتمد.'); });
+    const unwatch = watchDevice(currentUser, kick);
+    const stopBeat = startHeartbeat(currentUser);
+    return () => { stopped = true; unwatch(); stopBeat(); };
+  }, [currentUser?.id]);
 
   // Self-healing: Ensure any purchase invoice with a recorded down payment (paid > 0) is reflected in supplier history & treasury
   useEffect(() => {
@@ -711,10 +736,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setSuppliers(prev => prev.map(s => s.code?.trim().toUpperCase() === cleanSuppCode ? { ...s, balance: updatedBal, history: updatedHistory } : s));
 
             if (isOnline) {
-              updateDoc(doc(db, 'suppliers', supplier.code), {
+              runAsSystem(() => updateDoc(doc(db, 'suppliers', supplier.code), {
                 balance: updatedBal,
                 history: updatedHistory
-              }).catch(() => {});
+              }).catch(() => {}));
             }
           }
 
@@ -748,7 +773,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setTreasury(prev => [newTx, ...prev]);
 
             if (isOnline) {
-              setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {});
+              runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}));
             }
           }
         }
@@ -770,12 +795,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const login = (usernameInput: string, passwordInput: string) => {
+  const login = async (usernameInput: string, passwordInput: string): Promise<{ ok: boolean; message?: string }> => {
     const username = usernameInput.trim();
     const password = passwordInput.trim();
 
+    let found: User | null = null;
     if (username === 'admin' && password === 'Mero@2211') {
-       const adminUser = sanitizeUser({ 
+       found = sanitizeUser({ 
          id: '1', 
          username: 'admin', 
          password: 'Mero@2211', 
@@ -783,25 +809,30 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
          role: 'ADMIN', 
          permissions: {} 
        });
-       setCurrentUser(adminUser);
-       logEvent('login', 'تسجيل دخول', adminUser);
-       if (isOnline) {
-         setDoc(doc(db, 'users', '1'), adminUser).catch((e: any) => console.log("Admin seed check:", e));
-       }
-       return true;
+    } else {
+       const u = users.find(u => u.username === username && u.password === password);
+       if (u) found = sanitizeUser(u);
+    }
+    if (!found) return { ok: false };
+
+    // Device approval (see utils/deviceGuard.ts)
+    setAuditUser(found);
+    const dev = await checkDevice(found, { strict: true });
+    if (!dev.allowed) {
+      logEvent('login', `محاولة دخول مرفوضة: ${dev.message || 'جهاز غير معتمد'}`, found);
+      setAuditUser(null);
+      return { ok: false, message: dev.message || 'هذا الجهاز غير معتمد.' };
     }
 
-    const user = users.find(u => u.username === username && u.password === password);
-    if (user) {
-      setCurrentUser(sanitizeUser(user));
-      logEvent('login', 'تسجيل دخول', user);
-      return true;
+    setCurrentUser(found);
+    logEvent('login', 'تسجيل دخول', found);
+    if (isOnline && found.username === 'admin') {
+      setDoc(doc(db, 'users', '1'), found).catch((e: any) => console.log("Admin seed check:", e));
     }
-    
-    return false;
+    return { ok: true };
   };
 
-  const logout = () => { logEvent('logout', 'تسجيل خروج'); setCurrentUser(null); };
+  const logout = () => { logEvent('logout', 'تسجيل خروج'); setAuditUser(null); setCurrentUser(null); };
 
   const addProduct = async (product: Product): Promise<boolean> => {
     const cleanCode = (product.code || '').trim();
