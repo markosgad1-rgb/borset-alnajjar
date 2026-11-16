@@ -3816,10 +3816,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const clearLedger = async (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => {
+      const cleanCode = (code || '').trim().toLowerCase();
       if(entityType === 'CUSTOMER') {
           await updateCustomer(code, { balance: 0, history: [] });
       } else if (entityType === 'SUPPLIER') {
-          await updateSupplier(code, { balance: 0, history: [] });
+          const ids = purchases
+            .filter(p => !p.isDeleted && String(p.supplierCode || '').trim().toLowerCase() === cleanCode)
+            .map(p => String(p.id));
+          for (const id of ids) { await deletePurchase(id); }
+          await updateSupplier(code, { balance: 0, history: [], openingBalance: 0 });
       } else if (entityType === 'EMPLOYEE') {
           await updateEmployee(code, { balance: 0, history: [] });
       }

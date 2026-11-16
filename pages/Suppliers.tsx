@@ -1057,7 +1057,7 @@ export const Suppliers: React.FC = () => {
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
-                           <span className="font-bold text-red-600">تأكيد التصفير؟</span>
+                           <span className="font-bold text-red-600">تأكيد التصفير؟ (هتتحذف فواتير المشتريات وكل الحركات)</span>
                            <button 
                              onClick={handleClearLedger}
                              className="bg-red-600 text-white px-2 py-0.5 rounded text-xs font-bold hover:bg-red-700"
