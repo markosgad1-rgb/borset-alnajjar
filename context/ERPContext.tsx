@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
 import { Product, Customer, CustomerHistory, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId } from '../types';
 import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
@@ -9,8 +9,10 @@ import {
   collection, 
   doc, 
   getDocs, 
+  getDocsFromCache, 
   onSnapshot, 
   query, 
+  where, 
   orderBy 
 } from 'firebase/firestore';
 import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
@@ -213,6 +215,8 @@ interface ERPContextType {
   clearLedger: (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => Promise<boolean>;
   cleanCorruptedSupplierOpeningBalance: (code: string) => Promise<void>;
   clearTreasury: () => Promise<boolean>;
+  findDuplicateTreasury: () => { key: string; keep: TreasuryTransaction; extras: TreasuryTransaction[] }[];
+  removeTreasuryTransactions: (ids: string[]) => Promise<number>;
   exportBackupData: () => SystemBackup;
   restoreBackupData: (backup: SystemBackup) => Promise<{ success: boolean; message: string }>;
 
@@ -245,6 +249,8 @@ const STORAGE_KEYS = {
 };
 
 // Helper to recursively remove all undefined properties so Firestore never throws unsupported field value error
+const getTreasurySnap = async (q: any) => getDocs(q);
+
 export const cleanDoc = <T = any>(obj: T): T => {
   if (obj === null || obj === undefined) return obj;
   if (Array.isArray(obj)) return obj.map(cleanDoc) as any;
@@ -379,6 +385,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [treasury, setTreasury] = useState<TreasuryTransaction[]>([]);
+  // الإصلاح الذاتي ما يشتغلش إلا بعد ما الموردين والمشتريات والخزنة يتأكدوا من السيرفر (يمنع تكرار حركات الخزنة)
+  const syncedRef = useRef<{ s: boolean; p: boolean; t: boolean }>({ s: false, p: false, t: false });
+  const healedRef = useRef<Set<string>>(new Set());
+  const [healReady, setHealReady] = useState(false);
+  const markSynced = (k: 's' | 'p' | 't', snap: any) => {
+    syncedRef.current[k] = true;
+    if (syncedRef.current.s && syncedRef.current.p && syncedRef.current.t) setHealReady(true);
+  };
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
 
   // Calculate Balances dynamically
@@ -549,6 +563,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             });
           });
           setSuppliers(Array.from(map.values()));
+          markSynced('s', snap);
         }, handleSnapshotError));
 
         // 6. Employees Collection
@@ -589,6 +604,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             return (b.id || '').localeCompare(a.id || '');
           });
           setPurchases(list);
+          markSynced('p', snap);
         }, handleSnapshotError));
         
         // 8. Invoices Collection
@@ -656,6 +672,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
              return (b.id || '').localeCompare(a.id || '');
            });
            setTreasury(data);
+           markSynced('t', snap);
         }, handleSnapshotError));
       } catch (err) {
         console.error("Error setting up Firestore real-time listeners:", err);
@@ -703,7 +720,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Self-healing: Ensure any purchase invoice with a recorded down payment (paid > 0) is reflected in supplier history & treasury
   useEffect(() => {
-    if (purchases.length === 0 || suppliers.length === 0) return;
+    if (!healReady || purchases.length === 0 || suppliers.length === 0) return;
 
     purchases.forEach(p => {
       const paidAmt = Number(p.paidAmount ?? p.paid ?? 0);
@@ -754,9 +771,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             (t.description && t.description.includes(pId) && (t.description.includes('سداد دفعة') || t.description.includes('مشتريات') || t.description.includes('فاتورة')))
           );
 
-          if (!hasTreasuryTx) {
+          if (!hasTreasuryTx && !healedRef.current.has(pId)) {
+            healedRef.current.add(pId);
             const pMethod: PaymentMethod = p.paymentMethod || 'CASH';
-            const tId = `T_PUR_${pId}_${Date.now()}`;
+            const tId = `T_PUR_${pId}_HEAL`; // رقم ثابت: لو اتنفذت مرتين تكتب فوق نفس الحركة بدل ما تكرّرها
             const newTx: TreasuryTransaction = {
               id: tId,
               branchId: p.branchId || 'MARG',
@@ -774,16 +792,21 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               timestamp: Date.now()
             };
 
-            setTreasury(prev => [newTx, ...prev]);
-
-            if (isOnline) {
-              runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}));
-            }
+            // قبل الإنشاء نتأكد من السيرفر نفسه إن مفيش حركة للفاتورة دي (حماية نهائية من التكرار)
+            if (!isOnline) { healedRef.current.delete(pId); return; }
+            (async () => {
+              try {
+                const chk = await getDocs(query(collection(db, 'treasury'), where('invoiceNumber', 'in', [pId, `#${pId}`])));
+                if (!chk.empty) return;
+                setTreasury(prev => prev.some(t => t.id === tId) ? prev : [newTx, ...prev]);
+                runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}));
+              } catch { healedRef.current.delete(pId); }
+            })();
           }
         }
       }
     });
-  }, [purchases, suppliers.length, treasury.length, isOnline]);
+  }, [purchases, suppliers.length, treasury.length, isOnline, healReady]);
 
 
 
@@ -1946,7 +1969,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         // Treasury in Firestore
         const qTreasury = query(collection(db, 'treasury'));
-        const snap = await getDocs(qTreasury);
+        const snap = await getTreasurySnap(qTreasury);
         const matchedDocs = snap.docs.filter(d => {
           const data = d.data() as TreasuryTransaction;
           const inv = String(data.invoiceNumber || '').trim().replace(/^#/, '');
@@ -2136,7 +2159,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         // Delete linked Treasury transactions in Firestore
         const qTreasury = query(collection(db, 'treasury'));
-        const snap = await getDocs(qTreasury);
+        const snap = await getTreasurySnap(qTreasury);
         const linkedDocs = snap.docs.filter(d => {
           const data = d.data() as TreasuryTransaction;
           return (
@@ -2824,7 +2847,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         // Handle Treasury Update/Reconciliation
         const qTreasury = query(collection(db, 'treasury'));
-        const snap = await getDocs(qTreasury);
+        const snap = await getTreasurySnap(qTreasury);
         const oldTxDocs = snap.docs.filter(d => (d.data() as TreasuryTransaction).invoiceNumber === oldInvoice.id);
         
         // Delete old treasury docs for this invoice
@@ -3076,7 +3099,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         // Delete linked Treasury transactions in Firestore
         const qTreasury = query(collection(db, 'treasury'));
-        const snap = await getDocs(qTreasury);
+        const snap = await getTreasurySnap(qTreasury);
         const linkedDocs = snap.docs.filter(d => {
           const data = d.data() as TreasuryTransaction;
           return (
@@ -3835,6 +3858,37 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       setTreasury([]);
       return true;
+  };
+
+  // يرجّع المجموعات المكررة (نفس فاتورة المشتريات + نفس المبلغ والحساب)؛ الأقدم هو الأصلي والباقي زيادة
+  const findDuplicateTreasury = (): { key: string; keep: TreasuryTransaction; extras: TreasuryTransaction[] }[] => {
+    const tsOf = (t: any) => Number(t.timestamp) || Date.parse(t.createdAt || '') || Number((String(t.id).match(/\d{10,}/) || [0])[0]) || 0;
+    const groups = new Map<string, TreasuryTransaction[]>();
+    treasury.forEach(t => {
+      const inv = String(t.invoiceNumber || '').replace(/^#/, '').trim();
+      const isPurchasePay = t.source === 'PURCHASE' || String(t.description || '').includes('سداد دفعة للمورد');
+      if (!inv || !isPurchasePay) return;
+      const key = [inv, t.paymentMethod || 'CASH', t.branchId || 'MARG', Number(t.debit || 0), Number(t.credit || 0), t.description || ''].join('|');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(t);
+    });
+    const out: { key: string; keep: TreasuryTransaction; extras: TreasuryTransaction[] }[] = [];
+    groups.forEach((list, key) => {
+      if (list.length < 2) return;
+      const sorted = [...list].sort((a, b) => tsOf(a) - tsOf(b) || String(a.id).localeCompare(String(b.id)));
+      out.push({ key, keep: sorted[0], extras: sorted.slice(1) });
+    });
+    return out;
+  };
+
+  const removeTreasuryTransactions = async (ids: string[]): Promise<number> => {
+    let n = 0;
+    for (const id of ids) {
+      try { if (isOnline) await deleteDoc(doc(db, 'treasury', id)); n++; } catch (e) { handleFirebaseError(e); }
+    }
+    const set = new Set(ids);
+    setTreasury(prev => prev.filter(t => !set.has(t.id)));
+    return n;
   };
 
   const seedDatabase = async () => {
@@ -4881,6 +4935,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gTransferCash = gate('treasury.manage', transferCashBetweenBranches, false);
   const gAddOpeningBalance = gate('treasury.manage', addOpeningBalance);
   const gClearTreasury = gate('treasury.clear', clearTreasury, false);
+  const gRemoveTreasuryTx = gate('treasury.clear', removeTreasuryTransactions, false);
   const gUpdatePurchase = gate('purchase.edit', updatePurchase);
   const gFinalizePrice = gate('purchase.edit', finalizePurchasePrice, false);
   const gDeletePurchase = gate('purchase.delete', deletePurchase);
@@ -4914,7 +4969,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       markInvoicesReviewed: gMarkReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity,
-      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, updateSystemLogo,
+      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
       exportBackupData, restoreBackupData: gRestoreBackup,
       currentTreasuryBalance, currentTreasuryBalanceMarg, currentTreasuryBalanceNozha, balances
     }}>

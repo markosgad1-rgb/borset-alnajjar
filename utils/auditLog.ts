@@ -199,10 +199,11 @@ export const recordWrite = (op: 'set' | 'update' | 'delete', ref: any, payload: 
 
       const shown = op === 'delete' ? before : after;
       let summary = describe(coll, docId, shown);
+      if (sys) summary = `(تلقائي) ${summary}`;
       if (action === 'update' && (changes as any)?.isDeleted?.to === true) summary = `حذف (نقل لسلة المهملات): ${summary}`;
       else if (action === 'update' && (changes as any)?.isDeleted?.to === false) summary = `استرجاع من سلة المهملات: ${summary}`;
 
-      const u = sys ? { userId: 'system', username: 'system', userName: 'النظام (تلقائي)', role: 'SYSTEM' } : who;
+      const u = who; // دايماً باسم المستخدم المسجّل دخوله على الجهاز؛ العمليات التلقائية بتتعلّم بكلمة (تلقائي)
       send({
         ts, at: new Date(ts).toISOString(), ...u, system: sys || undefined, action, collection: coll, docId, summary,
         changes: changes && Object.keys(changes).length ? changes : undefined,

@@ -15,6 +15,13 @@ const ACTION_META: Record<string, { label: string; cls: string }> = {
   logout: { label: 'خروج', cls: 'bg-gray-100 text-gray-700 border-gray-200' }
 };
 
+const deviceLabel = (d?: string) => {
+  const v = String(d || '');
+  if (/^(iOS|Android)/i.test(v)) return `📱 موبايل (${v})`;
+  if (/^(Windows|Mac)/i.test(v)) return `💻 لابتوب (${v})`;
+  return v;
+};
+
 const TYPE_LABELS: Record<string, string> = {
   invoices: 'فواتير البيع', purchases: 'فواتير المشتريات', treasury: 'الخزنة', customers: 'العملاء',
   suppliers: 'الموردين', products: 'الأصناف', employees: 'الموظفين', users: 'المستخدمين', settings: 'الإعدادات', devices: 'الأجهزة', auth: 'الدخول والخروج'
@@ -109,7 +116,7 @@ export const ActivityLog: React.FC = () => {
     const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const header = ['التاريخ', 'الوقت', 'المستخدم', 'العملية', 'النوع', 'الرقم', 'البيان', 'التفاصيل', 'الجهاز', 'أوفلاين'];
     const rows = filtered.map(e => [fmtDate(e.ts), fmtTime(e.ts), e.userName, ACTION_META[e.action]?.label || e.action,
-      TYPE_LABELS[e.collection] || e.collection, e.docId, e.summary, detailsText(e), e.device, e.offline ? 'نعم' : '']);
+      TYPE_LABELS[e.collection] || e.collection, e.docId, e.summary, detailsText(e), deviceLabel(e.device), e.offline ? 'نعم' : '']);
     const csv = '\uFEFF' + [header, ...rows].map(r => r.map(esc).join(',')).join('\r\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -208,7 +215,7 @@ export const ActivityLog: React.FC = () => {
                       <tr className={`border-t border-gray-100 hover:bg-gray-50 ${hasDetails ? 'cursor-pointer' : ''} ${e.derived ? 'text-gray-400' : ''}`}
                         onClick={() => hasDetails && setOpenId(isOpen ? null : e.id)}>
                         <td className="p-3 whitespace-nowrap"><div className="font-bold text-gray-700">{fmtDate(e.ts)}</div><div className="text-xs text-gray-500">{fmtTime(e.ts)}</div></td>
-                        <td className="p-3"><div className="font-bold text-gray-800">{e.userName || '—'}</div><div className="text-[11px] text-gray-400">{e.device}{e.offline ? ' • أوفلاين' : ''}</div></td>
+                        <td className="p-3"><div className="font-bold text-gray-800">{e.userName || '—'}</div><div className="text-[11px] text-gray-400">{deviceLabel(e.device)}{e.offline ? ' • أوفلاين' : ''}</div></td>
                         <td className="p-3"><span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${meta.cls}`}>{meta.label}</span></td>
                         <td className="p-3 text-gray-600">{TYPE_LABELS[e.collection] || e.collection}</td>
                         <td className="p-3 text-gray-800">{e.summary}</td>
