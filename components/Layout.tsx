@@ -317,7 +317,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           </header>
         )}
         {/* Persistent New-Invoices-To-Review Banner */}
-        {pendingReviewCount > 0 && activePage !== 'sales-history' && (
+        {pendingReviewCount > 0 && (activePage === 'sales' || activePage === 'sales-history') && (
           <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
@@ -334,7 +334,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
               </div>
             </div>
             <button
-              onClick={() => { try { sessionStorage.setItem('erp_hist_review_filter', 'PENDING'); } catch { /* ignore */ } onNavigate('sales-history'); }}
+              onClick={() => { try { sessionStorage.setItem('erp_hist_review_filter', 'PENDING'); } catch { /* ignore */ } if (activePage === 'sales-history') { window.dispatchEvent(new Event('erp-hist-review-filter')); } else { onNavigate('sales-history'); } }}
               className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
             >
               <FileText size={16} />
@@ -344,7 +344,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
         )}
 
         {/* Purchases awaiting review banner */}
-        {pendingPurchaseReviewCount > 0 && activePage !== 'purchases' && (
+        {pendingPurchaseReviewCount > 0 && activePage === 'purchases' && (
           <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
@@ -361,7 +361,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
               </div>
             </div>
             <button
-              onClick={() => { try { sessionStorage.setItem('erp_pur_review_filter', 'PENDING'); } catch { /* ignore */ } onNavigate('purchases'); }}
+              onClick={() => { try { sessionStorage.setItem('erp_pur_review_filter', 'PENDING'); } catch { /* ignore */ } window.dispatchEvent(new Event('erp-pur-review-filter')); }}
               className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
             >
               <ShoppingCart size={16} />

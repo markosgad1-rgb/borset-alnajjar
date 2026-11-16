@@ -81,7 +81,12 @@ export const Purchases: React.FC = () => {
     try { const v = sessionStorage.getItem('erp_pur_review_filter'); if (v) { sessionStorage.removeItem('erp_pur_review_filter'); return v === 'PENDING' ? 'PENDING' : 'ALL'; } } catch { /* ignore */ }
     return 'ALL';
   });
-  const [reviewingId, setReviewingId] = useState<string | null>(null)
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  useEffect(() => {
+    const h = () => { try { sessionStorage.removeItem('erp_pur_review_filter'); } catch { /* ignore */ } setReviewFilter('PENDING'); };
+    window.addEventListener('erp-pur-review-filter', h);
+    return () => window.removeEventListener('erp-pur-review-filter', h);
+  }, []);
   const canDeletePurchases = canDo(currentUser, 'purchase.delete');
 
   // Auto-generate Purchase ID (R001 series)

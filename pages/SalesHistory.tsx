@@ -47,6 +47,11 @@ export const SalesHistory: React.FC = () => {
     } catch { return 'ALL'; }
   });
   const canReview = canDo(currentUser, 'invoice.review');
+  useEffect(() => {
+    const h = () => { try { sessionStorage.removeItem('erp_hist_review_filter'); } catch { /* ignore */ } setReviewFilter('PENDING'); };
+    window.addEventListener('erp-hist-review-filter', h);
+    return () => window.removeEventListener('erp-hist-review-filter', h);
+  }, []);
   const [reviewing, setReviewing] = useState(false);
   const [selectedAreaFilter, setSelectedAreaFilter] = useState<string>('ALL');
   
