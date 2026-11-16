@@ -505,8 +505,9 @@ export const Customers: React.FC = () => {
   const getConsumedPaymentIndices = (history: Array<{ date: string; description: string; amount: number }>) => {
     const consumedIndices = new Set<number>();
     // تحصيلات صفحة التحصيل دفعات مستقلة، عمرها ما تتحسب كأنها دفعة الفاتورة نفسها (وإلا بتختفي من الكشف)
+    // (تحصيل من صفحة التحصيل cust_pay_ ، أو تحويل من صفحة التحويلات trans_)
     const isCollectionEntry = (x: any) =>
-      String(x?.id || '').startsWith('cust_pay_T_COL_') || String(x?.paymentId || '').startsWith('T_COL_');
+      /^(cust_pay_|trans_)/.test(String(x?.id || '')) || /^(T_COL_|TR\d)/.test(String(x?.paymentId || ''));
 
     for (let i = 0; i < history.length; i++) {
       const h = history[i];
