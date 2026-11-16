@@ -122,6 +122,10 @@ export const Treasury: React.FC = () => {
           const match = (item.id || '').match(/\d{10,}/);
           return match ? Number(match[0]) : 0;
         };
+        // الترتيب الأساسي بتاريخ العملية نفسه (الأحدث فوق)، وجوه اليوم الواحد بوقت التسجيل
+        const dayOf = (item: any) => (String(item.date || '').match(/\d{4}-\d{2}-\d{2}/) || [''])[0];
+        const dA = dayOf(a), dB = dayOf(b);
+        if (dA !== dB) return dB.localeCompare(dA);
         const tA = getTimestamp(a);
         const tB = getTimestamp(b);
         if (tA && tB && tA !== tB) return tB - tA;

@@ -504,6 +504,9 @@ export const Customers: React.FC = () => {
   // preventing duplicate entries and double-counting in the ledger.
   const getConsumedPaymentIndices = (history: Array<{ date: string; description: string; amount: number }>) => {
     const consumedIndices = new Set<number>();
+    // تحصيلات صفحة التحصيل دفعات مستقلة، عمرها ما تتحسب كأنها دفعة الفاتورة نفسها (وإلا بتختفي من الكشف)
+    const isCollectionEntry = (x: any) =>
+      String(x?.id || '').startsWith('cust_pay_T_COL_') || String(x?.paymentId || '').startsWith('T_COL_');
 
     for (let i = 0; i < history.length; i++) {
       const h = history[i];
@@ -526,7 +529,7 @@ export const Customers: React.FC = () => {
       // 1. Direct match by invoice number in description with matching positive amount
       let matchedIdx = -1;
       for (let j = 0; j < history.length; j++) {
-        if (j === i || consumedIndices.has(j)) continue;
+        if (j === i || consumedIndices.has(j) || isCollectionEntry(history[j])) continue;
         const candidate = history[j];
         if (candidate.amount > 0 && Math.abs(candidate.amount - invoicePaid) < 0.01) {
           if (candidate.description.includes(`#${invId}`) || candidate.description.includes(invId)) {
@@ -537,7 +540,7 @@ export const Customers: React.FC = () => {
       }
 
       // 2. Direct sequence match: immediate entry following invoice (standard ERPContext.addInvoice order)
-      if (matchedIdx === -1 && i + 1 < history.length && !consumedIndices.has(i + 1)) {
+      if (matchedIdx === -1 && i + 1 < history.length && !consumedIndices.has(i + 1) && !isCollectionEntry(history[i + 1])) {
         const next = history[i + 1];
         if (next.amount > 0 && Math.abs(next.amount - invoicePaid) < 0.01 && !next.description.includes('فاتورة بيع') && (next.description.includes('دفعة') || next.description.includes(invId))) {
           matchedIdx = i + 1;
@@ -547,7 +550,7 @@ export const Customers: React.FC = () => {
       // 3. Same-date payment entry with matching amount
       if (matchedIdx === -1) {
         for (let j = 0; j < history.length; j++) {
-          if (j === i || consumedIndices.has(j)) continue;
+          if (j === i || consumedIndices.has(j) || isCollectionEntry(history[j])) continue;
           const candidate = history[j];
           if (candidate.amount > 0 && Math.abs(candidate.amount - invoicePaid) < 0.01) {
             if (candidate.date === (invoice?.date || h.date) && !candidate.description.includes('فاتورة بيع') && (candidate.description.includes('دفعة') || candidate.description.includes(invId))) {
