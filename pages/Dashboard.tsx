@@ -4,6 +4,7 @@ import { useERP } from '../context/ERPContext';
 import { TrendingUp, Users, Package, Truck, Trash2, Check, X, AlertTriangle, Clock, ShoppingCart } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { canDo } from '../utils/permissions';
+import { calculateSupplierBalance } from '../utils/supplierStatement';
 
 export const Dashboard: React.FC = () => {
   const { 
@@ -45,7 +46,8 @@ export const Dashboard: React.FC = () => {
     .reduce((sum, c) => sum + c.balance, 0);
 
   // Calculations for Supplier Debt (Split by branch delivery attribution)
-  const totalSupplierDebt = activeSuppliers.reduce((sum, s) => sum + (s.balance > 0 ? s.balance : 0), 0);
+  // نفس مصدر كشف الحساب المجمع: صافي أرصدة الموردين من كشف حساب كل مورد (سالب في الكشف = علينا، فبنقلب الإشارة)
+  const totalSupplierDebt = Math.round(activeSuppliers.reduce((sum, s) => sum - calculateSupplierBalance(s, purchases), 0) * 100) / 100;
   const purchasesMargTotal = activePurchases
     .filter(p => (p.branchId || 'MARG') === 'MARG' && p.pricingStatus !== 'PENDING_PRICE')
     .reduce((sum, p) => sum + (p.total || 0), 0);

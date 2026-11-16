@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, Printer, Search, Calendar, Filter, Users, Truck, Layers, ArrowUpDown, ChevronDown, CheckCircle2, AlertCircle, MessageCircle } from 'lucide-react';
 import { useERP } from '../context/ERPContext';
+import { getSupplierStatementTransactions } from '../utils/supplierStatement';
 import { shareConsolidatedStatementPdfViaWhatsApp } from '../utils/whatsapp';
 
 interface ConsolidatedLedgerModalProps {
@@ -75,7 +76,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
 
   // 1. Calculate Consolidated Customer Balances & Movement Data
   const customerConsolidatedData = useMemo(() => {
-    return customers.map(cust => {
+    return customers.filter(c => !c.isDeleted).map(cust => {
       let prior = 0;
       let periodDebit = 0;
       let periodCredit = 0;
@@ -148,7 +149,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
 
   // 2. Calculate Consolidated Supplier Balances & Movement Data
   const supplierConsolidatedData = useMemo(() => {
-    return suppliers.map(supp => {
+    return suppliers.filter(sp => !sp.isDeleted).map(supp => {
       let prior = 0;
       let periodDebit = 0; // سداد للمورد
       let periodCredit = 0; // مشتريات من المورد (علينا)
@@ -208,11 +209,15 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
         }
       });
 
-      // For supplier: positive balance means we owe supplier (دائن/له), negative means supplier owes us (مدين/لنا)
-      const dynamicBal = prior + periodCredit - periodDebit;
-      const finalBal = (supp.history && supp.history.length > 0)
-        ? dynamicBal
-        : ((supp as any).currentBalance !== undefined ? (supp as any).currentBalance : supp.balance);
+      // الرصيد النهائي من كشف حساب المورد نفسه (المصدر الوحيد للأرصدة)، بإشارة معكوسة: موجب = له (علينا)، سالب = لنا (عليه)
+      const stm = getSupplierStatementTransactions(supp, purchases, {
+        startDate: filterStartDate || undefined,
+        endDate: filterEndDate || undefined
+      });
+      const finalBal = Math.round(-Number(stm.finalBalance || 0) * 100) / 100;
+      periodCredit = Number(stm.totalCredit || 0);
+      periodDebit = Number(stm.totalDebit || 0);
+      prior = Math.round((finalBal - periodCredit + periodDebit) * 100) / 100;
 
       const status: 'مدين' | 'دائن' | 'متزن' = finalBal > 0 ? 'دائن' : finalBal < 0 ? 'مدين' : 'متزن';
 
