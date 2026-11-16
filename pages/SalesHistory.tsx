@@ -26,6 +26,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
 import { canDo } from '../utils/permissions';
+import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
   const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo } = useERP();
@@ -55,6 +56,8 @@ export const SalesHistory: React.FC = () => {
 
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
+  const { notify: notifyDone, dialog: doneDialog } = useDialog();
+  const [savingEdit, setSavingEdit] = useState(false);
   const [editInvoiceId, setEditInvoiceId] = useState('');
   const [editDate, setEditDate] = useState('');
   const [editTime, setEditTime] = useState('');
@@ -327,9 +330,20 @@ export const SalesHistory: React.FC = () => {
       delete (newInvoiceData as any).reviewedAt;
     }
 
-    await updateInvoice(oldInvoice, newInvoiceData);
+    if (savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await updateInvoice(oldInvoice, newInvoiceData);
+    } catch (e: any) {
+      setSavingEdit(false);
+      notifyDone('لم يتم حفظ التعديل: ' + (e?.message || e));
+      return;
+    }
+    setSavingEdit(false);
+    // اقفل نافذة التعديل ونافذة عرض الفاتورة (كانت بتفضل مفتوحة بالبيانات القديمة)
     setIsEditing(false);
-    alert("تم تعديل الفاتورة وتصحيح الخزنة والمخزن والرصيد بنجاح");
+    setSelectedInvoice(null);
+    notifyDone(`✅ تم حفظ تعديل الفاتورة ${oldInvoice.id} بنجاح، وتم تصحيح الخزنة والمخزن والرصيد.`);
   };
 
   // Available areas based on selected branch filter (default + custom areas)
@@ -1136,6 +1150,7 @@ export const SalesHistory: React.FC = () => {
           </div>
         </div>
       )}
+      {doneDialog}
     </div>
   );
 };

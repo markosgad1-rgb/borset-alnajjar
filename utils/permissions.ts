@@ -24,6 +24,7 @@ export const PAGE_DEFS: Def[] = [
   pg('treasury', 'الخزنة', p => !!p.canViewTreasury),
   pg('reports', 'التقارير', p => !!p.canViewReports),
   pg('trash', 'سلة المهملات', p => !!(p.canDeleteInvoices || p.canDeleteCustomers || p.canDeleteSuppliers)),
+  pg('activity', 'سجل النشاط', () => false),
 ];
 
 export interface ActionGroup { title: string; items: Def[] }
@@ -102,7 +103,8 @@ export const canDo = (user: Partial<User> | null | undefined, key: string): bool
 };
 
 export const canViewPage = (user: Partial<User> | null | undefined, page: string): boolean => {
-  if (page === 'users' || page === 'activity' || page === 'system') return isFullAdmin(user) && (page !== 'users' || user?.username === 'admin');
+  if (page === 'activity') return isFullAdmin(user) || canDo(user, 'view.activity');
+  if (page === 'users' || page === 'system') return isFullAdmin(user) && (page !== 'users' || user?.username === 'admin');
   const def = DEF_BY_KEY[`view.${page}`];
   if (!def) return true;
   return canDo(user, def.key);
