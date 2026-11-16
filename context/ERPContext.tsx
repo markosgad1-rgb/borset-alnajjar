@@ -718,6 +718,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => { stopped = true; unwatch(); stopBeat(); };
   }, [currentUser?.id]);
 
+  // (اسم اللي أنشأ الفاتورة يتسجل على الحركات التلقائية بدل اللي فاتح الجهاز)
+  const healUser = (p: any) => (p?.createdByName ? { id: p.createdBy || '', username: '', fullName: p.createdByName, role: '' } : undefined);
   // Self-healing: Ensure any purchase invoice with a recorded down payment (paid > 0) is reflected in supplier history & treasury
   useEffect(() => {
     if (!healReady || purchases.length === 0 || suppliers.length === 0) return;
@@ -760,7 +762,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               runAsSystem(() => updateDoc(doc(db, 'suppliers', supplier.code), {
                 balance: updatedBal,
                 history: updatedHistory
-              }).catch(() => {}));
+              }).catch(() => {}), healUser(p));
             }
           }
 
@@ -799,7 +801,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 const chk = await getDocs(query(collection(db, 'treasury'), where('invoiceNumber', 'in', [pId, `#${pId}`])));
                 if (!chk.empty) return;
                 setTreasury(prev => prev.some(t => t.id === tId) ? prev : [newTx, ...prev]);
-                runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}));
+                runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}), healUser(p));
               } catch { healedRef.current.delete(pId); }
             })();
           }
@@ -1534,7 +1536,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ...(paidAmount > 0 ? { paymentMethod } : {}),
       previousBalance: prevBalance, 
       currentBalance: accurateBalance,
-      createdAt: (purchaseData as any).createdAt || nowIso
+      createdAt: (purchaseData as any).createdAt || nowIso,
+      createdBy: String(currentUser?.username || ''),
+      createdByName: String(currentUser?.fullName || currentUser?.username || '')
     };
     
     // Optimistic local state update for instant UI feedback

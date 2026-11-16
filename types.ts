@@ -178,6 +178,8 @@ export interface Purchase {
   previousBalance?: number; // Snapshot of balance before this invoice
   currentBalance?: number; // Snapshot of balance after this invoice
   createdAt?: string;
+  createdBy?: string;       // رقم المستخدم اللي سجّل الفاتورة
+  createdByName?: string;   // اسم المستخدم اللي سجّل الفاتورة
   isDeleted?: boolean;
   deletedAt?: string;
   supplierPhone?: string;

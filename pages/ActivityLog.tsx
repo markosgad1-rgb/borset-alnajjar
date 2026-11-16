@@ -97,7 +97,7 @@ export const ActivityLog: React.FC = () => {
       if (typeFilter !== 'ALL' && e.collection !== typeFilter) return false;
       if (actionFilter !== 'ALL' && e.action !== actionFilter) return false;
       if (q) {
-        const hay = `${e.summary} ${e.userName} ${e.username} ${e.docId} ${e.items || ''} ${e.device}`.toLowerCase();
+        const hay = `${e.summary} ${e.userName} ${e.username} ${e.docId} ${e.items || ''} ${e.device} ${(e.details || []).join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -108,6 +108,7 @@ export const ActivityLog: React.FC = () => {
     const parts: string[] = [];
     if (e.changes) Object.entries(e.changes).forEach(([k, v]) => parts.push(`${FIELD_LABELS[k] || k}: ${showVal(v.from)} ← ${showVal(v.to)}`));
     if (e.items) parts.push(`الأصناف: ${e.items}`);
+    if (e.details) parts.push(...e.details);
     if (e.itemsBefore) parts.push(`الأصناف قبل: ${e.itemsBefore}`);
     return parts.join(' ; ');
   };
@@ -209,7 +210,7 @@ export const ActivityLog: React.FC = () => {
                 {filtered.map(e => {
                   const meta = ACTION_META[e.action] || { label: e.action, cls: 'bg-gray-100 text-gray-700 border-gray-200' };
                   const isOpen = openId === e.id;
-                  const hasDetails = Boolean(e.changes || e.items || e.itemsBefore);
+                  const hasDetails = Boolean(e.changes || e.items || e.itemsBefore || (e.details && e.details.length));
                   return (
                     <React.Fragment key={e.id}>
                       <tr className={`border-t border-gray-100 hover:bg-gray-50 ${hasDetails ? 'cursor-pointer' : ''} ${e.derived ? 'text-gray-400' : ''}`}
@@ -224,6 +225,14 @@ export const ActivityLog: React.FC = () => {
                       {isOpen && (
                         <tr className="bg-gray-50 border-t border-gray-100">
                           <td colSpan={6} className="p-3 text-xs text-gray-700 space-y-1">
+                            {e.details && e.details.length > 0 && (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1 pb-2 mb-1 border-b border-gray-200">
+                                {e.details.map((line, i) => {
+                                  const idx = line.indexOf(': ');
+                                  return <div key={i}><b>{line.slice(0, idx)}:</b> {line.slice(idx + 2)}</div>;
+                                })}
+                              </div>
+                            )}
                             {e.changes && Object.entries(e.changes).map(([k, v]) => (
                               <div key={k}><b>{FIELD_LABELS[k] || k}:</b> <span className="text-red-600">{showVal(v.from)}</span> ← <span className="text-green-700">{showVal(v.to)}</span></div>
                             ))}

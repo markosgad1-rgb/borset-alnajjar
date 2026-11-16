@@ -9,9 +9,12 @@ import { PaymentMethod, BranchId, BRANCHES, getBranchAreas, Customer, Supplier, 
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
 import { canDo } from '../utils/permissions';
+import { calculateSupplierBalance } from '../utils/supplierStatement';
 
 export const Transfers: React.FC = () => {
-  const { customers, suppliers, employees, treasury, addTransfer, deleteTransfer } = useERP();
+  const { customers, suppliers, employees, treasury, purchases, addTransfer, deleteTransfer } = useERP();
+  // رصيد المورد بيتحسب من كشف حسابه (نفس المصدر في صفحة الموردين)، مش من الرقم المخزّن
+  const balanceOf = (e: any): number => (entityType === 'SUPPLIER' ? calculateSupplierBalance(e as Supplier, purchases) : e.balance);
   const __me = useERP().currentUser;
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
@@ -120,7 +123,7 @@ export const Transfers: React.FC = () => {
         code: entity.code,
         name: entity.name
       }));
-      setCurrentBalance(entity.balance);
+      setCurrentBalance(balanceOf(entity));
       setEntitySearchText(formatEntityLabel(entity));
 
       if (entityType === 'CUSTOMER') {
@@ -196,7 +199,7 @@ export const Transfers: React.FC = () => {
     const entity = allActiveOfType.find(e => e.code.toLowerCase() === trimmed);
     if (entity) {
       setFormData(prev => ({ ...prev, name: entity.name }));
-      setCurrentBalance(entity.balance);
+      setCurrentBalance(balanceOf(entity));
       setEntitySearchText(formatEntityLabel(entity));
       if (entityType === 'CUSTOMER') {
         const c = entity as Customer;
@@ -736,7 +739,7 @@ export const Transfers: React.FC = () => {
                     <datalist id="transfersEntityList">
                       {currentDisplayList.map(e => (
                         <option key={`tr_ent_${e.code}`} value={formatEntityLabel(e)}>
-                          رصيد: {e.balance.toLocaleString()} ج.م
+                          رصيد: {balanceOf(e).toLocaleString()} ج.م
                         </option>
                       ))}
                     </datalist>
@@ -771,9 +774,9 @@ export const Transfers: React.FC = () => {
                               </div>
                               <div className="text-left shrink-0">
                                 <span className={`font-mono text-xs font-bold ${
-                                  e.balance < 0 ? 'text-red-600' : e.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                  balanceOf(e) < 0 ? 'text-red-600' : balanceOf(e) > 0 ? 'text-emerald-700' : 'text-gray-500'
                                 }`} dir="ltr">
-                                  {e.balance.toLocaleString()} ج.م
+                                  {balanceOf(e).toLocaleString()} ج.م
                                 </span>
                               </div>
                             </button>

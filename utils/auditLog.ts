@@ -24,6 +24,7 @@ export interface AuditEntry {
   changes?: Record<string, { from: any; to: any }>;
   items?: string;
   itemsBefore?: string;
+  details?: string[];  // تفاصيل العملية (الحساب، الفرع، المدفوع، المتبقي...)
   system?: boolean;    // written automatically by the app itself (not by a person)
   derived?: boolean;   // automatic side effect of another action (balance / stock updates)
   offline?: boolean;   // the user was offline when it happened
@@ -52,11 +53,15 @@ const LABELS: Record<string, string> = {
 let memUser: any = undefined;   // undefined = not set yet, null = signed out
 export const setAuditUser = (u: any) => { memUser = u ?? null; };
 
-// Automatic writes (self-healing, migrations) are recorded as "النظام" instead of the person who happened to open the app.
+// Automatic writes (self-healing, migrations) are marked "(تلقائي)". When the automatic write belongs to a record
+// created by a known person, it is attributed to that person instead of whoever's device happened to run it.
 let systemDepth = 0;
-export const runAsSystem = <T,>(fn: () => T): T => {
+let asUserOverride: any = undefined;
+export const runAsSystem = <T,>(fn: () => T, asUser?: any): T => {
   systemDepth++;
-  try { return fn(); } finally { systemDepth--; }
+  const prev = asUserOverride;
+  if (asUser) asUserOverride = asUser;
+  try { return fn(); } finally { systemDepth--; asUserOverride = prev; }
 };
 
 const getUser = (override?: any) => {
@@ -81,6 +86,49 @@ const itemsText = (items: any): string | undefined => {
   if (!Array.isArray(items) || items.length === 0) return undefined;
   const t = items.map((i: any) => `${i?.itemName ?? i?.name ?? ''} ×${i?.quantity ?? ''} @${i?.price ?? ''}`).join(' | ');
   return t.length > 600 ? t.slice(0, 600) + '…' : t;
+};
+
+
+const PM_LABELS: Record<string, string> = { CASH: 'خزنة (كاش)', BANK_MISR: 'بنك مصر', BANK_AHLY: 'البنك الأهلي', VF_CASH_AYMAN: 'فودافون كاش أيمن', VF_CASH_KYRILLOS: 'فودافون كاش كيرلس' };
+const BRANCH_LABELS: Record<string, string> = { MARG: 'المرج', NOZHA: 'النزهة' };
+
+// تفاصيل مقروءة عن العملية (من بيانات المستند نفسه)
+const detailLines = (coll: string, d: any): string[] | undefined => {
+  if (!d) return undefined;
+  const out: string[] = [];
+  const add = (label: string, v: any) => { if (v !== undefined && v !== null && v !== '') out.push(`${label}: ${v}`); };
+  const num = (v: any) => (v === undefined || v === null || v === '' || !isFinite(Number(v)) ? undefined : Number(v).toLocaleString('en-US'));
+  try {
+    if (coll === 'treasury') {
+      add('الاتجاه', Number(d.credit || 0) > 0 || d.type === 'INCOME' ? 'وارد (دائن)' : 'صادر (مدين)');
+      add('المبلغ', num(d.amount ?? (d.credit || d.debit)));
+      add('الحساب', PM_LABELS[d.paymentMethod] || d.paymentMethod);
+      add('الفرع', BRANCH_LABELS[d.branchId] || d.branchId);
+      add('رقم الفاتورة', d.invoiceNumber);
+      add('تاريخ الحركة', d.date);
+      add('البيان', d.description);
+      add('مصدر الحركة', d.source);
+    } else if (coll === 'invoices' || coll === 'purchases') {
+      add(coll === 'invoices' ? 'العميل' : 'المورد', d.customerName || d.supplierName);
+      add('الكود', d.customerCode || d.supplierCode);
+      add('تاريخ الفاتورة', d.date);
+      add('الإجمالي', num(d.total));
+      add('المدفوع', num(d.paidAmount ?? d.paid));
+      add('المتبقي', num(d.remainingAmount ?? d.remaining));
+      add('حساب الدفع', PM_LABELS[d.paymentMethod] || d.paymentMethod);
+      add('الفرع', BRANCH_LABELS[d.branchId] || d.branchId);
+      add('عدد الأصناف', Array.isArray(d.items) ? d.items.length : undefined);
+      add('سجّلها', d.createdByName);
+      add('رصيد قبل', num(d.previousBalance));
+      add('رصيد بعد', num(d.currentBalance));
+    } else if (coll === 'customers' || coll === 'suppliers' || coll === 'employees') {
+      add('الاسم', d.name);
+      add('الكود', d.code);
+      add('الفرع', BRANCH_LABELS[d.branchId] || d.branchId);
+      add('الرصيد', num(d.balance));
+    }
+  } catch { /* ignore */ }
+  return out.length ? out : undefined;
 };
 
 const describe = (coll: string, id: string, d: any): string => {
@@ -161,7 +209,7 @@ export const recordWrite = (op: 'set' | 'update' | 'delete', ref: any, payload: 
   const ts = Date.now();
   const offline = !isConnected();
   const sys = systemDepth > 0;
-  const who = getUser();   // captured NOW (synchronously), not after the async cache read
+  const who = getUser(asUserOverride);   // captured NOW (synchronously), not after the async cache read
   beforeP.then((before) => {
     try {
       const parts = String(ref.path).split('/');
@@ -208,6 +256,7 @@ export const recordWrite = (op: 'set' | 'update' | 'delete', ref: any, payload: 
         ts, at: new Date(ts).toISOString(), ...u, system: sys || undefined, action, collection: coll, docId, summary,
         changes: changes && Object.keys(changes).length ? changes : undefined,
         items: itemsNow, itemsBefore: itemsPrev,
+        details: (['treasury', 'invoices', 'purchases'].includes(coll) || action === 'create') ? detailLines(coll, shown) : undefined,
         derived: derived || undefined, offline: offline || undefined, device: getDevice()
       });
     } catch { /* ignore */ }
