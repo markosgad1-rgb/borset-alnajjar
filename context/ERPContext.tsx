@@ -101,7 +101,11 @@ interface ERPContextType {
     date: string;
     notes?: string;
     paymentMethod: PaymentMethod;
+    idOverride?: string;
+    groupId?: string;
+    descOverride?: string;
   }) => Promise<void>;
+  addCustomerToSupplierTransfer: (data: { customerCode: string; supplierCode: string; amount: number; date: string; notes?: string; paymentMethod: PaymentMethod }) => Promise<{ success: boolean; message?: string }>;
   deleteTransfer: (id: string) => Promise<{ success: boolean; message?: string }>;
   addExpense: (data: {
     branchId?: BranchId;
@@ -3464,9 +3468,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
-  const addTransfer = async (data: { branchId?: BranchId; entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod }) => {
-      const { entityType, entityCode, amount, type, date, notes, paymentMethod } = data;
-      const tId = `TR${Date.now()}`;
+  const addTransfer = async (data: { branchId?: BranchId; entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod; idOverride?: string; groupId?: string; descOverride?: string }) => {
+      const { entityType, entityCode, amount, type, date, notes, paymentMethod, groupId, descOverride } = data;
+      const tId = data.idOverride || `TR${Date.now()}`;
       let treasuryDesc = '';
       let branchId: BranchId = data.branchId || 'MARG';
 
@@ -3497,9 +3501,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 transferId: tId,
                 paymentId: tId,
                 date: entryDate, 
-                description: customerHistDesc, 
+                description: descOverride || customerHistDesc, 
                 amount: change,
-                type: type === 'IN' ? 'payment' : 'charge'
+                type: type === 'IN' ? 'payment' : 'charge',
+                ...(groupId ? { groupId } : {})
               }];
               await updateCustomer(entityCode, { balance: newBalance, currentBalance: newBalance, history: newHistory });
           }
@@ -3526,8 +3531,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 transferId: tId,
                 paymentId: tId,
                 date: entryDate, 
-                description: supplierHistDesc, 
-                amount: change 
+                description: descOverride || supplierHistDesc, 
+                amount: change,
+                ...(groupId ? { groupId } : {})
               }];
               await updateSupplier(entityCode, { balance: newBalance, history: newHistory });
           }
@@ -3582,8 +3588,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           entityType,
           entityCode,
           entityName,
-          transferType: type
+          transferType: type,
+          ...(groupId ? { groupId } : {})
       };
+      if (descOverride) transaction.description = descOverride;
       
       // Optimistic update: Place immediately at the beginning for real-time descending view
       setTreasury(prev => {
@@ -3598,6 +3606,34 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               handleFirebaseError(e); 
           }
       }
+  };
+
+  // تحويل عميل -> مورد: العميل سدد للمورد من بره. نفس منطق addTransfer مرتين (وارد من العميل + صادر للمورد) بدون أي حساب جديد.
+  const addCustomerToSupplierTransfer = async (data: { customerCode: string; supplierCode: string; amount: number; date: string; notes?: string; paymentMethod: PaymentMethod }): Promise<{ success: boolean; message?: string }> => {
+    const { customerCode, supplierCode, amount, date, notes, paymentMethod } = data;
+    const c = customers.find(x => x.code === customerCode && !(x as any).isDeleted);
+    const s = suppliers.find(x => x.code === supplierCode && !(x as any).isDeleted);
+    if (!c) return { success: false, message: 'العميل غير موجود' };
+    if (!s) return { success: false, message: 'المورد غير موجود' };
+    if (!(amount > 0)) return { success: false, message: 'قيمة غير صحيحة' };
+    const base = Date.now();
+    const groupId = `C2S${base}`;
+    const idIn = `TR${base}C`;
+    const idOut = `TR${base}S`;
+    const noteTxt = notes && notes.trim() ? ` - ${notes.trim()}` : '';
+    const desc = `تحويل من العميل ${c.name} إلى المورد ${s.name}${noteTxt}`;
+    try {
+      await addTransfer({ branchId: c.branchId, entityType: 'CUSTOMER', entityCode: customerCode, amount, type: 'IN', date, notes, paymentMethod, idOverride: idIn, groupId, descOverride: desc });
+    } catch (e: any) {
+      return { success: false, message: e?.message || 'فشل تسجيل جزء العميل' };
+    }
+    try {
+      await addTransfer({ branchId: c.branchId, entityType: 'SUPPLIER', entityCode: supplierCode, amount, type: 'OUT', date, notes, paymentMethod, idOverride: idOut, groupId, descOverride: desc });
+    } catch (e: any) {
+      try { await deleteTransfer(idIn); } catch {}
+      return { success: false, message: 'فشل تسجيل جزء المورد وتم التراجع عن جزء العميل' };
+    }
+    return { success: true };
   };
 
   const deleteTransfer = async (transferId: string): Promise<{ success: boolean; message?: string }> => {
@@ -4975,7 +5011,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
       transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: gTransferCash,
       addPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
-      markInvoicesReviewed: gMarkReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
+      markInvoicesReviewed: gMarkReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, addCustomerToSupplierTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,

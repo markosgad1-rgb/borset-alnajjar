@@ -10,6 +10,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { useDialog } from '../utils/useDialog';
 import { canDo } from '../utils/permissions';
 import { calculateSupplierBalance } from '../utils/supplierStatement';
+import { CustomerToSupplierTransfer } from '../components/CustomerToSupplierTransfer';
 
 export const Transfers: React.FC = () => {
   const { customers, suppliers, employees, treasury, purchases, addTransfer, deleteTransfer } = useERP();
@@ -225,6 +226,7 @@ export const Transfers: React.FC = () => {
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showC2S, setShowC2S] = useState(false);
 
   // Filter and sort transfers strictly descending: newest first
   const recentTransfers = useMemo(() => {
@@ -255,13 +257,19 @@ export const Transfers: React.FC = () => {
     const directionStr = isIncoming ? 'وارد (استلام)' : 'صادر (دفع)';
     
     const confirmed = await askConfirm(
-      `هل أنت متأكد من حذف حركة التحويل بقيمة ${amountStr} (${directionStr})؟ سيتم إلغاء أثرها تلقائياً من الخزنة ومن كشف الحساب المرتبط.`
+      `هل أنت متأكد من حذف حركة التحويل بقيمة ${amountStr} (${directionStr})؟ سيتم إلغاء أثرها تلقائياً من الخزنة ومن كشف الحساب المرتبط.` +
+      (t.groupId ? '\nهذه الحركة جزء من تحويل عميل ← مورد، وسيتم حذف الجزء الآخر منها (العميل والمورد) معاً.' : '')
     );
     
     if (!confirmed) return;
     
     try {
       const res = await deleteTransfer(t.id);
+      // تحويل عميل ← مورد: بنحذف النصف التاني من نفس العملية
+      if (res.success && t.groupId) {
+        const other = treasury.find(x => x.groupId === t.groupId && x.id !== t.id);
+        if (other) await deleteTransfer(other.id);
+      }
       if (res.success) {
         notify('تم حذف حركة التحويل وإلغاء أثرها من الخزينة وكشف الحساب بنجاح.');
       } else {
@@ -343,6 +351,10 @@ export const Transfers: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      <button type="button" onClick={() => setShowC2S(v => !v)} className="w-full flex items-center justify-center gap-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 font-bold py-3 rounded-xl">
+        <ArrowRightLeft size={18} /> {showC2S ? 'إخفاء تحويل عميل ← مورد' : 'تحويل عميل ← مورد (العميل سدّد للمورد من بره)'}
+      </button>
+      {showC2S && <CustomerToSupplierTransfer notify={notify} />}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
         <div className="p-6 bg-purple-600 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">

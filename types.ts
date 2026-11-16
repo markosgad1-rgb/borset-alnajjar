@@ -247,6 +247,7 @@ export interface TreasuryTransaction {
   entityCode?: string;
   entityName?: string;
   transferType?: 'IN' | 'OUT';
+  groupId?: string;
 }
 
 export interface UserPermissions {
