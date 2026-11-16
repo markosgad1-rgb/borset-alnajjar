@@ -49,6 +49,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   const pendingPurchasesCount = purchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
   // فواتير بيع جديدة لم تُراجع بعد (التنبيه لمن عنده صلاحية المراجعة فقط)
   const canReviewInvoices = canDo(currentUser, 'invoice.review');
+  const canReviewPurchases = canDo(currentUser, 'purchase.review');
+  const pendingPurchaseReviewCount = canReviewPurchases ? purchases.filter(p => !p.isDeleted && p.reviewStatus === 'PENDING_REVIEW').length : 0;
   const pendingReviewCount = canReviewInvoices ? invoices.filter(i => !i.isDeleted && i.reviewStatus === 'PENDING_REVIEW').length : 0;
 
   // Back Button integration for mobile sidebar menu & backup modal
@@ -223,6 +225,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                   {pendingReviewCount}
                 </span>
               )}
+              {item.id === 'purchases' && pendingPurchaseReviewCount > 0 && (
+                <span className="mr-auto bg-rose-500 text-white text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs" title="فواتير مشتريات جديدة لم تُراجع">
+                  {pendingPurchaseReviewCount}
+                </span>
+              )}
               {item.id === 'purchases' && pendingPurchasesCount > 0 && (
                 <span className="mr-auto bg-amber-400 text-amber-950 text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs">
                   {pendingPurchasesCount}
@@ -331,6 +338,33 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
               className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
             >
               <FileText size={16} />
+              <span>مراجعة الفواتير الآن</span>
+            </button>
+          </div>
+        )}
+
+        {/* Purchases awaiting review banner */}
+        {pendingPurchaseReviewCount > 0 && activePage !== 'purchases' && (
+          <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
+                <ShoppingCart size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm md:text-base text-rose-900 flex items-center gap-2">
+                  <span>تنبيه: فواتير مشتريات جديدة بانتظار المراجعة</span>
+                  <span className="bg-rose-200 text-rose-950 text-xs px-2 py-0.5 rounded-full font-black">{pendingPurchaseReviewCount}</span>
+                </h4>
+                <p className="text-xs md:text-sm text-rose-800">
+                  يوجد ({pendingPurchaseReviewCount}) فواتير مشتريات تم إضافتها ولم تتم مراجعتها واعتمادها بعد.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { try { sessionStorage.setItem('erp_pur_review_filter', 'PENDING'); } catch { /* ignore */ } onNavigate('purchases'); }}
+              className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
+            >
+              <ShoppingCart size={16} />
               <span>مراجعة الفواتير الآن</span>
             </button>
           </div>

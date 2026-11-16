@@ -180,6 +180,10 @@ export interface Purchase {
   createdAt?: string;
   createdBy?: string;       // رقم المستخدم اللي سجّل الفاتورة
   createdByName?: string;   // اسم المستخدم اللي سجّل الفاتورة
+  // مراجعة فواتير المشتريات: الجديدة PENDING_REVIEW لحين الاعتماد. القديمة بدون الحقل تُعتبر مراجَعة.
+  reviewStatus?: 'PENDING_REVIEW' | 'REVIEWED';
+  reviewedBy?: string;
+  reviewedAt?: string;
   isDeleted?: boolean;
   deletedAt?: string;
   supplierPhone?: string;

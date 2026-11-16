@@ -80,6 +80,7 @@ interface ERPContextType {
   }) => Promise<void>;
   updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; 
   markInvoicesReviewed: (ids: string[]) => Promise<void>;
+  markPurchasesReviewed: (ids: string[]) => Promise<void>;
   deleteInvoice: (id: string) => Promise<void>;
   clearAllInvoices: () => Promise<boolean>; 
   addCollection: (data: {
@@ -723,7 +724,17 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [currentUser?.id]);
 
   // (اسم اللي أنشأ الفاتورة يتسجل على الحركات التلقائية بدل اللي فاتح الجهاز)
-  const healUser = (p: any) => (p?.createdByName ? { id: p.createdBy || '', username: '', fullName: p.createdByName, role: '' } : undefined);
+  // لو الفاتورة قديمة ومفيهاش اسم المنشئ، نكتب "النظام" بدل اسم اللي فاتح الجهاز (عشان ما ننسبش الحركة لشخص غلط)
+  const healUser = (p: any) => (p?.createdByName ? { id: p.createdBy || '', username: '', fullName: p.createdByName, role: '' } : { id: 'system', username: 'system', fullName: 'النظام (تلقائي)', role: '' });
+  // اسم منشئ الفاتورة من سجل النشاط (أول عملية إنشاء لها)
+  const creatorFromAudit = async (docId: string) => {
+    try {
+      const snap = await getDocs(query(collection(db, 'auditLog'), where('collection', '==', 'purchases'), where('docId', '==', String(docId))));
+      const rows = snap.docs.map(d => d.data() as any).filter(r => r.action === 'create' && !r.system && r.userName).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      if (rows.length) return { id: rows[0].userId || '', username: rows[0].username || '', fullName: rows[0].userName, role: rows[0].role || '' };
+    } catch { /* ignore */ }
+    return undefined;
+  };
   // Self-healing: Ensure any purchase invoice with a recorded down payment (paid > 0) is reflected in supplier history & treasury
   useEffect(() => {
     if (!healReady || purchases.length === 0 || suppliers.length === 0) return;
@@ -805,7 +816,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 const chk = await getDocs(query(collection(db, 'treasury'), where('invoiceNumber', 'in', [pId, `#${pId}`])));
                 if (!chk.empty) return;
                 setTreasury(prev => prev.some(t => t.id === tId) ? prev : [newTx, ...prev]);
-                runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}), healUser(p));
+                const who = p?.createdByName ? healUser(p) : ((await creatorFromAudit(String(p.id))) || healUser(p));
+                runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}), who);
               } catch { healedRef.current.delete(pId); }
             })();
           }
@@ -1530,6 +1542,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const newPurchase: Purchase = { 
       ...purchaseData, 
+      reviewStatus: canDo(currentUser, 'purchase.review') ? 'REVIEWED' : 'PENDING_REVIEW',
       id: cleanId,
       branchId: pBranch,
       pricingStatus: isPendingPrice ? 'PENDING_PRICE' : 'PRICED',
@@ -2924,6 +2937,19 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
         await updateDoc(doc(db, 'invoices', id), { reviewStatus: 'REVIEWED', reviewedBy, reviewedAt });
       } catch (e) { console.error('review mark failed', id, e); }
+    }
+  };
+
+  // اعتماد فواتير مشتريات بعد مراجعتها
+  const markPurchasesReviewed = async (ids: string[]) => {
+    const reviewedBy = String(currentUser?.fullName || currentUser?.username || '');
+    const reviewedAt = new Date().toISOString();
+    const set = new Set(ids);
+    setPurchases(prev => prev.map(p => set.has(p.id) ? { ...p, reviewStatus: 'REVIEWED' as const, reviewedBy, reviewedAt } : p));
+    for (const id of ids) {
+      try {
+        await updateDoc(doc(db, 'purchases', id), { reviewStatus: 'REVIEWED', reviewedBy, reviewedAt });
+      } catch (e) { console.error('purchase review mark failed', id, e); }
     }
   };
 
@@ -4987,6 +5013,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gUpdateInvoice = gate('invoice.edit', updateInvoice);
   const gDeleteInvoice = gate('invoice.delete', deleteInvoice);
   const gMarkReviewed = gate('invoice.review', markInvoicesReviewed);
+  const gMarkPurchasesReviewed = gate('purchase.review', markPurchasesReviewed);
   const gClearAllInvoices = gate('invoice.clearAll', clearAllInvoices, false);
   const gDeleteTransfer = gate('transfer.delete', deleteTransfer, noPerm('transfer.delete'));
   const gAddCustomer = gate('customer.add', addCustomer);
@@ -5011,7 +5038,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
       transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: gTransferCash,
       addPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
-      markInvoicesReviewed: gMarkReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, addCustomerToSupplierTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
+      markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, addCustomerToSupplierTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,

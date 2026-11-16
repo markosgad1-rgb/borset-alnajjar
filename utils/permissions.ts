@@ -42,6 +42,7 @@ export const ACTION_GROUPS: ActionGroup[] = [
   ]},
   { title: 'المشتريات', items: [
     ac('purchase.edit', 'تعديل فاتورة مشتريات (وتسعير المعلّق)', p => !!p.canEditPurchases),
+    ac('purchase.review', 'مراجعة واعتماد فواتير المشتريات الجديدة (والتنبيه بها)', () => false),
     ac('purchase.delete', 'حذف فاتورة مشتريات', p => !!(p.canDeletePurchases || p.canEditPurchases)),
   ]},
   { title: 'العملاء', items: [

@@ -10,7 +10,7 @@ import { CartNumberInput } from '../components/CartNumberInput';
 import { canDo } from '../utils/permissions';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance, markPurchasesReviewed } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
   // PDF sharing state
@@ -76,6 +76,12 @@ export const Purchases: React.FC = () => {
   const currentSupplier = suppliers.find(s => s.code === supplierCode);
 
   const canEditPurchases = canDo(currentUser, 'purchase.edit');
+  const canReviewPurchases = canDo(currentUser, 'purchase.review');
+  const [reviewFilter, setReviewFilter] = useState<'ALL' | 'PENDING' | 'REVIEWED'>(() => {
+    try { const v = sessionStorage.getItem('erp_pur_review_filter'); if (v) { sessionStorage.removeItem('erp_pur_review_filter'); return v === 'PENDING' ? 'PENDING' : 'ALL'; } } catch { /* ignore */ }
+    return 'ALL';
+  });
+  const [reviewingId, setReviewingId] = useState<string | null>(null)
   const canDeletePurchases = canDo(currentUser, 'purchase.delete');
 
   // Auto-generate Purchase ID (R001 series)
@@ -425,8 +431,10 @@ export const Purchases: React.FC = () => {
 
   const filteredPurchases = activePurchases
     .filter(p => {
-      if (historyFilter === 'PENDING_PRICE') return p.pricingStatus === 'PENDING_PRICE';
-      if (historyFilter === 'PRICED') return p.pricingStatus !== 'PENDING_PRICE';
+      if (historyFilter === 'PENDING_PRICE' && p.pricingStatus !== 'PENDING_PRICE') return false;
+      if (historyFilter === 'PRICED' && p.pricingStatus === 'PENDING_PRICE') return false;
+      if (reviewFilter === 'PENDING' && p.reviewStatus !== 'PENDING_REVIEW') return false;
+      if (reviewFilter === 'REVIEWED' && p.reviewStatus === 'PENDING_REVIEW') return false;
       return true;
     })
     .sort((a, b) => {
@@ -986,6 +994,16 @@ export const Purchases: React.FC = () => {
           </div>
         </div>
 
+        <div className="p-3 bg-rose-50/60 border-y border-rose-200/70 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-rose-900 ml-1">مراجعة الفواتير:</span>
+          {([['ALL', 'الكل'], ['PENDING', `لم تُراجع (${activePurchases.filter(p => p.reviewStatus === 'PENDING_REVIEW').length})`], ['REVIEWED', 'تمت مراجعتها']] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setReviewFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${reviewFilter === k ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-right text-sm">
             <thead className="bg-brand-50 text-brand-700">
@@ -1006,8 +1024,15 @@ export const Purchases: React.FC = () => {
                 const bId = purchase.branchId || 'MARG';
 
                 return (
-                  <tr key={purchase.id} className={`hover:bg-gray-50 ${isPending ? 'bg-amber-50/30' : ''}`}>
-                    <td className="p-4 font-mono font-bold text-blue-600">{purchase.id}</td>
+                  <tr key={purchase.id} className={`hover:bg-gray-50 ${purchase.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : isPending ? 'bg-amber-50/30' : ''}`}>
+                    <td className="p-4 font-mono font-bold text-blue-600">
+                      {purchase.id}
+                      {purchase.reviewStatus === 'PENDING_REVIEW' && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold font-sans">جديدة - لم تُراجع</span>
+                      )}
+                      {purchase.createdByName && <span className="block text-[10px] font-normal text-gray-500 font-sans">بواسطة: {purchase.createdByName}</span>}
+                      {purchase.reviewStatus === 'REVIEWED' && purchase.reviewedBy && <span className="block text-[10px] font-normal text-emerald-700 font-sans">راجعها: {purchase.reviewedBy}</span>}
+                    </td>
                     <td className="p-4 text-gray-600 font-mono text-xs">{purchase.date}</td>
                     <td className="p-4 font-medium text-gray-800">{purchase.supplierName}</td>
                     <td className="p-4">
@@ -1045,6 +1070,17 @@ export const Purchases: React.FC = () => {
                       )}
                     </td>
                     <td className="p-4 flex gap-1.5 items-center flex-wrap">
+                      {canReviewPurchases && purchase.reviewStatus === 'PENDING_REVIEW' && (
+                        <button
+                          type="button"
+                          disabled={reviewingId === purchase.id}
+                          onClick={async () => { setReviewingId(purchase.id); try { await markPurchasesReviewed([purchase.id]); } finally { setReviewingId(null); } }}
+                          className="bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1"
+                          title="تمت المراجعة - اعتماد الفاتورة"
+                        >
+                          <Check size={14} /> تمت المراجعة
+                        </button>
+                      )}
                       {/* Price Setting Button for Pending Invoices */}
                       {isPending && (
                         <button
