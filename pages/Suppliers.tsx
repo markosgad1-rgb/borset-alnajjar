@@ -13,6 +13,7 @@ import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
 import { canDo } from '../utils/permissions';
+import { logOp, opMoney, opChange } from '../utils/auditLog';
 
 export const Suppliers: React.FC = () => {
   const { 
@@ -182,6 +183,16 @@ export const Suppliers: React.FC = () => {
       const today = new Date().toISOString().split('T')[0];
 
       if (isEditing && editingOldCode) {
+        {
+          const oldS = suppliers.find(s => s.code === editingOldCode);
+          logOp('update', `تعديل بيانات المورد ${oldS?.name || editingOldCode}`, [
+            `المورد: ${oldS?.name || ''} (${editingOldCode})`,
+            ...opChange('الاسم', oldS?.name, formData.name),
+            ...opChange('الكود', editingOldCode, formData.code),
+            ...opChange('الهاتف', oldS?.phone, formData.phone),
+            ...opChange('الرصيد الافتتاحي', oldS?.openingBalance ?? 0, signedBal, true)
+          ], editingOldCode);
+        }
         updateSupplier(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
@@ -447,6 +458,12 @@ export const Suppliers: React.FC = () => {
       const updatedHistory = [...(selectedSupplier.history || []), historyMovement];
       const updatedManualTxs = [...(selectedSupplier.manualTransactions || []), manualTxRecord];
 
+      logOp('create', `حركة يدوية في كشف حساب المورد ${selectedSupplier.name} - ${opMoney(amt)}`, [
+        `المورد: ${selectedSupplier.name} (${selectedSupplier.code})`,
+        `البيان: ${desc}`,
+        `النوع: ${finalType === 'DEBIT' ? 'سداد/خصم (بيقلّل اللي علينا للمورد)' : 'مستحقات إضافية (بيزوّد اللي علينا للمورد)'}`,
+        `المبلغ: ${opMoney(amt)}`
+      ], selectedSupplier.code);
       await updateSupplier(selectedSupplier.code, {
         balance: newBal,
         history: updatedHistory,

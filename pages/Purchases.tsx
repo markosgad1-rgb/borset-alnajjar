@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator, Wallet, Building2, Smartphone } from 'lucide-react';
 import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../types';
@@ -10,7 +9,9 @@ import { CartNumberInput } from '../components/CartNumberInput';
 import { canDo } from '../utils/permissions';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance, markPurchasesReviewed } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers: allSuppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance, markPurchasesReviewed } = useERP();
+  // الموردين المحذوفين (اللي في سلة المهملات) ما يظهروش في الاختيار أو الحفظ
+  const suppliers = useMemo(() => allSuppliers.filter(s => !s.isDeleted), [allSuppliers]);
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
   // PDF sharing state

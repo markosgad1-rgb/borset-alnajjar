@@ -269,3 +269,51 @@ export const logEvent = (action: 'login' | 'logout', summary: string, userOverri
     send({ ts, at: new Date(ts).toISOString(), ...getUser(userOverride), action, collection: 'auth', docId: '', summary, offline: !isConnected() || undefined, device: getDevice() });
   } catch { /* ignore */ }
 };
+
+// ===== سجل العمليات الرئيسية بلغة واضحة (إنشاء/تعديل/حذف/تصفير...) =====
+export const opMoney = (n: any) => `${fmt(Math.round((Number(n) || 0) * 100) / 100) || '0'} ج.م`;
+export const opPm = (m: any) => (m ? (PM_LABELS[m] || String(m)) : '');
+export const opBranch = (b: any) => (b ? (BRANCH_LABELS[b] || String(b)) : '');
+// سطر "قبل ← بعد" لو القيمة اتغيرت، وإلا لا شيء
+export const opChange = (label: string, a: any, b: any, asMoney = false): string[] => {
+  const f = (v: any) => (v === undefined || v === null || v === '' ? '—' : asMoney ? opMoney(v) : String(v));
+  return String(a ?? '') === String(b ?? '') ? [] : [`${label}: ${f(a)} ← ${f(b)}`];
+};
+export const opItemLines = (items: any[] | undefined): string[] =>
+  (items || []).map((i: any) => `صنف: ${i?.itemName ?? i?.name ?? ''} - كمية ${i?.quantity ?? ''} × سعر ${fmt(i?.price)} = ${fmt(i?.total)}`);
+export const opItemDiff = (oldItems: any[] | undefined, newItems: any[] | undefined): string[] => {
+  const out: string[] = [];
+  const key = (i: any) => String(i?.itemCode ?? i?.itemName ?? '');
+  const o = new Map((oldItems || []).map((i: any) => [key(i), i]));
+  const n = new Map((newItems || []).map((i: any) => [key(i), i]));
+  n.forEach((ni: any, k) => {
+    const oi: any = o.get(k);
+    const nm = ni?.itemName ?? k;
+    if (!oi) out.push(`إضافة صنف: ${nm} - كمية ${ni.quantity} × سعر ${fmt(ni.price)}`);
+    else {
+      if (Number(oi.quantity) !== Number(ni.quantity)) out.push(`الصنف ${nm}: الكمية ${oi.quantity} ← ${ni.quantity}`);
+      if (Number(oi.price) !== Number(ni.price)) out.push(`الصنف ${nm}: السعر ${fmt(oi.price)} ← ${fmt(ni.price)}`);
+    }
+  });
+  o.forEach((oi: any, k) => { if (!n.has(k)) out.push(`حذف صنف: ${oi?.itemName ?? k} - كمية ${oi.quantity}`); });
+  return out;
+};
+
+let quietDepth = 0;
+/** ينفّذ عملية مركّبة بدون ما العمليات الداخلية تتسجل كل واحدة لوحدها (العملية الأم بتتسجل مرة واحدة). */
+export const quietOps = async <T,>(fn: () => Promise<T>): Promise<T> => {
+  quietDepth++;
+  try { return await fn(); } finally { quietDepth--; }
+};
+
+export const logOp = (action: 'create' | 'update' | 'delete', summary: string, details?: string[], docId = '') => {
+  try {
+    if (quietDepth > 0) return;
+    const ts = Date.now();
+    send({
+      ts, at: new Date(ts).toISOString(), ...getUser(asUserOverride), system: systemDepth > 0 || undefined,
+      action, collection: 'ops', docId, summary: systemDepth > 0 ? `(تلقائي) ${summary}` : summary,
+      details: details && details.length ? details : undefined, offline: !isConnected() || undefined, device: getDevice()
+    });
+  } catch { /* never affect the app */ }
+};

@@ -13,6 +13,7 @@ import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, 
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { canDo } from '../utils/permissions';
+import { logOp, opMoney, opChange } from '../utils/auditLog';
 
 export const Customers: React.FC = () => {
   const { 
@@ -241,6 +242,15 @@ export const Customers: React.FC = () => {
           updatedHistory.push(adjustmentMovement);
         }
 
+        logOp('update', `تعديل بيانات العميل ${oldCustomer?.name || editingOldCode}${diff !== 0 ? ' (مع تعديل الرصيد)' : ''}`, [
+          `العميل: ${oldCustomer?.name || ''} (${editingOldCode})`,
+          ...opChange('الاسم', oldCustomer?.name, formData.name),
+          ...opChange('الكود', editingOldCode, formData.code),
+          ...opChange('الهاتف', oldCustomer?.phone, formData.phone),
+          ...opChange('المنطقة', oldCustomer?.area, formData.area),
+          ...opChange('الرصيد', oldBal, parsedBal, true),
+          ...(diff !== 0 ? [`سبب تعديل الرصيد: ${formData.adjustmentReason}`] : [])
+        ], editingOldCode);
         updateCustomer(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
@@ -392,6 +402,13 @@ export const Customers: React.FC = () => {
       const updatedHistory = [...(selectedCustomer.history || []), historyMovement];
       const updatedManualTxs = [...(selectedCustomer.manualTransactions || []), manualTxRecord];
 
+      logOp('create', `حركة يدوية في كشف حساب العميل ${selectedCustomer.name} - ${opMoney(amt)}`, [
+        `العميل: ${selectedCustomer.name} (${selectedCustomer.code})`,
+        `البيان: ${desc}`,
+        `النوع: ${finalType === 'DEBIT' ? 'مدين (بيزوّد مديونية العميل)' : 'دائن (بيقلّل مديونية العميل)'}`,
+        `المبلغ: ${opMoney(amt)}`,
+        `رصيد العميل: ${opMoney(currentBal)} ← ${opMoney(newBal)}`
+      ], selectedCustomer.code);
       await updateCustomer(selectedCustomer.code, {
         balance: newBal,
         history: updatedHistory,

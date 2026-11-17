@@ -24,7 +24,7 @@ const deviceLabel = (d?: string) => {
 
 const TYPE_LABELS: Record<string, string> = {
   invoices: 'فواتير البيع', purchases: 'فواتير المشتريات', treasury: 'الخزنة', customers: 'العملاء',
-  suppliers: 'الموردين', products: 'الأصناف', employees: 'الموظفين', users: 'المستخدمين', settings: 'الإعدادات', devices: 'الأجهزة', auth: 'الدخول والخروج'
+  suppliers: 'الموردين', products: 'الأصناف', employees: 'الموظفين', users: 'المستخدمين', ops: 'العمليات الرئيسية', settings: 'الإعدادات', devices: 'الأجهزة', auth: 'الدخول والخروج'
 };
 
 const FIELD_LABELS: Record<string, string> = {
