@@ -182,6 +182,70 @@ const send = (entry: Omit<AuditEntry, 'id'>) => {
   } catch { /* ignore */ }
 };
 
+// ===== دمج الأسطر الفنية: نفس المستند + نفس المستخدم خلال ثواني = سطر واحد بكل التفاصيل =====
+// وأي سطر فني حصل أثناء عملية رئيسية متسجّلة بالعربي (logOp) بيتعلّم "تلقائي" عشان ميتكررش مع سطر العملية.
+const COVERABLE = new Set(['invoices', 'purchases', 'treasury', 'customers', 'suppliers']);
+const MERGE_WINDOW_MS = 4000;
+const recentOps: { ts: number; userId: string }[] = [];
+type Pending = { entry: Omit<AuditEntry, 'id'>; first: number; timer: any };
+const pending = new Map<string, Pending>();
+
+const mergeEntries = (a: Omit<AuditEntry, 'id'>, b: Omit<AuditEntry, 'id'>): Omit<AuditEntry, 'id'> => {
+  let changes: Record<string, { from: any; to: any }> | undefined;
+  if (a.changes || b.changes) {
+    changes = { ...(a.changes || {}) };
+    Object.entries(b.changes || {}).forEach(([k, v]) => {
+      if (changes![k]) {
+        const from = changes![k].from;
+        if (String(from ?? '') === String(v.to ?? '')) delete changes![k];
+        else changes![k] = { from, to: v.to };
+      } else changes![k] = v;
+    });
+  }
+  let items = b.items ?? a.items;
+  let itemsBefore = a.itemsBefore ?? b.itemsBefore;
+  if (items !== undefined && items === itemsBefore) { items = undefined; itemsBefore = undefined; }
+  const action: AuditAction = a.action === 'create' ? 'create' : (b.action === 'delete' ? 'delete' : 'update');
+  const special = [a, b].find(x => /سلة المهملات/.test(x.summary));
+  const summary = special ? special.summary : (b.summary.length >= a.summary.length ? b.summary : a.summary);
+  const details = (b.details && (!a.details || b.details.length >= a.details.length)) ? b.details : a.details;
+  return {
+    ...a, action, summary, details, items, itemsBefore,
+    changes: changes && Object.keys(changes).length ? changes : undefined,
+    derived: (a.derived && b.derived) || undefined, offline: (a.offline || b.offline) || undefined
+  };
+};
+
+const flushKey = (key: string) => {
+  const p = pending.get(key);
+  if (!p) return;
+  pending.delete(key);
+  const e = p.entry;
+  // صافي التغيير صفر (مثلاً اتغيّر وارتد لنفس القيمة) → مفيش داعي لسطر
+  if (e.action === 'update' && !e.changes && e.items === undefined && e.itemsBefore === undefined) return;
+  if (!e.system && !e.derived && COVERABLE.has(e.collection) && (e.action === 'update' || ['invoices', 'purchases', 'treasury'].includes(e.collection))) {
+    const lo = p.first - 10000;
+    const covered = recentOps.some(o => o.userId === e.userId && o.ts >= lo);
+    if (covered) e.derived = true;
+  }
+  send(e);
+};
+
+const queueEntry = (entry: Omit<AuditEntry, 'id'>) => {
+  try {
+    const key = `${entry.collection}|${entry.docId}|${entry.userId}|${entry.device}|${entry.system ? 's' : 'u'}`;
+    const ex = pending.get(key);
+    if (ex) {
+      clearTimeout(ex.timer);
+      ex.entry = mergeEntries(ex.entry, entry);
+      ex.timer = setTimeout(() => flushKey(key), MERGE_WINDOW_MS);
+    } else {
+      pending.set(key, { entry, first: entry.ts, timer: setTimeout(() => flushKey(key), MERGE_WINDOW_MS) });
+    }
+  } catch { send(entry); }
+};
+try { if (typeof window !== 'undefined') { const fl = () => Array.from(pending.keys()).forEach(flushKey); window.addEventListener('pagehide', fl); window.addEventListener('beforeunload', fl); } } catch { /* ignore */ }
+
 export const isAuditedRef = (ref: any) => {
   try { return AUDITED.has(String(ref?.path || '').split('/')[0]); } catch { return false; }
 };
@@ -252,7 +316,7 @@ export const recordWrite = (op: 'set' | 'update' | 'delete', ref: any, payload: 
       else if (action === 'update' && (changes as any)?.isDeleted?.to === false) summary = `استرجاع من سلة المهملات: ${summary}`;
 
       const u = who; // دايماً باسم المستخدم المسجّل دخوله على الجهاز؛ العمليات التلقائية بتتعلّم بكلمة (تلقائي)
-      send({
+      queueEntry({
         ts, at: new Date(ts).toISOString(), ...u, system: sys || undefined, action, collection: coll, docId, summary,
         changes: changes && Object.keys(changes).length ? changes : undefined,
         items: itemsNow, itemsBefore: itemsPrev,
@@ -299,17 +363,26 @@ export const opItemDiff = (oldItems: any[] | undefined, newItems: any[] | undefi
   return out;
 };
 
-let quietDepth = 0;
+const quietStack: number[] = [];
+const isQuiet = () => {
+  const now = Date.now();
+  for (let i = quietStack.length - 1; i >= 0; i--) if (now - quietStack[i] > 20000) quietStack.splice(i, 1); // عملية معلّقة متحجبش السجل للأبد
+  return quietStack.length > 0;
+};
 /** ينفّذ عملية مركّبة بدون ما العمليات الداخلية تتسجل كل واحدة لوحدها (العملية الأم بتتسجل مرة واحدة). */
 export const quietOps = async <T,>(fn: () => Promise<T>): Promise<T> => {
-  quietDepth++;
-  try { return await fn(); } finally { quietDepth--; }
+  const t = Date.now();
+  quietStack.push(t);
+  try { return await fn(); } finally { const i = quietStack.indexOf(t); if (i >= 0) quietStack.splice(i, 1); }
 };
 
 export const logOp = (action: 'create' | 'update' | 'delete', summary: string, details?: string[], docId = '') => {
   try {
-    if (quietDepth > 0) return;
+    if (isQuiet()) return;
     const ts = Date.now();
+    const who = getUser(asUserOverride);
+    recentOps.push({ ts, userId: who.userId });
+    while (recentOps.length > 60 || (recentOps.length && ts - recentOps[0].ts > 120000)) recentOps.shift();
     send({
       ts, at: new Date(ts).toISOString(), ...getUser(asUserOverride), system: systemDepth > 0 || undefined,
       action, collection: 'ops', docId, summary: systemDepth > 0 ? `(تلقائي) ${summary}` : summary,

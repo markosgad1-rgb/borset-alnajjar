@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
-import { Product, Customer, CustomerHistory, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId } from '../types';
+import { Product, Customer, CustomerHistory, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId, LedgerTrashItem } from '../types';
 import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
 import { getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance } from '../utils/supplierStatement';
@@ -142,6 +142,9 @@ interface ERPContextType {
   ) => Promise<void>;
   
   // Trash and Soft Delete operations
+  ledgerTrash: LedgerTrashItem[];
+  restoreLedgerMovement: (id: string) => Promise<{ success: boolean; message?: string }>;
+  purgeLedgerMovement: (id: string) => Promise<{ success: boolean; message?: string }>;
   restoreEntity: (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string) => Promise<{ success: boolean; message?: string }>;
   permanentDeleteEntity: (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string) => Promise<{ success: boolean; message?: string }>;
   
@@ -390,6 +393,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [treasury, setTreasury] = useState<TreasuryTransaction[]>([]);
+  const [ledgerTrash, setLedgerTrash] = useState<LedgerTrashItem[]>([]);
   // الإصلاح الذاتي ما يشتغلش إلا بعد ما الموردين والمشتريات والخزنة يتأكدوا من السيرفر (يمنع تكرار حركات الخزنة)
   const syncedRef = useRef<{ s: boolean; p: boolean; t: boolean }>({ s: false, p: false, t: false });
   const healedRef = useRef<Set<string>>(new Set());
@@ -632,6 +636,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }, handleSnapshotError));
         
         // 9. Treasury Collection
+        // سلة حركات كشوف الحسابات (صغيرة)
+        unsubs.push(onSnapshot(collection(db, 'ledgerTrash'), (snap: any) => {
+          setLedgerTrash(snap.docs.map((d: any) => ({ ...(d.data() as LedgerTrashItem), id: d.id })).sort((a: LedgerTrashItem, b: LedgerTrashItem) => String(b.deletedAt).localeCompare(String(a.deletedAt))));
+        }, () => {}));
+
         unsubs.push(onSnapshot(collection(db, 'treasury'), (snap: any) => {
            const data = snap.docs.map((d: any) => {
              const t = d.data() as TreasuryTransaction;
@@ -2268,6 +2277,83 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // حفظ الحركة المحذوفة في السلة
+  const saveLedgerTrash = (item: Omit<LedgerTrashItem, 'id' | 'deletedAt' | 'deletedBy'>) => {
+    const ts = Date.now();
+    const full: LedgerTrashItem = { ...item, id: `LT${ts}`, deletedAt: new Date(ts).toISOString(), deletedBy: String(currentUser?.fullName || currentUser?.username || '') };
+    setLedgerTrash(prev => [full, ...prev]);
+    try { setDoc(doc(db, 'ledgerTrash', full.id), cleanDoc(full)).catch(() => {}); } catch { /* ignore */ }
+  };
+
+  const restoreLedgerMovement = async (id: string): Promise<{ success: boolean; message?: string }> => {
+    const item = ledgerTrash.find(x => x.id === id);
+    if (!item) return { success: false, message: 'الحركة غير موجودة في السلة.' };
+    const key = (item.entityCode || '').trim().toLowerCase();
+    if (item.kind === 'TRANSFER') {
+      try {
+        const tr = item.transfer;
+        const ent: any = tr.entityType === 'CUSTOMER' ? customers.find(x => x.code === tr.entityCode) : tr.entityType === 'SUPPLIER' ? suppliers.find(x => x.code === tr.entityCode) : employees.find(x => x.code === tr.entityCode);
+        if (!ent || ent.isDeleted) return { success: false, message: 'الطرف المرتبط بالتحويل غير موجود أو محذوف. استرجعه أولاً.' };
+        await quietOps(async () => { await addTransfer(tr); });
+        logOp('update', `استرجاع تحويل محذوف: ${item.description}`, [`الطرف: ${ent.name} (${tr.entityCode})`, `المبلغ: ${opMoney(item.amount)}`, `حساب الخزنة: ${opPm(tr.paymentMethod)}`, `التاريخ: ${item.date}`], item.id);
+        setLedgerTrash(prev => prev.filter(x => x.id !== id));
+        if (isOnline) await deleteDoc(doc(db, 'ledgerTrash', id)).catch(() => {});
+        return { success: true };
+      } catch (e) {
+        handleFirebaseError(e);
+        return { success: false, message: 'حدث خطأ أثناء الاسترجاع.' };
+      }
+    }
+    const insertBack = (hist: CustomerHistory[]) => {
+      const out = [...hist];
+      [...item.removedHistory].sort((a, b) => a.index - b.index).forEach(r => out.splice(Math.min(r.index, out.length), 0, r.entry));
+      return out;
+    };
+    try {
+      if (item.kind === 'CUSTOMER') {
+        const c = customers.find(x => (x.code || '').trim().toLowerCase() === key);
+        if (!c || c.isDeleted) return { success: false, message: 'العميل غير موجود أو محذوف. استرجع العميل أولاً.' };
+        const newHistory = insertBack(c.history || []);
+        let newBal = Math.round(newHistory.reduce((a, h) => a + (Number(h.amount) || 0), 0) * 100) / 100;
+        if (Object.is(newBal, -0)) newBal = 0;
+        const manualTransactions = [...(c.manualTransactions || []), ...item.removedManual];
+        setCustomers(prev => prev.map(x => (x.code || '').trim().toLowerCase() === key ? { ...x, balance: newBal, currentBalance: newBal, history: newHistory, manualTransactions } : x));
+        if (isOnline) await updateDoc(doc(db, 'customers', c.code), cleanDoc({ balance: newBal, currentBalance: newBal, history: newHistory, manualTransactions }));
+        logOp('update', `استرجاع حركة محذوفة لكشف حساب العميل ${c.name}`, [`العميل: ${c.name} (${c.code})`, `البيان: ${item.description}`, `المبلغ: ${opMoney(Math.abs(item.amount))}`, `التاريخ: ${item.date}`, `رصيد العميل بعد الاسترجاع: ${opMoney(newBal)}`], c.code);
+      } else {
+        const s = suppliers.find(x => (x.code || '').trim().toLowerCase() === key);
+        if (!s || s.isDeleted) return { success: false, message: 'المورد غير موجود أو محذوف. استرجع المورد أولاً.' };
+        const newHistory = insertBack(s.history || []);
+        const manualTransactions = [...(s.manualTransactions || []), ...item.removedManual];
+        const updated: Supplier = { ...s, history: newHistory, manualTransactions, openingBalance: item.wasOpening && item.openingBefore !== undefined ? item.openingBefore : s.openingBalance };
+        const bal = calculateSupplierBalance(updated, purchases);
+        updated.balance = bal;
+        setSuppliers(prev => prev.map(x => (x.code || '').trim().toLowerCase() === key ? updated : x));
+        if (isOnline) await updateDoc(doc(db, 'suppliers', s.code), cleanDoc({ balance: bal, openingBalance: updated.openingBalance, history: newHistory, manualTransactions }));
+        logOp('update', `استرجاع حركة محذوفة لكشف حساب المورد ${s.name}`, [`المورد: ${s.name} (${s.code})`, `البيان: ${item.description}`, `المبلغ: ${opMoney(Math.abs(item.amount))}`, `التاريخ: ${item.date}`], s.code);
+      }
+      if (item.treasury) {
+        const t = item.treasury as TreasuryTransaction;
+        setTreasury(prev => [t, ...prev.filter(x => x.id !== t.id)]);
+        if (isOnline) await setDoc(doc(db, 'treasury', t.id), cleanDoc(t));
+      }
+      setLedgerTrash(prev => prev.filter(x => x.id !== id));
+      if (isOnline) await deleteDoc(doc(db, 'ledgerTrash', id)).catch(() => {});
+      return { success: true };
+    } catch (e) {
+      handleFirebaseError(e);
+      return { success: false, message: 'حدث خطأ أثناء الاسترجاع.' };
+    }
+  };
+
+  const purgeLedgerMovement = async (id: string): Promise<{ success: boolean; message?: string }> => {
+    const item = ledgerTrash.find(x => x.id === id);
+    logOp('delete', `حذف نهائي لحركة من سلة المهملات${item ? `: ${item.description}` : ''}`, item ? [`${item.kind === 'CUSTOMER' ? 'العميل' : 'المورد'}: ${item.entityName} (${item.entityCode})`, `المبلغ: ${opMoney(Math.abs(item.amount))}`, `التاريخ: ${item.date}`] : [], id);
+    setLedgerTrash(prev => prev.filter(x => x.id !== id));
+    if (isOnline) await deleteDoc(doc(db, 'ledgerTrash', id)).catch(() => {});
+    return { success: true };
+  };
+
   const deleteCustomerLedgerMovement = async (
     customerCode: string, 
     movement: { 
@@ -2394,6 +2480,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     newBal = Math.round(newBal * 100) / 100;
     if (Object.is(newBal, -0)) newBal = 0;
+
+    // حفظ الحركة في سلة المهملات قبل ما تتمسح (عشان تتسترجع بأثرها)
+    saveLedgerTrash({
+      kind: 'CUSTOMER', entityCode: customer.code, entityName: customer.name,
+      description: movement.description, amount: Number(movement.amount) || 0, date: movement.date,
+      removedHistory: history.map((h, i) => (newHistory.includes(h) ? null : { index: i, entry: h })).filter(Boolean) as { index: number; entry: any }[],
+      removedManual: (customer.manualTransactions || []).filter(mt => !manualTransactions.includes(mt)),
+      treasury: matchedTreasuryId ? (treasury.find(t => t.id === matchedTreasuryId) || null) : null
+    });
 
     // 1. Immediate optimistic updates
     setCustomers(prev => prev.map(c => {
@@ -2538,6 +2633,17 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const accurateBalance = calculateSupplierBalance(updatedSupplierObj, purchases);
     updatedSupplierObj.balance = accurateBalance;
+
+    // حفظ الحركة في سلة المهملات قبل ما تتمسح (عشان تتسترجع بأثرها)
+    saveLedgerTrash({
+      kind: 'SUPPLIER', entityCode: supplier.code, entityName: supplier.name,
+      description: movement.description, amount: Number(targetAmt) || 0, date: movement.date,
+      removedHistory: history.map((h, i) => (newHistory.includes(h) ? null : { index: i, entry: h })).filter(Boolean) as { index: number; entry: any }[],
+      removedManual: (supplier.manualTransactions || []).filter(mt => !manualTransactions.includes(mt)),
+      treasury: matchedTreasuryId ? (treasury.find(t => t.id === matchedTreasuryId) || null) : null,
+      wasOpening: !!movement.isOpeningBalance,
+      openingBefore: supplier.openingBalance
+    });
 
     // 1. Immediate optimistic updates
     setSuppliers(prev => prev.map(s => (s.code || '').trim().toLowerCase() === cleanCode ? updatedSupplierObj : s));
@@ -3833,6 +3939,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         `تاريخ الحركة: ${target.date}`,
         'تم إلغاء أثرها من الخزنة ومن كشف الحساب'
       ], transferId);
+      if (entityType && entityCode) {
+        saveLedgerTrash({
+          kind: 'TRANSFER', entityCode, entityName: String(target.entityName || ''),
+          description: target.description, amount, date: target.date,
+          removedHistory: [], removedManual: [], treasury: null,
+          transfer: { branchId: target.branchId, entityType, entityCode, amount, type: isIncoming ? 'IN' : 'OUT', date: target.date, paymentMethod: target.paymentMethod, idOverride: transferId, groupId: (target as any).groupId, descOverride: target.description }
+        });
+      }
 
       // 1. Revert entity ledger & balance
       if (entityType === 'CUSTOMER' && entityCode) {
@@ -5211,6 +5325,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gDeleteSuppLedger = gate('ledger.deleteMovement', deleteSupplierLedgerMovement);
   const gClearLedger = gate('ledger.clear', clearLedger, false);
   const gRestoreEntity = gate('trash.restore', restoreEntity, noPerm('trash.restore'));
+  const gRestoreLedger = gate('trash.restore', restoreLedgerMovement, noPerm('trash.restore'));
+  const gPurgeLedger = gate('trash.purge', purgeLedgerMovement, noPerm('trash.purge'));
   const gPurgeEntity = gate('trash.purge', permanentDeleteEntity, noPerm('trash.purge'));
   const gRestoreBackup = gate('backup', restoreBackupData, { success: false, message: 'ليس لديك صلاحية: النسخ الاحتياطي والاسترجاع' });
 
@@ -5222,7 +5338,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
       markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, addCustomerToSupplierTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
-      restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity,
+      restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
       exportBackupData, restoreBackupData: gRestoreBackup,
       currentTreasuryBalance, currentTreasuryBalanceMarg, currentTreasuryBalanceNozha, balances

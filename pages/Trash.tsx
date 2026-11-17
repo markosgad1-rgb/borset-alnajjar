@@ -8,7 +8,7 @@ import { SalesInvoice, Purchase, Customer, Supplier } from '../types';
 import { formatWithCommas } from '../utils/formatters';
 import { canDo } from '../utils/permissions';
 
-type TrashTab = 'INVOICES' | 'CUSTOMERS' | 'SUPPLIERS';
+type TrashTab = 'INVOICES' | 'CUSTOMERS' | 'SUPPLIERS' | 'MOVEMENTS';
 
 interface PermanentDeleteTarget {
   type: 'invoice' | 'purchase' | 'customer' | 'supplier';
@@ -20,8 +20,9 @@ interface PermanentDeleteTarget {
 export const Trash: React.FC = () => {
   const { 
     invoices, purchases, customers, suppliers, 
-    restoreEntity, permanentDeleteEntity 
+    restoreEntity, permanentDeleteEntity, ledgerTrash, restoreLedgerMovement, purgeLedgerMovement 
   } = useERP();
+  const [purgeLedgerId, setPurgeLedgerId] = useState<string | null>(null);
   const __me = useERP().currentUser;
 
   const [activeTab, setActiveTab] = useState<TrashTab>('INVOICES');
@@ -246,6 +247,22 @@ export const Trash: React.FC = () => {
             <span>موردون محذوفون</span>
             <span className="bg-gray-200 text-gray-700 px-1.5 py-0.2 rounded-full text-[10px]">
               {deletedSuppliers.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('MOVEMENTS')}
+            className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'MOVEMENTS' 
+                ? 'bg-white text-orange-950 shadow-sm' 
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <FileText size={15} />
+            <span>حركات كشوف الحسابات</span>
+            <span className="bg-gray-200 text-gray-700 px-1.5 py-0.2 rounded-full text-[10px]">
+              {ledgerTrash.length}
             </span>
           </button>
         </div>
@@ -476,6 +493,84 @@ export const Trash: React.FC = () => {
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: حركات محذوفة من كشوف الحسابات */}
+        {activeTab === 'MOVEMENTS' && (
+          <div>
+            {ledgerTrash.length === 0 ? (
+              <div className="p-12 text-center">
+                <h3 className="text-sm font-bold text-gray-700">لا توجد حركات محذوفة</h3>
+                <p className="text-xs text-gray-400 mt-1">أي دفعة أو حركة تتحذف من كشف حساب عميل أو مورد بتظهر هنا ويمكن استرجاعها.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-gray-50 text-gray-600 font-bold border-b border-gray-100">
+                    <tr>
+                      <th className="p-3">النوع</th>
+                      <th className="p-3">الاسم</th>
+                      <th className="p-3">البيان</th>
+                      <th className="p-3">المبلغ</th>
+                      <th className="p-3">تاريخ الحركة</th>
+                      <th className="p-3">حُذفت بواسطة</th>
+                      <th className="p-3">وقت الحذف</th>
+                      <th className="p-3 text-center">الإجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {ledgerTrash
+                      .filter(m => !searchTerm.trim() || `${m.entityName} ${m.entityCode} ${m.description}`.toLowerCase().includes(searchTerm.trim().toLowerCase()))
+                      .map(m => (
+                      <tr key={m.id} className="hover:bg-gray-50/70 transition-colors">
+                        <td className="p-3 font-bold">{m.kind === 'CUSTOMER' ? 'عميل' : m.kind === 'SUPPLIER' ? 'مورد' : 'تحويل'}</td>
+                        <td className="p-3 font-bold text-gray-900">{m.entityName} <span className="font-mono text-gray-400">({m.entityCode})</span></td>
+                        <td className="p-3 text-gray-700">{m.description}{m.treasury ? <span className="block text-[10px] text-blue-600">مرتبطة بحركة في الخزنة (هتتسترجع معاها)</span> : null}</td>
+                        <td className="p-3 font-mono font-bold" dir="ltr">{formatWithCommas(Math.abs(m.amount))} ج.م</td>
+                        <td className="p-3 font-mono">{m.date}</td>
+                        <td className="p-3">{m.deletedBy || '-'}</td>
+                        <td className="p-3 text-gray-500">{formatDate(m.deletedAt)}</td>
+                        <td className="p-3">
+                          <div className="flex items-center justify-center gap-1.5">
+                            {canDo(__me, 'trash.restore') && (<button
+                              type="button"
+                              disabled={processingId === m.id}
+                              onClick={async () => {
+                                setProcessingId(m.id);
+                                try {
+                                  const res = await restoreLedgerMovement(m.id);
+                                  if (res.success) showNotification('تم استرجاع الحركة إلى كشف الحساب بنجاح.');
+                                  else showNotification(res.message || 'حدث خطأ أثناء الاسترجاع.', 'error');
+                                } finally { setProcessingId(null); }
+                              }}
+                              className="inline-flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-lg font-bold transition-all disabled:opacity-50"
+                            >
+                              <RotateCcw size={12} />
+                              <span>استرجاع</span>
+                            </button>)}
+                            {canDo(__me, 'trash.purge') && (<button
+                              type="button"
+                              disabled={processingId === m.id}
+                              onClick={async () => {
+                                if (purgeLedgerId !== m.id) { setPurgeLedgerId(m.id); return; }
+                                setPurgeLedgerId(null);
+                                await purgeLedgerMovement(m.id);
+                                showNotification('تم حذف الحركة نهائياً.');
+                              }}
+                              className="inline-flex items-center gap-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg font-bold transition-all disabled:opacity-50"
+                            >
+                              <Trash2 size={12} />
+                              <span>{purgeLedgerId === m.id ? 'اضغط للتأكيد' : 'حذف نهائي'}</span>
+                            </button>)}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

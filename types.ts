@@ -147,6 +147,25 @@ export interface Employee {
   deletedAt?: string;
 }
 
+// حركة اتحذفت من كشف حساب (عميل / مورد) ومحفوظة في سلة المهملات عشان تتسترجع بأثرها الكامل
+export interface LedgerTrashItem {
+  id: string;
+  kind: 'CUSTOMER' | 'SUPPLIER' | 'TRANSFER';
+  entityCode: string;
+  entityName: string;
+  description: string;
+  amount: number;
+  date: string;
+  deletedAt: string;
+  deletedBy: string;
+  removedHistory: { index: number; entry: any }[];
+  removedManual: any[];
+  treasury?: any | null;
+  wasOpening?: boolean;
+  openingBefore?: number;
+  transfer?: any; // بيانات تحويل محذوف عشان يتعاد تسجيله
+}
+
 export interface CustomerHistory {
   id?: string;
   date: string;

@@ -172,7 +172,7 @@ export const ActivityLog: React.FC = () => {
 
         <label className="mt-3 flex items-center gap-2 text-sm text-gray-600 cursor-pointer w-fit">
           <input type="checkbox" checked={showDerived} onChange={e => setShowDerived(e.target.checked)} />
-          إظهار التحديثات التلقائية (تغيّر الأرصدة والمخزون الناتج عن الفواتير)
+          إظهار الأسطر الفنية التلقائية (تفاصيل داخلية تابعة لعملية مسجّلة بالأعلى: أرصدة، مخزون، خزنة)
         </label>
         {!netUp && (
           <div className="mt-3 flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
