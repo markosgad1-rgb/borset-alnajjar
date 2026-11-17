@@ -241,7 +241,7 @@ export const Suppliers: React.FC = () => {
 
     // Safety check: check if supplier has any purchases, non-zero balance, or history
     const cleanCode = (supplier.code || '').trim().toLowerCase();
-    const hasPurchases = purchases.some(p => (p.supplierCode || '').trim().toLowerCase() === cleanCode);
+    const hasPurchases = purchases.some(p => !p.isDeleted && (p.supplierCode || '').trim().toLowerCase() === cleanCode);
     const hasBalance = Number(supplier.balance || 0) !== 0;
     const hasHistory = Array.isArray(supplier.history) && supplier.history.length > 0;
 

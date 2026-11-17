@@ -26,7 +26,9 @@ export const Dashboard: React.FC = () => {
   // Filter out deleted items (Soft Delete)
   const activeCustomers = customers.filter(c => !c.isDeleted);
   const activeSuppliers = suppliers.filter(s => !s.isDeleted);
-  const activeInvoices = invoices.filter(i => !i.isDeleted);
+  // فواتير العميل المحذوف (في سلة المهملات) متظهرش، وبترجع مع استرجاعه
+  const deletedCustCodes = new Set(customers.filter(c => c.isDeleted).map(c => c.code));
+  const activeInvoices = invoices.filter(i => !i.isDeleted && !deletedCustCodes.has(i.customerCode));
   const activePurchases = purchases.filter(p => !p.isDeleted);
 
   const pendingPurchases = activePurchases.filter(p => p.pricingStatus === 'PENDING_PRICE');

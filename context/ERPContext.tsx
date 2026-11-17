@@ -741,6 +741,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     purchases.forEach(p => {
       // الفاتورة اللي لسه اتسجلت (آخر 3 دقايق) متتلمسش: حفظها لسه شغال وتدخّل الإصلاح التلقائي بتاعنا كان ممكن يكتب فوق حركات المورد
+      if (p.isDeleted) return;
       if (p.createdAt && Date.now() - new Date(p.createdAt).getTime() < 180000) return;
       const paidAmt = Number(p.paidAmount ?? p.paid ?? 0);
       if (paidAmt > 0 && p.pricingStatus !== 'PENDING_PRICE' && p.supplierCode) {
@@ -1260,13 +1261,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteCustomer = async (code: string) => {
     const cleanCode = (code || '').trim();
-    // حذف نهائي (مش سلة مهملات): العميل بيتشال من كل مكان، والكود يرجع متاح
+    // الحذف بينقل العميل لسلة المهملات (بكل بياناته) ويختفي من كل الصفحات، والاسترجاع بيرجّعه بكل حاجته
+    const now = new Date().toISOString();
     const delC = customers.find(c => (c.code || '').trim().toLowerCase() === cleanCode.toLowerCase());
-    logOp('delete', `حذف نهائي للعميل ${delC?.name || cleanCode}`, [`العميل: ${delC?.name || ''} (${cleanCode})`, `الرصيد وقت الحذف: ${opMoney(delC?.balance || 0)}`, 'تم الحذف نهائياً ولا يمكن استرجاعه'], cleanCode);
-    setCustomers(prev => prev.filter(c => (c.code || '').trim().toLowerCase() !== cleanCode.toLowerCase()));
+    logOp('delete', `حذف العميل ${delC?.name || cleanCode} (نقل لسلة المهملات)`, [`العميل: ${delC?.name || ''} (${cleanCode})`, `الرصيد وقت الحذف: ${opMoney(delC?.balance || 0)}`, 'يمكن استرجاعه من سلة المهملات بكل بياناته'], cleanCode);
+    setCustomers(prev => prev.map(c => (c.code || '').trim().toLowerCase() === cleanCode.toLowerCase() ? { ...c, isDeleted: true, deletedAt: now } : c));
     if (isOnline) {
       try { 
-        await deleteDoc(doc(db, 'customers', delC?.code || cleanCode)); 
+        await setDoc(doc(db, 'customers', cleanCode), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true }); 
       }
       catch (e) { handleFirebaseError(e); }
     }
@@ -1392,13 +1394,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, message: msg };
     }
 
-    // حذف نهائي (مش سلة مهملات): المورد بيتشال من كل مكان، والكود يرجع متاح
-    logOp('delete', `حذف نهائي للمورد ${supplier.name}`, [`المورد: ${supplier.name} (${supplier.code})`, 'تم الحذف نهائياً ولا يمكن استرجاعه'], supplier.code);
-    setSuppliers(prev => prev.filter(s => (s.code || '').trim().toLowerCase() !== cleanCode.toLowerCase()));
+    // الحذف بينقل المورد لسلة المهملات (بكل بياناته) ويختفي من كل الصفحات، والاسترجاع بيرجّعه بكل حاجته
+    const now = new Date().toISOString();
+    logOp('delete', `حذف المورد ${supplier.name} (نقل لسلة المهملات)`, [`المورد: ${supplier.name} (${supplier.code})`, 'يمكن استرجاعه من سلة المهملات بكل بياناته'], supplier.code);
+    setSuppliers(prev => prev.map(s => (s.code || '').trim().toLowerCase() === cleanCode.toLowerCase() ? { ...s, isDeleted: true, deletedAt: now } : s));
 
     if (isOnline) {
       try {
-        await deleteDoc(doc(db, 'suppliers', supplier.code || cleanCode));
+        await setDoc(doc(db, 'suppliers', cleanCode), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true });
         return { success: true };
       } catch (e) {
         handleFirebaseError(e);
@@ -2137,8 +2140,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // 1. Immediate Local State Updates (Snappy UI)
     // Remove purchase completely from active purchases list
-    const remainingPurchases = purchases.filter(p => String(p.id).trim().replace(/^#/, '').toLowerCase() !== cleanId.toLowerCase());
-    setPurchases(remainingPurchases);
+    // الفاتورة بتتحفظ في سلة المهملات (isDeleted) بدل ما تتمسح، وأثرها على المورد والخزنة والمخزن بيتلغي زي الأول
+    setPurchases(prev => prev.map(p => String(p.id).trim().replace(/^#/, '').toLowerCase() === cleanId.toLowerCase() ? { ...p, isDeleted: true, deletedAt: now } : p));
 
     // Update Supplier in state
     if (suppCode) {
@@ -2198,8 +2201,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 2. Firebase Persistence
     if (isOnline) {
       try {
-        await deleteDoc(doc(db, 'purchases', purchase ? purchase.id : cleanId)).catch(async () => {
-          await deleteDoc(doc(db, 'purchases', cleanId)).catch(() => {});
+        await setDoc(doc(db, 'purchases', purchase ? purchase.id : cleanId), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true }).catch(async () => {
+          await setDoc(doc(db, 'purchases', cleanId), cleanDoc({ isDeleted: true, deletedAt: now }), { merge: true }).catch(() => {});
         });
 
         // Update Supplier doc in Firestore
@@ -3271,9 +3274,20 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
         return { success: true };
       } else if (type === 'purchase') {
-        setPurchases(prev => prev.map(p => p.id === cleanId ? { ...p, isDeleted: false, deletedAt: undefined } : p));
-        if (isOnline) {
-          await setDoc(doc(db, 'purchases', cleanId), cleanDoc({ isDeleted: false, deletedAt: '' }), { merge: true });
+        const pu = purchases.find(p => p.id === cleanId);
+        if (!pu) return { success: false, message: 'الفاتورة غير موجودة.' };
+        const sup = suppliers.find(s => (s.code || '').trim().toLowerCase() === String(pu.supplierCode || '').trim().toLowerCase());
+        if (!sup || sup.isDeleted) return { success: false, message: 'المورد الخاص بالفاتورة محذوف. استرجع المورد أولاً ثم استرجع الفاتورة.' };
+        // نعيد تسجيل الفاتورة بنفس البيانات: بترجّع حركات المورد والخزنة والمخزن زي ما كانت
+        const { isDeleted, deletedAt, previousBalance, currentBalance, ...base } = pu as any;
+        await quietOps(async () => {
+          await addPurchase({ ...base, createdAt: new Date().toISOString() });
+        });
+        const keep: any = { createdBy: pu.createdBy, createdByName: pu.createdByName, reviewStatus: pu.reviewStatus, reviewedBy: pu.reviewedBy, reviewedAt: pu.reviewedAt };
+        Object.keys(keep).forEach(k => keep[k] === undefined && delete keep[k]);
+        if (Object.keys(keep).length) {
+          setPurchases(prev => prev.map(p => p.id === cleanId ? { ...p, ...keep } : p));
+          if (isOnline) { try { await setDoc(doc(db, 'purchases', cleanId), cleanDoc(keep), { merge: true }); } catch { /* ignore */ } }
         }
         return { success: true };
       } else if (type === 'invoice') {

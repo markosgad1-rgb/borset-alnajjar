@@ -114,6 +114,7 @@ export const Reports: React.FC = () => {
   // --- Filtered Purchases ---
   const filteredPurchases = useMemo(() => {
     return purchases.filter(p => {
+      if (p.isDeleted) return false;
       // Date Check
       if (!isDateInRange(p.date)) return false;
 

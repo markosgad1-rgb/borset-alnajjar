@@ -46,7 +46,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   
   const canManageBackup = canDo(currentUser, 'backup');
 
-  const pendingPurchasesCount = purchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
+  const pendingPurchasesCount = purchases.filter(p => !p.isDeleted && p.pricingStatus === 'PENDING_PRICE').length;
   // فواتير بيع جديدة لم تُراجع بعد (التنبيه لمن عنده صلاحية المراجعة فقط)
   const canReviewInvoices = canDo(currentUser, 'invoice.review');
   const canReviewPurchases = canDo(currentUser, 'purchase.review');

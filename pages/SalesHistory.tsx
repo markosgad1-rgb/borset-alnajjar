@@ -194,6 +194,8 @@ export const SalesHistory: React.FC = () => {
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       if (inv.isDeleted) return false;
+      // فواتير عميل محذوف (في سلة المهملات) متظهرش، وبترجع مع استرجاعه
+      if (customers.some(c => c.isDeleted && c.code === inv.customerCode)) return false;
       const matchesDate = reviewFilter === 'PENDING' || inv.date === selectedDate;
       const isPendingReview = inv.reviewStatus === 'PENDING_REVIEW';
       if (reviewFilter === 'PENDING' && !isPendingReview) return false;
