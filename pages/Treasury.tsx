@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { 
   Wallet, 
@@ -164,7 +164,13 @@ export const Treasury: React.FC = () => {
     }
   };
 
+  const handleOpeningSubmitLock = useRef(false);
   const handleOpeningSubmit = async (e: React.FormEvent) => {
+    if (handleOpeningSubmitLock.current) { e?.preventDefault?.(); return; }
+    handleOpeningSubmitLock.current = true;
+    try { await _handleOpeningSubmit(e); } finally { setTimeout(() => { handleOpeningSubmitLock.current = false; }, 1000); }
+  };
+  const _handleOpeningSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(openingForm.amount);
     if (amount <= 0) return alert("الرجاء إدخال مبلغ صحيح");
@@ -182,7 +188,13 @@ export const Treasury: React.FC = () => {
     alert(`تم إضافة الرصيد الافتتاحي لخزينة ${openingForm.branchId === 'NOZHA' ? 'النزهة' : 'المرج'} بنجاح`);
   };
 
+  const handleExecuteCashTransferLock = useRef(false);
   const handleExecuteCashTransfer = async (e: React.FormEvent) => {
+    if (handleExecuteCashTransferLock.current) { e?.preventDefault?.(); return; }
+    handleExecuteCashTransferLock.current = true;
+    try { await _handleExecuteCashTransfer(e); } finally { setTimeout(() => { handleExecuteCashTransferLock.current = false; }, 1000); }
+  };
+  const _handleExecuteCashTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isTransferringCash) return;
 

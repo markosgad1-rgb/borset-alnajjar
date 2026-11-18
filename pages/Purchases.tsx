@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator, Wallet, Building2, Smartphone } from 'lucide-react';
 import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../types';
@@ -233,7 +233,13 @@ export const Purchases: React.FC = () => {
   const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, rawPurchases) : 0;
   const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal + paidAmountVal);
 
+  const handleSaveInvoiceLock = useRef(false);
   const handleSaveInvoice = async () => {
+    if (handleSaveInvoiceLock.current) return;
+    handleSaveInvoiceLock.current = true;
+    try { await _handleSaveInvoice(); } finally { setTimeout(() => { handleSaveInvoiceLock.current = false; }, 1000); }
+  };
+  const _handleSaveInvoice = async () => {
     if (isSubmitting) return;
 
     if (cartItems.length === 0) {
@@ -399,7 +405,13 @@ export const Purchases: React.FC = () => {
     });
   };
 
+  const handleSaveEditLock = useRef(false);
   const handleSaveEdit = async () => {
+    if (handleSaveEditLock.current) return;
+    handleSaveEditLock.current = true;
+    try { await _handleSaveEdit(); } finally { setTimeout(() => { handleSaveEditLock.current = false; }, 1000); }
+  };
+  const _handleSaveEdit = async () => {
     if (!editPurchase || isSavingEdit) return;
     if (editItems.length === 0) return notify("لا يمكن حفظ فاتورة فارغة");
 

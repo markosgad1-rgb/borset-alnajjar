@@ -202,7 +202,13 @@ export const Collections: React.FC = () => {
       });
   }, [treasury]);
 
+  const handleSubmitLock = useRef(false);
   const handleSubmit = async (e: React.FormEvent) => {
+    if (handleSubmitLock.current) { e?.preventDefault?.(); return; }
+    handleSubmitLock.current = true;
+    try { await _handleSubmit(e); } finally { setTimeout(() => { handleSubmitLock.current = false; }, 1000); }
+  };
+  const _handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(formData.amount);
 

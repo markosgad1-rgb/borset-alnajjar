@@ -5528,6 +5528,33 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => clearTimeout(t);
   }, [customers, invoices, currentUser]);
 
+  // ===== حماية الضغط المزدوج: نفس العملية بنفس بياناتها ماتتسجلش مرتين =====
+  const dupRef = useRef<Map<string, number>>(new Map());
+  const dg = (sig: (a: any) => string, ms: number, fn: any, onDup?: any) => async (a?: any, ...rest: any[]) => {
+    let key = '';
+    try { key = sig(a || {}); } catch { key = ''; }
+    if (key) {
+      const now = Date.now();
+      const last = dupRef.current.get(key);
+      if (last && now - last < ms) { console.warn('عملية مكررة اتمنعت:', key); return onDup; }
+      dupRef.current.set(key, now);
+      if (dupRef.current.size > 200) { dupRef.current.forEach((t, k) => { if (now - t > 120000) dupRef.current.delete(k); }); }
+    }
+    try { return await fn(a, ...rest); }
+    catch (e) { if (key) dupRef.current.delete(key); throw e; }
+  };
+  const sInvoice = dg(a => `inv|${a.id}`, 120000, async (a: any, ...r: any[]) => {
+    if (a?.id && invoices.some(i => String(i.id) === String(a.id))) { console.warn('فاتورة بنفس الرقم موجودة، اتمنع التكرار:', a.id); return; }
+    return (addInvoice as any)(a, ...r);
+  });
+  const sPurchase = dg(a => `pur|${a.id}`, 120000, addPurchase);
+  const sCollection = dg(a => `col|${a.customerCode}|${a.amount}|${a.date}|${a.paymentMethod}|${a.invoiceId || ''}|${a.notes || ''}`, 8000, addCollection);
+  const sTransfer = dg(a => `tr|${a.entityType}|${a.entityCode}|${a.type}|${a.amount}|${a.date}|${a.paymentMethod}|${a.notes || ''}|${a.groupId || ''}`, 8000, addTransfer);
+  const sC2S = dg(a => `c2s|${a.customerCode}|${a.supplierCode}|${a.amount}|${a.date}|${a.paymentMethod}`, 8000, addCustomerToSupplierTransfer, { success: true });
+  const sExpense = dg(a => `exp|${a.name}|${a.amount}|${a.date}|${a.branchId || ''}`, 8000, addExpense);
+  const sOpening = dg(a => `open|${a.branchId || ''}|${a.amount}|${a.date}|${a.paymentMethod}`, 8000, gAddOpeningBalance);
+  const sCash = dg(a => `cash|${a.fromBranch}|${a.toBranch}|${a.amount}|${a.paymentMethod}|${a.date || ''}`, 8000, gTransferCash, { success: true });
+
   // ===== نطاق الفرع/المنطقة للمستخدم (الأدمن = بدون تصفية) =====
   const userScope = useMemo(() => getUserScope(currentUser), [currentUser]);
   const scopedCustomers = useMemo(() => userScope.restricted ? customers.filter(c => inScope(userScope, c.branchId, c.area)) : customers, [customers, userScope]);
@@ -5557,9 +5584,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       rawCustomers: customers, rawInvoices: invoices, rawPurchases: purchases, userScope,
       products, customers: scopedCustomers, suppliers, employees, purchases: scopedPurchases, invoices: scopedInvoices, treasury: scopedTreasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
-      transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: gTransferCash,
-      addPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
-      markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, addCustomerToSupplierTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
+      transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: sCash,
+      addPurchase: sPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice: sInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
+      markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection: sCollection, addTreasuryTransaction, addTransfer: sTransfer, addCustomerToSupplierTransfer: sC2S, deleteTransfer: gDeleteTransfer, addExpense: sExpense, addOpeningBalance: sOpening, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,

@@ -426,7 +426,13 @@ export const Sales: React.FC = () => {
     setPaidAmountInput(formatWithCommas(amt.toString()));
   };
 
+  const handleSaveInvoiceLock = useRef(false);
   const handleSaveInvoice = async () => {
+    if (handleSaveInvoiceLock.current) return;
+    handleSaveInvoiceLock.current = true;
+    try { await _handleSaveInvoice(); } finally { setTimeout(() => { handleSaveInvoiceLock.current = false; }, 1000); }
+  };
+  const _handleSaveInvoice = async () => {
     if (cartItems.length === 0) {
       alert("الفاتورة فارغة! أضف أصناف أولاً.");
       return;
