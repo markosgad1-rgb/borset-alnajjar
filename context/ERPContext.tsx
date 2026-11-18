@@ -2905,6 +2905,29 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // لما مبلغ المدفوع في الفاتورة بيتغيّر عند التعديل، حركة "دفعة" بتاعة نفس الفاتورة في كشف العميل لازم تتغيّر معاه
+  // (وإلا الكشف بيعرض الدفعة القديمة كحركة مستقلة ويطلع فرق بين رصيد القائمة ورصيد الكشف).
+  const syncInvoicePaymentEntry = (history: CustomerHistory[], invoiceId: string, oldPaid: number, newPaid: number, newDate: string): CustomerHistory[] => {
+    if (Math.abs(oldPaid - newPaid) < 0.01) return history;
+    const out = [...history];
+    const isCollection = (x: any) => /^(cust_pay_|trans_)/.test(String(x?.id || '')) || /^(T_COL_|TR\d)/.test(String(x?.paymentId || ''));
+    const saleIdx = out.findIndex(h => h.description.includes(`#${invoiceId}`) && h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء') && !h.description.includes('تعديل فاتورة'));
+    if (oldPaid > 0.009) {
+      const cand = (j: number) => j >= 0 && j < out.length && j !== saleIdx && !isCollection(out[j]) && Number(out[j].amount) > 0 && Math.abs(Number(out[j].amount) - oldPaid) < 0.01 && !out[j].description.includes('فاتورة بيع');
+      let payIdx = -1;
+      if (saleIdx >= 0 && cand(saleIdx + 1) && (out[saleIdx + 1].description.includes('دفعة') || out[saleIdx + 1].description.includes(invoiceId))) payIdx = saleIdx + 1;
+      if (payIdx < 0) payIdx = out.findIndex((h, j) => cand(j) && h.description.includes(`#${invoiceId}`));
+      if (payIdx < 0) return history; // مش لاقيها بوضوح: منغيّرش حاجة (الأمان أولاً)
+      if (newPaid > 0.009) out[payIdx] = { ...out[payIdx], amount: newPaid, date: newDate };
+      else out.splice(payIdx, 1);
+      return out;
+    }
+    if (newPaid > 0.009) {
+      out.splice(saleIdx >= 0 ? saleIdx + 1 : out.length, 0, { date: newDate, description: 'دفعة', amount: newPaid });
+    }
+    return out;
+  };
+
   const updateInvoice = async (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => {
     const oldPaid = Number(oldInvoice.paidAmount || 0);
     const newPaid = Number(newInvoiceData.paidAmount || 0);
@@ -2971,6 +2994,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }];
         }
 
+        updatedHistory = syncInvoicePaymentEntry(updatedHistory, oldInvoice.id, oldPaid, newPaid, newInvoiceData.date);
         return {
           ...c,
           balance: c.balance + debtDifference,
@@ -3075,6 +3099,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             }];
           }
 
+          updatedHistory = syncInvoicePaymentEntry(updatedHistory, oldInvoice.id, oldPaid, newPaid, newInvoiceData.date);
           await updateDoc(customerRef, cleanDoc({ balance: newBalance, history: updatedHistory }));
         }
 

@@ -12,7 +12,7 @@ import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
-import { canDo } from '../utils/permissions';
+import { canDo, isFullAdmin } from '../utils/permissions';
 import { logOp, opMoney, opChange } from '../utils/auditLog';
 
 export const Customers: React.FC = () => {
@@ -588,17 +588,17 @@ export const Customers: React.FC = () => {
   };
 
   // Helper to compute itemized ledger rows by expanding sales invoices into individual egg products with optional date filter
-  const getItemizedRowsForRange = (startDate?: string, endDate?: string) => {
-    if (!selectedCustomer || !selectedCustomer.history) return [];
+  const getItemizedRowsForRange = (startDate?: string, endDate?: string, cust: any = selectedCustomer) => {
+    if (!cust || !cust.history) return [];
 
-    const consumedPaymentIndices = getConsumedPaymentIndices(selectedCustomer.history);
+    const consumedPaymentIndices = getConsumedPaymentIndices(cust.history);
     let priorBalance = 0;
 
     // 1. Calculate prior balance if startDate is specified
     if (startDate) {
-      for (let i = 0; i < selectedCustomer.history.length; i++) {
+      for (let i = 0; i < cust.history.length; i++) {
         if (consumedPaymentIndices.has(i)) continue; // Prevent double-counting in prior balance
-        const h = selectedCustomer.history[i];
+        const h = cust.history[i];
         if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة')) continue;
         if (h.date < startDate) {
           const isInvoiceSale = h.description.includes('فاتورة بيع') && !h.description.includes('دفعة') && !h.description.includes('إلغاء');
@@ -665,12 +665,12 @@ export const Customers: React.FC = () => {
       });
     }
 
-    for (let i = 0; i < selectedCustomer.history.length; i++) {
+    for (let i = 0; i < cust.history.length; i++) {
       // If this history entry is the payment entry belonging to an invoice, skip it because
       // it is displayed directly under the invoice items as a single dedicated line with the invoice ref!
       if (consumedPaymentIndices.has(i)) continue;
 
-      const h = selectedCustomer.history[i];
+      const h = cust.history[i];
       if (h.description.includes('تعديل فاتورة') || h.description.includes('إلغاء فاتورة')) continue;
       if (startDate && h.date < startDate) continue;
       if (endDate && h.date > endDate) continue;
@@ -768,8 +768,8 @@ export const Customers: React.FC = () => {
         const isPay = h.description.includes('سداد') || h.description.includes('دفعة') || h.description.includes('تحصيل');
 
         rows.push({
-          id: (h as any).id || `cust_mvt_${selectedCustomer.code}_${i}_${h.date}`,
-          paymentId: isPay ? ((h as any).id || `pay_${selectedCustomer.code}_${i}`) : undefined,
+          id: (h as any).id || `cust_mvt_${cust.code}_${i}_${h.date}`,
+          paymentId: isPay ? ((h as any).id || `pay_${cust.code}_${i}`) : undefined,
           num: counter++,
           date: h.date,
           ref: refCol,
@@ -900,6 +900,34 @@ export const Customers: React.FC = () => {
     }
     return Number(selectedCustomer.balance) || 0;
   }, [selectedCustomer, itemizedRows.length, totalItemizedCredit, totalItemizedDebit]);
+
+  // ===== مراجعة الأرصدة: مقارنة رصيد القائمة (المخزّن) برقم كشف الحساب لكل عميل =====
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditCode, setAuditCode] = useState<string | null>(null);
+  const r2 = (n: number) => { const v = Math.round(n * 100) / 100; return Object.is(v, -0) ? 0 : v; };
+  const auditRows = useMemo(() => {
+    if (!auditOpen) return [];
+    return customers.filter(c => !c.isDeleted).map(c => {
+      const rows = getItemizedRowsForRange(undefined, undefined, c);
+      const stored = r2(Number(c.balance) || 0);
+      const stmt = rows.length > 0 ? r2(rows.reduce((a, r) => a + r.credit - r.debit, 0)) : stored;
+      const histSum = r2((c.history || []).reduce((a: number, h: any) => a + (Number(h.amount) || 0), 0));
+      return { c, rows, stored, stmt, histSum, diff: r2(stmt - stored) };
+    }).filter(x => Math.abs(x.diff) > 0.009).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  }, [auditOpen, customers, invoices]);
+  const auditSel = auditCode ? auditRows.find(x => x.c.code === auditCode) : null;
+  const applyStatementBalance = async (x: { c: any; stored: number; stmt: number; diff: number }) => {
+    if (!await askConfirm(`سيتم تغيير رصيد العميل ${x.c.name} المخزّن من ${x.stored.toLocaleString()} إلى ${x.stmt.toLocaleString()} (نفس رقم كشف الحساب). الحركات والفواتير لن تتغيّر. هل أنت متأكد؟`)) return;
+    logOp('update', `ضبط رصيد العميل ${x.c.name} ليطابق كشف الحساب`, [
+      `العميل: ${x.c.name} (${x.c.code})`,
+      `الرصيد المخزّن (اللي كان ظاهر في القائمة): ${opMoney(x.stored)}`,
+      `رقم كشف الحساب: ${opMoney(x.stmt)}`,
+      `الفرق: ${opMoney(x.diff)}`,
+      'تم اعتماد رقم كشف الحساب كرصيد للعميل (الحركات والفواتير لم تتغيّر)'
+    ], x.c.code);
+    await updateCustomer(x.c.code, { balance: x.stmt, currentBalance: x.stmt });
+    setAuditCode(null);
+  };
 
   // Handler to print statement with optional custom dates
   const handlePrintStatement = (sDate?: string, eDate?: string) => {
@@ -1123,6 +1151,15 @@ export const Customers: React.FC = () => {
           >
             <Layers size={15} /> كشف حساب مجمع للعملاء
           </button>
+          {isFullAdmin(currentUser) && (
+            <button
+              onClick={() => { setAuditCode(null); setAuditOpen(true); }}
+              className="flex items-center gap-1.5 bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-amber-700 transition-colors shadow-xs"
+              title="مقارنة رصيد كل عميل في القائمة برقم كشف حسابه، وإظهار أي اختلاف"
+            >
+              <AlertTriangle size={15} /> مراجعة الأرصدة
+            </button>
+          )}
         </div>
       </div>
 
@@ -2687,6 +2724,73 @@ export const Customers: React.FC = () => {
         </div>
       )}
 
+      {auditOpen && (
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-3" onClick={() => setAuditOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[88vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-gray-800">مراجعة أرصدة العملاء</h3>
+                <p className="text-[11px] text-gray-500">بتظهر بس العملاء اللي رصيدهم في القائمة مختلف عن رقم كشف الحسابهم. مفيش حاجة بتتغيّر إلا لما تضغط "اعتماد".</p>
+              </div>
+              <button onClick={() => setAuditOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+            </div>
+            <div className="overflow-y-auto p-4 text-sm">
+              {auditRows.length === 0 ? (
+                <div className="text-center text-emerald-700 font-bold py-10">كل العملاء رصيد القائمة عندهم مطابق لكشف الحساب ✔</div>
+              ) : !auditSel ? (
+                <table className="w-full text-xs text-right">
+                  <thead className="text-gray-500"><tr><th className="p-2">العميل</th><th className="p-2">رصيد القائمة</th><th className="p-2">رقم الكشف</th><th className="p-2">الفرق</th><th className="p-2"></th></tr></thead>
+                  <tbody className="divide-y">
+                    {auditRows.map(x => (
+                      <tr key={x.c.code}>
+                        <td className="p-2 font-bold">{x.c.name} <span className="text-gray-400 font-mono">({x.c.code})</span></td>
+                        <td className="p-2 font-mono" dir="ltr">{x.stored.toLocaleString()}</td>
+                        <td className="p-2 font-mono" dir="ltr">{x.stmt.toLocaleString()}</td>
+                        <td className="p-2 font-mono font-bold text-red-600" dir="ltr">{x.diff.toLocaleString()}</td>
+                        <td className="p-2"><button onClick={() => setAuditCode(x.c.code)} className="text-blue-600 font-bold">التفاصيل</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="space-y-3">
+                  <button onClick={() => setAuditCode(null)} className="text-blue-600 text-xs font-bold">← رجوع للقائمة</button>
+                  <div className="font-bold text-base">{auditSel.c.name} <span className="text-gray-400 font-mono text-xs">({auditSel.c.code})</span></div>
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="bg-gray-50 rounded-lg p-2">رصيد القائمة<div className="font-mono font-bold text-sm" dir="ltr">{auditSel.stored.toLocaleString()}</div></div>
+                    <div className="bg-gray-50 rounded-lg p-2">رقم كشف الحساب<div className="font-mono font-bold text-sm" dir="ltr">{auditSel.stmt.toLocaleString()}</div></div>
+                    <div className="bg-red-50 rounded-lg p-2 text-red-700">الفرق<div className="font-mono font-bold text-sm" dir="ltr">{auditSel.diff.toLocaleString()}</div></div>
+                  </div>
+                  <p className="text-xs text-gray-600">الحركات المستقلة في الكشف (دفعات / تسويات / حركات يدوية مش تابعة لفاتورة). لو فيها حركة قيمتها بتساوي الفرق، يبقى غالباً هي دفعة قديمة فاضلة بعد تعديل فاتورة:</p>
+                  <table className="w-full text-xs text-right">
+                    <thead className="text-gray-500"><tr><th className="p-1.5">التاريخ</th><th className="p-1.5">البيان</th><th className="p-1.5">المبلغ</th><th className="p-1.5"></th></tr></thead>
+                    <tbody className="divide-y">
+                      {auditSel.rows.filter(r => r.historyIndex !== undefined).map((r, i) => {
+                        const suspect = Math.abs(Math.abs(Number(r.amount) || 0) - Math.abs(auditSel.diff)) < 0.01;
+                        return (
+                          <tr key={i} className={suspect ? 'bg-amber-50' : ''}>
+                            <td className="p-1.5 font-mono">{r.date}</td>
+                            <td className="p-1.5">{r.description}</td>
+                            <td className="p-1.5 font-mono" dir="ltr">{Number(r.amount).toLocaleString()}</td>
+                            <td className="p-1.5 text-amber-700 font-bold">{suspect ? 'بنفس قيمة الفرق' : ''}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="bg-blue-50 text-blue-900 rounded-lg p-3 text-xs leading-6">
+                    الحل حسب الرقم الصح في الواقع: لو <b>رقم الكشف</b> هو الصح، اضغط "اعتماد رقم الكشف". ولو <b>رصيد القائمة</b> هو الصح، يبقى في حركة زيادة في الكشف: احذفها من كشف العميل (بتروح لسلة المهملات وتقدر ترجعها).
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => applyStatementBalance(auditSel)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-700">اعتماد رقم الكشف ({auditSel.stmt.toLocaleString()}) كرصيد للعميل</button>
+                    <button onClick={() => setAuditCode(null)} className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-xs font-bold">إلغاء</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {dialog}
       {/* Consolidated Statement Modal */}
       <ConsolidatedLedgerModal
