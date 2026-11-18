@@ -29,7 +29,7 @@ import { canDo } from '../utils/permissions';
 import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
-  const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo } = useERP();
+  const { customerBalanceOf, invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo } = useERP();
   
   const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
   const canEditInvoices = canDo(currentUser, 'invoice.edit');
@@ -117,8 +117,8 @@ export const SalesHistory: React.FC = () => {
       const cust = customers.find(c => c.code === inv.customerCode);
       const invoiceWithLiveBal = {
         ...inv,
-        currentBalance: cust ? cust.balance : inv.currentBalance,
-        liveCustomerBalance: cust ? cust.balance : inv.currentBalance
+        currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
+        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance
       };
       await shareSalesInvoiceImageViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, syncTab);
     } catch (err: any) {
@@ -161,8 +161,8 @@ export const SalesHistory: React.FC = () => {
       const cust = customers.find(c => c.code === inv.customerCode);
       const invoiceWithLiveBal = {
         ...inv,
-        currentBalance: cust ? cust.balance : inv.currentBalance,
-        liveCustomerBalance: cust ? cust.balance : inv.currentBalance
+        currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
+        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance
       };
       await shareSalesInvoicePdfViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, null, syncTab);
     } catch (err: any) {
@@ -597,16 +597,16 @@ export const SalesHistory: React.FC = () => {
                           <span className="font-bold text-gray-900 block">{inv.customerName}</span>
                           <span 
                             className={`text-[10px] font-bold font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${
-                              (cust ? cust.balance : (inv.currentBalance || 0)) < 0 
+                              (cust ? customerBalanceOf(cust) : (inv.currentBalance || 0)) < 0 
                                 ? 'bg-red-50 text-red-700 border-red-200' 
-                                : (cust ? cust.balance : (inv.currentBalance || 0)) > 0
+                                : (cust ? customerBalanceOf(cust) : (inv.currentBalance || 0)) > 0
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                   : 'bg-gray-50 text-gray-600 border-gray-200'
                             }`}
                             title="إجمالي مديونية / رصيد العميل الحالي في النظام"
                           >
                             <span>الرصيد الحالي:</span>
-                            <span dir="ltr">{(cust ? cust.balance : (inv.currentBalance || 0)).toLocaleString()} ج.م</span>
+                            <span dir="ltr">{(cust ? customerBalanceOf(cust) : (inv.currentBalance || 0)).toLocaleString()} ج.م</span>
                           </span>
                         </div>
                         {areaName && (
@@ -666,7 +666,7 @@ export const SalesHistory: React.FC = () => {
 
                       <button 
                         onClick={() => {
-                          const liveBal = cust ? cust.balance : inv.currentBalance;
+                          const liveBal = cust ? customerBalanceOf(cust) : inv.currentBalance;
                           printInvoice({ ...inv, currentBalance: liveBal, liveCustomerBalance: liveBal });
                         }}
                         className="bg-gray-100 text-gray-700 hover:bg-gray-200 p-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
@@ -1012,11 +1012,11 @@ export const SalesHistory: React.FC = () => {
                 <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 col-span-2 sm:col-span-1">
                    <span className="block text-amber-800 text-[11px] font-bold mb-0.5">مديونية العميل الحالية</span>
                    <span className={`font-black text-sm font-mono ${
-                     (customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0) < 0
+                     (((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance ?? 0) < 0
                        ? 'text-red-700'
                        : 'text-emerald-700'
                    }`} dir="ltr">
-                     {(customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0).toLocaleString()} ج.م
+                     {(((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance ?? 0).toLocaleString()} ج.م
                    </span>
                 </div>
               </div>
@@ -1064,7 +1064,7 @@ export const SalesHistory: React.FC = () => {
                   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
                   // مديونية العميل الحالية الآن (تشمل جميع الحركات والتحصيلات اللاحقة)
-                  const liveCustomerDebt = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0;
+                  const liveCustomerDebt = ((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance ?? 0;
 
                   return (
                     <div className="bg-gray-900 text-white p-4 rounded-xl w-full sm:w-2/3 space-y-2">
@@ -1132,7 +1132,7 @@ export const SalesHistory: React.FC = () => {
                 {/* 3. طباعة الفاتورة */}
                 <button 
                   onClick={() => {
-                    const custBal = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance;
+                    const custBal = ((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance;
                     printInvoice({ 
                       ...selectedInvoice, 
                       currentBalance: custBal,

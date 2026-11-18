@@ -13,9 +13,9 @@ import { calculateSupplierBalance } from '../utils/supplierStatement';
 import { CustomerToSupplierTransfer } from '../components/CustomerToSupplierTransfer';
 
 export const Transfers: React.FC = () => {
-  const { customers, suppliers, employees, treasury, purchases, addTransfer, deleteTransfer } = useERP();
+  const { customers, suppliers, employees, treasury, purchases, addTransfer, deleteTransfer, customerBalanceOf } = useERP();
   // رصيد المورد بيتحسب من كشف حسابه (نفس المصدر في صفحة الموردين)، مش من الرقم المخزّن
-  const balanceOf = (e: any): number => (entityType === 'SUPPLIER' ? calculateSupplierBalance(e as Supplier, purchases) : e.balance);
+  const balanceOf = (e: any): number => (entityType === 'SUPPLIER' ? calculateSupplierBalance(e as Supplier, purchases) : entityType === 'CUSTOMER' ? customerBalanceOf(e) : e.balance);
   const __me = useERP().currentUser;
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
@@ -653,7 +653,7 @@ export const Transfers: React.FC = () => {
                       <datalist id="transfersEntityList">
                         {availableCustomers.map(c => (
                           <option key={`tr_cust_${c.code}`} value={formatEntityLabel(c)}>
-                            رصيد سابق: {c.balance.toLocaleString()} ج.م
+                            رصيد سابق: {customerBalanceOf(c).toLocaleString()} ج.م
                           </option>
                         ))}
                       </datalist>
@@ -688,9 +688,9 @@ export const Transfers: React.FC = () => {
                                 </div>
                                 <div className="text-left shrink-0">
                                   <span className={`font-mono text-xs font-bold ${
-                                    c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                    customerBalanceOf(c) < 0 ? 'text-red-600' : customerBalanceOf(c) > 0 ? 'text-emerald-700' : 'text-gray-500'
                                   }`} dir="ltr">
-                                    {c.balance.toLocaleString()} ج.م
+                                    {customerBalanceOf(c).toLocaleString()} ج.م
                                   </span>
                                 </div>
                               </button>

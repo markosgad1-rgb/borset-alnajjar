@@ -17,7 +17,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
   initialTab = 'CUSTOMERS',
   onSelectEntity
 }) => {
-  const { customers, suppliers, invoices, purchases, printConsolidatedLedger, companyLogo } = useERP();
+  const { customers, suppliers, invoices, purchases, printConsolidatedLedger, companyLogo, customerBalanceOf } = useERP();
 
   const [activeTab, setActiveTab] = useState<'CUSTOMERS' | 'SUPPLIERS' | 'ALL'>(initialTab);
   const [viewMode, setViewMode] = useState<'BALANCES' | 'MOVEMENTS'>('BALANCES');
@@ -128,7 +128,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       // If no start date filter, use real cust.balance. If date filter active, prior - periodDebit + periodCredit
       const finalBal = filterStartDate || filterEndDate
         ? (prior - periodDebit + periodCredit)
-        : cust.balance;
+        : customerBalanceOf(cust);
 
       const status: 'مدين' | 'دائن' | 'متزن' = finalBal < 0 ? 'مدين' : finalBal > 0 ? 'دائن' : 'متزن';
 

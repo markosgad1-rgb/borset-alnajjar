@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect, useRef, useMemo } from 'react';
 import { Product, Customer, CustomerHistory, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId, LedgerTrashItem } from '../types';
 import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
@@ -19,6 +19,7 @@ import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline'
 import { logEvent, setAuditUser, runAsSystem, logOp, quietOps, opMoney, opPm, opBranch, opChange, opItemLines, opItemDiff } from '../utils/auditLog';
 import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
 import { canDo, getPermLabel } from '../utils/permissions';
+import { statementBalanceOf, safeToAutoAlign } from '../utils/customerStatement';
 
 interface ERPContextType {
   products: Product[];
@@ -141,6 +142,8 @@ interface ERPContextType {
     movement: { id?: string; date: string; description: string; amount?: number; credit?: number; debit?: number; purchaseId?: string; invoiceId?: string; invoiceNo?: string; isInvoiceItem?: boolean; isOpeningBalance?: boolean; paymentId?: string; historyIndex?: number }
   ) => Promise<void>;
   
+  // رقم العميل زي ما هو في كشف الحساب بالظبط (الرقم الموحّد اللي بيظهر في كل الصفحات)
+  customerBalanceOf: (c: any) => number;
   // Trash and Soft Delete operations
   ledgerTrash: LedgerTrashItem[];
   restoreLedgerMovement: (id: string) => Promise<{ success: boolean; message?: string }>;
@@ -5389,8 +5392,44 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gPurgeEntity = gate('trash.purge', permanentDeleteEntity, noPerm('trash.purge'));
   const gRestoreBackup = gate('backup', restoreBackupData, { success: false, message: 'ليس لديك صلاحية: النسخ الاحتياطي والاسترجاع' });
 
+  // ===== رقم العميل الموحّد = رقم كشف الحساب =====
+  const stmtBalCache = useMemo(() => new WeakMap<object, number>(), [invoices]);
+  const customerBalanceOf = (c: any): number => {
+    if (!c) return 0;
+    const hit = stmtBalCache.get(c);
+    if (hit !== undefined) return hit;
+    const v = statementBalanceOf(c, invoices);
+    stmtBalCache.set(c, v);
+    return v;
+  };
+  // ضبط تلقائي: الرصيد المخزّن للعميل يتضبط على رقم الكشف (للحالات الآمنة بس)، وكل ضبط بيتسجل في سجل النشاط
+  const alignTriedRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!currentUser || !isOnline || customers.length === 0 || invoices.length === 0) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const t = setTimeout(async () => {
+      for (const c of customers) {
+        if (c.isDeleted) continue;
+        const stored = Math.round((Number(c.balance) || 0) * 100) / 100;
+        const stmt = customerBalanceOf(c);
+        if (Math.abs(stmt - stored) <= 0.009) continue;
+        if (!safeToAutoAlign(c, invoices, stmt)) continue;
+        if (alignTriedRef.current[c.code] === stmt) continue;
+        alignTriedRef.current[c.code] = stmt;
+        logOp('update', `(تلقائي) ضبط رصيد العميل ${c.name} ليطابق كشف الحساب`, [
+          `العميل: ${c.name} (${c.code})`,
+          `الرصيد المخزّن: ${opMoney(stored)} ← ${opMoney(stmt)}`,
+          'ضبط تلقائي (الحركات والفواتير لم تتغيّر)'
+        ], c.code);
+        await updateCustomer(c.code, { balance: stmt, currentBalance: stmt });
+      }
+    }, 8000); // 8 ثواني من آخر تغيير، عشان منضبطش في نص عملية شغالة
+    return () => clearTimeout(t);
+  }, [customers, invoices, currentUser]);
+
   return (
     <ERPContext.Provider value={{
+      customerBalanceOf,
       products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
       transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: gTransferCash,

@@ -17,7 +17,8 @@ export const Dashboard: React.FC = () => {
     currentTreasuryBalanceNozha,
     invoices, 
     deleteInvoice,
-    currentUser
+    currentUser,
+    customerBalanceOf
   } = useERP();
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
@@ -39,13 +40,13 @@ export const Dashboard: React.FC = () => {
   const totalStockNozhaValue = products.reduce((sum, p) => sum + ((p.quantityNozha ?? 0) * p.price), 0);
 
   // Calculations for Customer Debt (Split by branch)
-  const totalCustomerDebt = activeCustomers.reduce((sum, c) => sum + c.balance, 0);
+  const totalCustomerDebt = activeCustomers.reduce((sum, c) => sum + customerBalanceOf(c), 0);
   const customerDebtMarg = activeCustomers
     .filter(c => (c.branchId || 'MARG') === 'MARG')
-    .reduce((sum, c) => sum + c.balance, 0);
+    .reduce((sum, c) => sum + customerBalanceOf(c), 0);
   const customerDebtNozha = activeCustomers
     .filter(c => c.branchId === 'NOZHA')
-    .reduce((sum, c) => sum + c.balance, 0);
+    .reduce((sum, c) => sum + customerBalanceOf(c), 0);
 
   // Calculations for Supplier Debt (Split by branch delivery attribution)
   // نفس مصدر كشف الحساب المجمع: صافي أرصدة الموردين من كشف حساب كل مورد (سالب في الكشف = علينا، فبنقلب الإشارة)

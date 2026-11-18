@@ -12,7 +12,7 @@ import { CartNumberInput } from '../components/CartNumberInput';
 import { canDo } from '../utils/permissions';
 
 export const Sales: React.FC = () => {
-  const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
+  const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser, customerBalanceOf } = useERP();
   const netUp = useNetworkStatus();
   
   const canEditPrices = canDo(currentUser, 'price.edit');
@@ -182,7 +182,7 @@ export const Sales: React.FC = () => {
     if (customer && !customer.isDeleted) {
       setCustomerCode(customer.code);
       setCustomerName(customer.name);
-      setCustomerBalance(customer.balance);
+      setCustomerBalance(customerBalanceOf(customer));
       setCustomerSearchText(formatCustomerLabel(customer));
       if (customer.branchId && customer.branchId !== selectedBranch) {
         setSelectedBranch(customer.branchId);
@@ -213,7 +213,7 @@ export const Sales: React.FC = () => {
     const customer = activeCustomers.find(c => c.code.toLowerCase() === trimmed);
     if (customer) {
       setCustomerName(customer.name);
-      setCustomerBalance(customer.balance);
+      setCustomerBalance(customerBalanceOf(customer));
       setCustomerSearchText(formatCustomerLabel(customer));
       if (customer.branchId && customer.branchId !== selectedBranch) {
         setSelectedBranch(customer.branchId);
@@ -768,7 +768,7 @@ export const Sales: React.FC = () => {
                   <datalist id="customerNamesList">
                     {availableCustomers.map(c => (
                       <option key={`cust_name_${c.code}`} value={formatCustomerLabel(c)}>
-                        رصيد سابق: {c.balance.toLocaleString()} ج.م
+                        رصيد سابق: {customerBalanceOf(c).toLocaleString()} ج.م
                       </option>
                     ))}
                   </datalist>
@@ -802,9 +802,9 @@ export const Sales: React.FC = () => {
                             </div>
                             <div className="text-left shrink-0">
                               <span className={`font-mono text-xs font-bold ${
-                                c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                customerBalanceOf(c) < 0 ? 'text-red-600' : customerBalanceOf(c) > 0 ? 'text-emerald-700' : 'text-gray-500'
                               }`} dir="ltr">
-                                {c.balance.toLocaleString()} ج.م
+                                {customerBalanceOf(c).toLocaleString()} ج.م
                               </span>
                             </div>
                           </button>
@@ -1377,7 +1377,8 @@ export const Sales: React.FC = () => {
 
               {/* شريط سفلي مستقل: رصيد العميل الحالي في كشف الحساب */}
               {(() => {
-                const liveCustBal = customers.find(c => c.code === lastSavedInvoice?.customerCode)?.balance ?? lastSavedInvoice?.currentBalance ?? 0;
+                const __lc = customers.find(c => c.code === lastSavedInvoice?.customerCode);
+                const liveCustBal = __lc ? customerBalanceOf(__lc) : (lastSavedInvoice?.currentBalance ?? 0);
                 return (
                   <div className="mt-2 pt-2 border-t border-gray-200 bg-white p-2 rounded-lg text-[11px] flex justify-between items-center">
                     <span className="text-gray-600 font-bold">رصيد العميل الحالي في كشف الحساب:</span>

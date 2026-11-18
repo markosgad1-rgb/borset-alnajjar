@@ -15,7 +15,7 @@ const PM: { id: PaymentMethod; label: string }[] = [
 
 /** تحويل عميل -> مورد: العميل سدد للمورد من بره. بيتسجل وارد من العميل وصادر للمورد على نفس حساب الخزنة المختار. */
 export const CustomerToSupplierTransfer: React.FC<{ notify: (m: string) => void }> = ({ notify }) => {
-  const { customers, suppliers, purchases, addCustomerToSupplierTransfer } = useERP();
+  const { customers, suppliers, purchases, addCustomerToSupplierTransfer, customerBalanceOf } = useERP();
   const [custCode, setCustCode] = useState('');
   const [supCode, setSupCode] = useState('');
   const [custSearch, setCustSearch] = useState('');
@@ -33,7 +33,7 @@ export const CustomerToSupplierTransfer: React.FC<{ notify: (m: string) => void 
   const sup = activeS.find(s => s.code === supCode);
   const supBal = sup ? calculateSupplierBalance(sup as Supplier, purchases) : 0;
   const amt = parseNumberFromCommas(amount);
-  const custDebt = cust ? Math.max(0, -(cust.balance || 0)) : 0;
+  const custDebt = cust ? Math.max(0, -(customerBalanceOf(cust) || 0)) : 0;
   const supDebt = sup ? Math.max(0, -supBal) : 0;
 
   const cList = custSearch.trim() && !cust
@@ -84,7 +84,7 @@ export const CustomerToSupplierTransfer: React.FC<{ notify: (m: string) => void 
               ))}
             </div>
           )}
-          {cust && <div className="text-xs mt-1 text-gray-600">{custDebt > 0 ? `عليه مديونية: ${custDebt.toLocaleString()} ج.م` : `الرصيد: ${(cust.balance || 0).toLocaleString()} ج.م`}</div>}
+          {cust && <div className="text-xs mt-1 text-gray-600">{custDebt > 0 ? `عليه مديونية: ${custDebt.toLocaleString()} ج.م` : `الرصيد: ${(customerBalanceOf(cust) || 0).toLocaleString()} ج.م`}</div>}
         </div>
         <div className="relative">
           <label className="block text-sm font-bold mb-1">المورد</label>
