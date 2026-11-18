@@ -59,7 +59,8 @@ export const UserManagement: React.FC = () => {
     role: 'USER' as 'ADMIN' | 'USER',
     permissions: initialPermissions,
     allowedBranch: '' as 'MARG' | 'NOZHA' | '',
-    allowedAreas: [] as string[]
+    allowedAreas: [] as string[],
+    allowSystemPage: false
   });
 
   const resetForm = () => {
@@ -70,7 +71,8 @@ export const UserManagement: React.FC = () => {
       role: 'USER',
       permissions: initialPermissions,
       allowedBranch: '',
-      allowedAreas: []
+      allowedAreas: [],
+      allowSystemPage: false
     });
     setIsEditing(false);
     setEditingId(null);
@@ -138,7 +140,7 @@ export const UserManagement: React.FC = () => {
         resetForm();
         return;
       }
-      updateUser(editingId, { ...formData, allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch, allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
+      updateUser(editingId, { ...formData, allowSystemPage: finalRole === 'ADMIN' && formData.allowSystemPage, allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch, allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
       alert(finalRole === 'ADMIN' ? 'تم ترقية/تحديث المستخدم كمدير نظام كامل بنجاح' : 'تم تحديث بيانات المستخدم وتعديل صلاحياته كمستخدم عادي بنجاح');
     } else {
       if (users.some(u => u.username === formData.username)) {
@@ -148,6 +150,7 @@ export const UserManagement: React.FC = () => {
       addUser({
         id: Date.now().toString(),
         ...formData,
+        allowSystemPage: finalRole === 'ADMIN' && formData.allowSystemPage,
         allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch,
         allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas,
         role: finalRole,
@@ -178,6 +181,7 @@ export const UserManagement: React.FC = () => {
       role: isAdmin ? 'ADMIN' : 'USER',
       allowedBranch: (user.allowedBranch === 'MARG' || user.allowedBranch === 'NOZHA') ? user.allowedBranch : '',
       allowedAreas: Array.isArray(user.allowedAreas) ? user.allowedAreas : [],
+      allowSystemPage: user.allowSystemPage === true,
       permissions: {
         canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales ?? isAdmin),
         canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales ?? isAdmin),
@@ -565,6 +569,13 @@ export const UserManagement: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {formData.permissions.admin && (
+              <label className="flex items-center gap-3 cursor-pointer bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <input type="checkbox" checked={formData.allowSystemPage} onChange={() => setFormData(prev => ({ ...prev, allowSystemPage: !prev.allowSystemPage }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm font-bold text-gray-800">السماح له بصفحة "إدارة السيستم" (مخفية عنه لو ما اتفعلتش)</span>
+              </label>
+            )}
 
             {/* مدير نظام كامل */}
             <div className={`p-4 rounded-xl border transition-all ${formData.permissions.admin ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-200' : 'bg-slate-50 border-slate-200'}`}>

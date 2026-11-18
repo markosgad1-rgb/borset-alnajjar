@@ -105,7 +105,8 @@ export const canDo = (user: Partial<User> | null | undefined, key: string): bool
 
 export const canViewPage = (user: Partial<User> | null | undefined, page: string): boolean => {
   if (page === 'activity') return isFullAdmin(user) || canDo(user, 'view.activity');
-  if (page === 'users' || page === 'system') return isFullAdmin(user) && (page !== 'users' || user?.username === 'admin');
+  if (page === 'system') return !!user && (user.username === 'admin' || (isFullAdmin(user) && (user as any).allowSystemPage === true));
+  if (page === 'users') return isFullAdmin(user) && user?.username === 'admin';
   const def = DEF_BY_KEY[`view.${page}`];
   if (!def) return true;
   return canDo(user, def.key);
