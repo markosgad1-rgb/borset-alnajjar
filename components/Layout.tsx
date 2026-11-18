@@ -81,7 +81,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   const filteredNav = navItems.filter(item => canViewPage(currentUser, item.id));
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-brand-50 print:bg-white print:block">
+    <div className="min-h-screen md:h-screen md:overflow-hidden flex flex-col md:flex-row bg-brand-50 print:bg-white print:block print:h-auto print:overflow-visible">
       {!persistenceOk && (
         <div className="fixed top-0 left-0 right-0 bg-red-700 text-white text-sm font-bold p-2 z-50 text-center print:hidden">
           ⚠️ هذا المتصفح لا يحفظ البيانات على الجهاز (غالباً وضع التصفح الخاص). لا تعتمد على العمل أوفلاين هنا، واستخدم نافذة عادية.
@@ -169,7 +169,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
 
       {/* Sidebar */}
       <aside className={`
-        print:hidden fixed md:static inset-y-0 right-0 z-50 w-72 md:w-64 bg-gradient-to-b from-brand-800 to-brand-900 text-white shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col scrollbar-none no-scrollbar
+        print:hidden fixed md:static md:h-screen md:shrink-0 md:overflow-hidden inset-y-0 right-0 z-50 w-72 md:w-64 bg-gradient-to-b from-brand-800 to-brand-900 text-white shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col scrollbar-none no-scrollbar
         ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
       `}>
         {/* Drawer Header: Compact on Mobile, Luxurious & Centered on Desktop */}
@@ -203,7 +203,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           </button>
         </div>
 
-        <nav className="flex-1 mt-1.5 lg:mt-3 px-2 lg:px-3 overflow-y-auto scrollbar-none no-scrollbar lg:space-y-1.5">
+        <nav className="flex-1 min-h-0 mt-1.5 lg:mt-3 px-2 lg:px-3 overflow-y-auto scrollbar-none no-scrollbar lg:space-y-1.5">
           {filteredNav.map((item) => (
             <button
               key={item.id}
@@ -277,7 +277,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto print:overflow-visible print:h-auto print:p-0 p-2 md:p-4 h-screen">
+      <main className="flex-1 min-w-0 overflow-y-auto print:overflow-visible print:h-auto print:p-0 p-2 md:p-4 h-screen">
         {activePage !== 'customers' && activePage !== 'suppliers' && (
           <header className="mb-3 hidden md:flex print:hidden justify-between items-center bg-white py-2 px-4 rounded-xl shadow-xs border border-brand-100">
              <div className="flex items-center gap-4">
