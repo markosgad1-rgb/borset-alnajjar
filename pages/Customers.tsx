@@ -901,6 +901,20 @@ export const Customers: React.FC = () => {
     return Number(selectedCustomer.balance) || 0;
   }, [selectedCustomer, itemizedRows.length, totalItemizedCredit, totalItemizedDebit]);
 
+  // الرقم اللي بيظهر جنب اسم العميل في القائمة = نفس رقم كشف الحساب (محسوب بنفس الدالة)
+  const listCache = useMemo(() => new WeakMap<object, number>(), [invoices]);
+  const listBalanceOf = (c: any): number => {
+    const hit = listCache.get(c);
+    if (hit !== undefined) return hit;
+    let v = Number(c.balance) || 0;
+    try {
+      const rows = getItemizedRowsForRange(undefined, undefined, c);
+      if (rows.length > 0) { v = Math.round(rows.reduce((a: number, r: any) => a + r.credit - r.debit, 0) * 100) / 100; if (Object.is(v, -0)) v = 0; }
+    } catch { /* لو حصل خطأ نعرض الرصيد المخزّن */ }
+    listCache.set(c, v);
+    return v;
+  };
+
   // ===== مراجعة الأرصدة: مقارنة رصيد القائمة (المخزّن) برقم كشف الحساب لكل عميل =====
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditCode, setAuditCode] = useState<string | null>(null);
@@ -1185,7 +1199,8 @@ export const Customers: React.FC = () => {
             ) : (
               filteredCustomers.map((c, idx) => {
                 const isSelected = selectedCustomer?.code === c.code;
-                const displayBal = (isSelected && typeof finalItemizedBalance === 'number') ? finalItemizedBalance : (c.balance || 0);
+                const displayBal = listBalanceOf(c); // نفس رقم كشف الحساب بالظبط
+                const listMismatch = Math.abs((Number(c.balance) || 0) - displayBal) > 0.009;
                 const isNegative = displayBal < 0;
                 const isPositive = displayBal > 0;
                 const bId = c.branchId || 'MARG';
@@ -1234,6 +1249,7 @@ export const Customers: React.FC = () => {
                         </p>
                         <p className="text-[9px] text-gray-400">
                           {isNegative ? 'عليه' : isPositive ? 'له' : 'خالص'}
+                          {listMismatch && <span className="text-amber-600 font-bold" title={`الرصيد المخزّن في باقي الصفحات: ${(Number(c.balance) || 0).toLocaleString()} (مختلف عن الكشف)`}> ⚠</span>}
                         </p>
                       </div>
 
@@ -1498,6 +1514,12 @@ export const Customers: React.FC = () => {
                       {finalItemizedBalance < 0 ? 'مدين (عليه لنا)' : finalItemizedBalance > 0 ? 'دائن (له علينا)' : 'خالص'}
                     </span>
                   </div>
+                  {itemizedRows.length > 0 && Math.abs((Number(selectedCustomer.balance) || 0) - finalItemizedBalance) > 0.009 && (
+                    <div className="mt-1.5 text-[10px] leading-4 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-2 py-1 max-w-[220px]">
+                      ⚠ رصيد القائمة المخزّن ({(Number(selectedCustomer.balance) || 0).toLocaleString()}) مختلف عن رقم الكشف.
+                      {isFullAdmin(currentUser) ? ' راجعه من زرار "مراجعة الأرصدة".' : ' بلّغ المدير.'}
+                    </div>
+                  )}
 
                 </div>
 
@@ -2761,6 +2783,21 @@ export const Customers: React.FC = () => {
                     <div className="bg-gray-50 rounded-lg p-2">رقم كشف الحساب<div className="font-mono font-bold text-sm" dir="ltr">{auditSel.stmt.toLocaleString()}</div></div>
                     <div className="bg-red-50 rounded-lg p-2 text-red-700">الفرق<div className="font-mono font-bold text-sm" dir="ltr">{auditSel.diff.toLocaleString()}</div></div>
                   </div>
+                  {(() => {
+                    const x = auditSel;
+                    const activeIds = new Set(invoices.filter(i => !i.isDeleted).map(i => String(i.id)));
+                    const orphan = (x.c.history || []).filter((h: any) => {
+                      const d = String(h.description || '');
+                      if (!d.includes('فاتورة بيع') || d.includes('دفعة') || d.includes('إلغاء') || d.includes('تعديل فاتورة')) return false;
+                      const m = d.match(/#([A-Za-z0-9-]+)/);
+                      return !!m && !activeIds.has(m[1]);
+                    });
+                    const lines: string[] = [];
+                    if (orphan.length > 0) lines.push(`⛔ في ${orphan.length} حركة "فاتورة بيع" في كشف العميل فاتورتها مش موجودة (اتمسحت). الكشف بيتجاهلها ويعرض الدفعات بس، فرقم الكشف غالباً غلط. لا تعتمد رقم الكشف؛ الأنسب تصفير كشف العميل لو هو فعلاً مصفّر.`);
+                    if (Math.abs(x.stored - x.histSum) > 0.009) lines.push(`رصيد القائمة (${x.stored.toLocaleString()}) مش بيساوي مجموع حركات الكشف (${x.histSum.toLocaleString()}): الرصيد المخزّن نفسه اتغيّر من غير حركة مقابلة.`);
+                    else lines.push(`رصيد القائمة بيساوي مجموع حركات الكشف (${x.histSum.toLocaleString()})، والاختلاف جاي من طريقة عرض الكشف (دفعات مستقلة أو فواتير معدّلة).`);
+                    return <div className="text-xs bg-gray-50 border rounded-lg p-3 leading-6 space-y-1">{lines.map((l, i) => <div key={i}>{l}</div>)}</div>;
+                  })()}
                   <p className="text-xs text-gray-600">الحركات المستقلة في الكشف (دفعات / تسويات / حركات يدوية مش تابعة لفاتورة). لو فيها حركة قيمتها بتساوي الفرق، يبقى غالباً هي دفعة قديمة فاضلة بعد تعديل فاتورة:</p>
                   <table className="w-full text-xs text-right">
                     <thead className="text-gray-500"><tr><th className="p-1.5">التاريخ</th><th className="p-1.5">البيان</th><th className="p-1.5">المبلغ</th><th className="p-1.5"></th></tr></thead>
