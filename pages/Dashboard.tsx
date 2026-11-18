@@ -12,6 +12,7 @@ export const Dashboard: React.FC = () => {
     customers, 
     suppliers, 
     purchases,
+    rawPurchases,
     currentTreasuryBalance, 
     currentTreasuryBalanceMarg,
     currentTreasuryBalanceNozha,
@@ -50,7 +51,7 @@ export const Dashboard: React.FC = () => {
 
   // Calculations for Supplier Debt (Split by branch delivery attribution)
   // نفس مصدر كشف الحساب المجمع: صافي أرصدة الموردين من كشف حساب كل مورد (سالب في الكشف = علينا، فبنقلب الإشارة)
-  const totalSupplierDebt = Math.round(activeSuppliers.reduce((sum, s) => sum - calculateSupplierBalance(s, purchases), 0) * 100) / 100;
+  const totalSupplierDebt = Math.round(activeSuppliers.reduce((sum, s) => sum - calculateSupplierBalance(s, rawPurchases), 0) * 100) / 100;
   const purchasesMargTotal = activePurchases
     .filter(p => (p.branchId || 'MARG') === 'MARG' && p.pricingStatus !== 'PENDING_PRICE')
     .reduce((sum, p) => sum + (p.total || 0), 0);

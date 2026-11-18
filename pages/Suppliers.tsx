@@ -19,7 +19,7 @@ export const Suppliers: React.FC = () => {
   const { 
     suppliers, addSupplier, updateSupplier, deleteSupplier,
     clearLedger, cleanCorruptedSupplierOpeningBalance,
-    currentUser, purchases, printLedger, printPurchaseInvoice,
+    currentUser, rawPurchases: purchases, printLedger, printPurchaseInvoice,
     companyLogo, deleteSupplierLedgerMovement, deletePurchase
   } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();

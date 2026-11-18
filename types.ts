@@ -315,6 +315,10 @@ export interface User {
   fullName: string;
   role: 'ADMIN' | 'USER';
   permissions: UserPermissions;
+  /** نطاق الفرع للمستخدم (فاضي = كل الفروع) */
+  allowedBranch?: 'MARG' | 'NOZHA' | '';
+  /** مناطق مسموحة داخل الفرع (فاضي = كل المناطق) */
+  allowedAreas?: string[];
 }
 
 export type PageView = 'dashboard' | 'reports' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users' | 'trash' | 'activity' | 'system';

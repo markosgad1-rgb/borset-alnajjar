@@ -15,7 +15,7 @@ const PM: { id: PaymentMethod; label: string }[] = [
 
 /** تحويل عميل -> مورد: العميل سدد للمورد من بره. بيتسجل وارد من العميل وصادر للمورد على نفس حساب الخزنة المختار. */
 export const CustomerToSupplierTransfer: React.FC<{ notify: (m: string) => void }> = ({ notify }) => {
-  const { customers, suppliers, purchases, addCustomerToSupplierTransfer, customerBalanceOf } = useERP();
+  const { customers, suppliers, rawPurchases: purchases, addCustomerToSupplierTransfer, customerBalanceOf } = useERP();
   const [custCode, setCustCode] = useState('');
   const [supCode, setSupCode] = useState('');
   const [custSearch, setCustSearch] = useState('');

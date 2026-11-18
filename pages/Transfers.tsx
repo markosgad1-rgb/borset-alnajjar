@@ -13,7 +13,7 @@ import { calculateSupplierBalance } from '../utils/supplierStatement';
 import { CustomerToSupplierTransfer } from '../components/CustomerToSupplierTransfer';
 
 export const Transfers: React.FC = () => {
-  const { customers, suppliers, employees, treasury, purchases, addTransfer, deleteTransfer, customerBalanceOf } = useERP();
+  const { customers, suppliers, employees, treasury, rawPurchases: purchases, addTransfer, deleteTransfer, customerBalanceOf, userScope } = useERP();
   // رصيد المورد بيتحسب من كشف حسابه (نفس المصدر في صفحة الموردين)، مش من الرقم المخزّن
   const balanceOf = (e: any): number => (entityType === 'SUPPLIER' ? calculateSupplierBalance(e as Supplier, purchases) : entityType === 'CUSTOMER' ? customerBalanceOf(e) : e.balance);
   const __me = useERP().currentUser;
@@ -21,7 +21,7 @@ export const Transfers: React.FC = () => {
   
   const [entityType, setEntityType] = useState<'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'>('CUSTOMER');
   
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
 
   const [formData, setFormData] = useState({
@@ -535,8 +535,8 @@ export const Transfers: React.FC = () => {
                       <span className="w-5 h-5 rounded-full bg-purple-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
                       اختيار الفرع / الإدارة
                     </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {BRANCHES.map(b => {
+                    <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                      {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => {
                         const isSelected = selectedBranch === b.id;
                         return (
                           <button

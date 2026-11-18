@@ -12,13 +12,13 @@ import { CartNumberInput } from '../components/CartNumberInput';
 import { canDo } from '../utils/permissions';
 
 export const Sales: React.FC = () => {
-  const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser, customerBalanceOf } = useERP();
+  const { addInvoice, products, customers, invoices, rawInvoices, userScope, printInvoice, companyLogo, currentUser, customerBalanceOf } = useERP();
   const netUp = useNetworkStatus();
   
   const canEditPrices = canDo(currentUser, 'price.edit');
 
   // Cascading Branch & Area State
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
 
   // Main Invoice State
@@ -98,10 +98,10 @@ export const Sales: React.FC = () => {
 
   useEffect(() => {
     const suffix = netUp ? '' : `-${getDeviceTag()}`;
-    if (invoices.length === 0) {
+    if (rawInvoices.length === 0) {
       setInvoiceId(`N001${suffix}`);
     } else {
-      const nIds = invoices
+      const nIds = rawInvoices
         .filter(inv => inv.id.startsWith('N'))
         .map(inv => parseInt(inv.id.replace(/\D/g, '')))
         .filter(num => !isNaN(num));
@@ -113,7 +113,7 @@ export const Sales: React.FC = () => {
         setInvoiceId(`N001${suffix}`);
       }
     }
-  }, [invoices, netUp]);
+  }, [rawInvoices, netUp]);
 
   // Calculated Totals
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
@@ -656,8 +656,8 @@ export const Sales: React.FC = () => {
                   <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
                   اختيار الإدارة / الفرع
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {BRANCHES.map(b => {
+                <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                  {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => {
                     const isSelected = selectedBranch === b.id;
                     return (
                       <button
@@ -701,7 +701,7 @@ export const Sales: React.FC = () => {
                       }}
                     >
                       <option value="ALL">جميع مناطق {selectedBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'} ({availableCustomers.length} عميل)</option>
-                      {availableBranchAreas.map(area => (
+                      {availableBranchAreas.filter(a => !userScope.restricted || userScope.areas.length === 0 || userScope.areas.includes(a)).map(area => (
                         <option key={area} value={area}>{area}</option>
                       ))}
                     </select>

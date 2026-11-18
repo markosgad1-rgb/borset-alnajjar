@@ -18,7 +18,7 @@ import { formatCustomerMovementDesc, getConsumedPaymentIndices as getConsumedPay
 
 export const Customers: React.FC = () => {
   const { 
-    customers, addCustomer, updateCustomer, deleteCustomer, customerBalanceOf, 
+    customers, rawCustomers, userScope, addCustomer, updateCustomer, deleteCustomer, customerBalanceOf, 
     clearLedger, 
     currentUser, invoices, printInvoice, printLedger, companyLogo,
     deleteCustomerLedgerMovement, deleteInvoice
@@ -37,7 +37,7 @@ export const Customers: React.FC = () => {
 
   // Search & Branch Filter state
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>('ALL');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'ALL');
   const [selectedAreaFilter, setSelectedAreaFilter] = useState<string>('ALL');
 
   // Consolidated Ledger Modal state
@@ -111,8 +111,8 @@ export const Customers: React.FC = () => {
 
   // Helper to generate next code
   const generateNextCode = () => {
-    if (customers.length === 0) return 'C001';
-    const maxId = customers.reduce((max, c) => {
+    if (rawCustomers.length === 0) return 'C001';
+    const maxId = rawCustomers.reduce((max, c) => {
       const num = parseInt(c.code.replace(/\D/g, ''));
       return !isNaN(num) && num > max ? num : max;
     }, 0);
@@ -791,7 +791,12 @@ export const Customers: React.FC = () => {
             </span>
           </div>
 
-          {/* Branch Filter Tabs */}
+          {/* Branch Filter Tabs (مخفية للمستخدم المقيّد بفرع) */}
+          {userScope.restricted ? (
+            <span className="inline-flex px-2.5 py-1 rounded-lg bg-gray-100 border border-gray-200 text-xs font-bold text-gray-700">
+              {userScope.branch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'}
+            </span>
+          ) : (
           <div className="inline-flex bg-gray-100 p-0.5 rounded-lg border border-gray-200 text-xs">
             <button 
               type="button" 
@@ -815,6 +820,7 @@ export const Customers: React.FC = () => {
               إدارة النزهة
             </button>
           </div>
+          )}
 
           {/* Dynamic Area Filter Dropdown */}
           {selectedBranchFilter !== 'ALL' && (
@@ -826,7 +832,7 @@ export const Customers: React.FC = () => {
                 className="bg-transparent text-xs font-bold text-gray-700 outline-none cursor-pointer max-w-[170px]"
               >
                 <option value="ALL">جميع مناطق {selectedBranchFilter === 'NOZHA' ? 'النزهة' : 'المرج'}</option>
-                {availableFilterAreas.map(a => (
+                {availableFilterAreas.filter(a => !userScope.restricted || userScope.areas.length === 0 || userScope.areas.includes(a)).map(a => (
                   <option key={a} value={a}>{a}</option>
                 ))}
               </select>
@@ -1221,12 +1227,6 @@ export const Customers: React.FC = () => {
                       {finalItemizedBalance < 0 ? 'مدين (عليه لنا)' : finalItemizedBalance > 0 ? 'دائن (له علينا)' : 'خالص'}
                     </span>
                   </div>
-                  {itemizedRows.length > 0 && Math.abs((Number(selectedCustomer.balance) || 0) - finalItemizedBalance) > 0.009 && (
-                    <div className="mt-1.5 text-[10px] leading-4 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-2 py-1 max-w-[220px]">
-                      ⚠ رصيد القائمة المخزّن ({(Number(selectedCustomer.balance) || 0).toLocaleString()}) مختلف عن رقم الكشف.
-                      {isFullAdmin(currentUser) ? ' راجعه من زرار "مراجعة الأرصدة".' : ' بلّغ المدير.'}
-                    </div>
-                  )}
 
                 </div>
 
@@ -1704,6 +1704,7 @@ export const Customers: React.FC = () => {
                 </label>
                 <select
                   value={formData.branchId}
+                  disabled={userScope.restricted}
                   onChange={(e) => {
                     const newBranch = e.target.value as BranchId;
                     setFormData(prev => ({

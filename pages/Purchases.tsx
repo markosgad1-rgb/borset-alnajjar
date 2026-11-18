@@ -9,7 +9,7 @@ import { CartNumberInput } from '../components/CartNumberInput';
 import { canDo } from '../utils/permissions';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers: allSuppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance, markPurchasesReviewed } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, rawPurchases, userScope, products, suppliers: allSuppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance, markPurchasesReviewed } = useERP();
   // الموردين المحذوفين (اللي في سلة المهملات) ما يظهروش في الاختيار أو الحفظ
   const suppliers = useMemo(() => allSuppliers.filter(s => !s.isDeleted), [allSuppliers]);
   const { confirm: askConfirm, notify, dialog } = useDialog();
@@ -19,7 +19,7 @@ export const Purchases: React.FC = () => {
 
   // Header State
   const [purchaseId, setPurchaseId] = useState('R001'); // Auto-generated ID
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [supplierCode, setSupplierCode] = useState('');
   const [supplierName, setSupplierName] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
@@ -92,10 +92,10 @@ export const Purchases: React.FC = () => {
 
   // Auto-generate Purchase ID (R001 series)
   useEffect(() => {
-    if (purchases.length === 0) {
+    if (rawPurchases.length === 0) {
       setPurchaseId('R001');
     } else {
-      const rIds = purchases
+      const rIds = rawPurchases
         .filter(p => p.id && p.id.startsWith('R'))
         .map(p => parseInt(p.id.replace(/\D/g, '')))
         .filter(num => !isNaN(num));
@@ -107,7 +107,7 @@ export const Purchases: React.FC = () => {
         setPurchaseId('R001');
       }
     }
-  }, [purchases]);
+  }, [rawPurchases]);
 
   const handleSupplierChange = (name: string) => {
     const supplier = suppliers.find(s => s.name === name);
@@ -230,7 +230,7 @@ export const Purchases: React.FC = () => {
   const remainingOnInvoice = Math.max(0, cartTotal - paidAmountVal);
 
   // Calculate expected new balance for display
-  const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, purchases) : 0;
+  const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, rawPurchases) : 0;
   const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal + paidAmountVal);
 
   const handleSaveInvoice = async () => {
@@ -533,8 +533,8 @@ export const Purchases: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b">
           <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-700">المخزن المستقبل (الإدارة)</label>
-            <div className="grid grid-cols-2 gap-2">
-              {BRANCHES.map(b => (
+            <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+              {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => (
                 <button
                   key={b.id}
                   type="button"

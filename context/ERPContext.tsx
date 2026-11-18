@@ -20,10 +20,16 @@ import { logEvent, setAuditUser, runAsSystem, logOp, quietOps, opMoney, opPm, op
 import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
 import { canDo, getPermLabel } from '../utils/permissions';
 import { statementBalanceOf, safeToAutoAlign } from '../utils/customerStatement';
+import { getUserScope, inScope, customerInScope, UserScope } from '../utils/userScope';
 
 interface ERPContextType {
   products: Product[];
   customers: Customer[];
+  /** كل البيانات بدون تصفية الفرع (للاستخدام الداخلي: توليد الأكواد) */
+  rawCustomers: Customer[];
+  rawInvoices: SalesInvoice[];
+  rawPurchases: Purchase[];
+  userScope: UserScope;
   suppliers: Supplier[];
   employees: Employee[];
   purchases: Purchase[];
@@ -1214,6 +1220,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addCustomer = async (customer: Customer) => {
     const cleanCode = (customer.code || '').trim();
     if (!cleanCode) return;
+    {
+      const sc = getUserScope(currentUser);
+      if (sc.restricted) {
+        const a = (customer.area || '').trim();
+        customer = { ...customer, branchId: sc.branch as BranchId, area: (sc.areas.length === 0 || sc.areas.includes(a)) ? a : sc.areas[0] };
+      }
+    }
     const bId: BranchId = customer.branchId === 'NOZHA' ? 'NOZHA' : 'MARG';
     const cArea = customer.area?.trim() || (bId === 'NOZHA' ? 'النزهة الجديدة' : 'المرج القديمة');
     const sanitized: Customer = {
@@ -1486,6 +1499,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // --- Purchase Logic ---
 
   const addPurchase = async (purchaseData: Omit<Purchase, 'previousBalance' | 'currentBalance'>) => {
+    { const sc = getUserScope(currentUser); if (sc.restricted) purchaseData = { ...purchaseData, branchId: sc.branch as BranchId } as any; }
     // Determine ID if not provided (fallback, but page should provide)
     const id = purchaseData.id || `R${Date.now()}`;
     const cleanId = String(id).trim().replace(/^#/, '');
@@ -2719,6 +2733,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     remainingAmount?: number;
     paymentMethod?: PaymentMethod;
   }) => {
+    {
+      const sc = getUserScope(currentUser);
+      if (sc.restricted) {
+        const cu = customers.find(c => c.code === invoiceData.customerCode);
+        if (cu && !customerInScope(sc, cu)) { console.warn('addInvoice: العميل خارج نطاق المستخدم'); return; }
+        invoiceData = { ...invoiceData, branchId: sc.branch as BranchId };
+      }
+    }
     const { id, total } = invoiceData;
     logOp('create', `إنشاء فاتورة بيع ${id} - العميل ${invoiceData.customerName} - إجمالي ${opMoney(total)}`, [
       `العميل: ${invoiceData.customerName} (${invoiceData.customerCode})`,
@@ -3706,6 +3728,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     notes?: string;
   }) => {
     const { customerCode, invoiceId, amount, date, paymentMethod, notes } = data;
+    {
+      const sc0 = getUserScope(currentUser);
+      if (sc0.restricted) {
+        const cu0 = customers.find(c => (c.code || '').trim().toLowerCase() === String(customerCode || '').trim().toLowerCase());
+        if (cu0 && !customerInScope(sc0, cu0)) { console.warn('addCollection: العميل خارج نطاق المستخدم'); return; }
+      }
+    }
     {
       const cu = customers.find(c => (c.code || '').trim().toLowerCase() === String(customerCode || '').trim().toLowerCase());
       logOp('create', `تحصيل من العميل ${cu?.name || data.customerName || customerCode} - ${opMoney(amount)}`, [
@@ -5427,10 +5456,34 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => clearTimeout(t);
   }, [customers, invoices, currentUser]);
 
+  // ===== نطاق الفرع/المنطقة للمستخدم (الأدمن = بدون تصفية) =====
+  const userScope = useMemo(() => getUserScope(currentUser), [currentUser]);
+  const scopedCustomers = useMemo(() => userScope.restricted ? customers.filter(c => inScope(userScope, c.branchId, c.area)) : customers, [customers, userScope]);
+  const scopedInvoices = useMemo(() => {
+    if (!userScope.restricted) return invoices;
+    const byCode = new Map<string, Customer>();
+    customers.forEach(c => byCode.set(c.code, c));
+    return invoices.filter(i => {
+      const c = byCode.get(i.customerCode);
+      return c ? inScope(userScope, c.branchId, c.area) : inScope(userScope, i.branchId, i.area);
+    });
+  }, [invoices, customers, userScope]);
+  const scopedPurchases = useMemo(() => userScope.restricted ? purchases.filter(p => (p.branchId || 'MARG') === userScope.branch) : purchases, [purchases, userScope]);
+  const scopedTreasury = useMemo(() => userScope.restricted ? treasury.filter(t => (t.branchId || 'MARG') === userScope.branch) : treasury, [treasury, userScope]);
+  const sumTr = (l: TreasuryTransaction[]) => l.reduce((a, t) => a + (t.credit - t.debit), 0);
+  const scopedBalances = userScope.restricted ? {
+    cash: sumTr(scopedTreasury.filter(t => t.paymentMethod === 'CASH' || !t.paymentMethod)),
+    bankMisr: sumTr(scopedTreasury.filter(t => t.paymentMethod === 'BANK_MISR')),
+    bankAhly: sumTr(scopedTreasury.filter(t => t.paymentMethod === 'BANK_AHLY')),
+    vfCashAyman: sumTr(scopedTreasury.filter(t => t.paymentMethod === 'VF_CASH_AYMAN')),
+    vfCashKyrillos: sumTr(scopedTreasury.filter(t => t.paymentMethod === 'VF_CASH_KYRILLOS')),
+  } : balances;
+
   return (
     <ERPContext.Provider value={{
       customerBalanceOf,
-      products, customers, suppliers, employees, purchases, invoices, treasury, users, currentUser, isOnline, permissionError, companyLogo,
+      rawCustomers: customers, rawInvoices: invoices, rawPurchases: purchases, userScope,
+      products, customers: scopedCustomers, suppliers, employees, purchases: scopedPurchases, invoices: scopedInvoices, treasury: scopedTreasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
       transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: gTransferCash,
       addPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
@@ -5439,7 +5492,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
       exportBackupData, restoreBackupData: gRestoreBackup,
-      currentTreasuryBalance, currentTreasuryBalanceMarg, currentTreasuryBalanceNozha, balances
+      currentTreasuryBalance: userScope.restricted ? sumTr(scopedTreasury) : currentTreasuryBalance,
+      currentTreasuryBalanceMarg: userScope.restricted && userScope.branch !== 'MARG' ? 0 : currentTreasuryBalanceMarg,
+      currentTreasuryBalanceNozha: userScope.restricted && userScope.branch !== 'NOZHA' ? 0 : currentTreasuryBalanceNozha,
+      balances: scopedBalances
     }}>
       {children}
     </ERPContext.Provider>

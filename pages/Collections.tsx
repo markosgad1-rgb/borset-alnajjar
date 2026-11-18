@@ -6,10 +6,10 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { useDialog } from '../utils/useDialog';
 
 export const Collections: React.FC = () => {
-  const { customers, addCollection, treasury, customerBalanceOf } = useERP();
+  const { customers, addCollection, treasury, customerBalanceOf, userScope } = useERP();
   const { notify, dialog } = useDialog();
   
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
 
   const [formData, setFormData] = useState({
@@ -271,8 +271,8 @@ export const Collections: React.FC = () => {
                     <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
                     اختيار الفرع / الإدارة
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {BRANCHES.map(b => {
+                  <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                    {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => {
                       const isSelected = selectedBranch === b.id;
                       return (
                         <button

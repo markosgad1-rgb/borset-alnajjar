@@ -17,7 +17,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
   initialTab = 'CUSTOMERS',
   onSelectEntity
 }) => {
-  const { customers, suppliers, invoices, purchases, printConsolidatedLedger, companyLogo, customerBalanceOf } = useERP();
+  const { customers, suppliers, invoices, rawPurchases: purchases, printConsolidatedLedger, companyLogo, customerBalanceOf } = useERP();
 
   const [activeTab, setActiveTab] = useState<'CUSTOMERS' | 'SUPPLIERS' | 'ALL'>(initialTab);
   const [viewMode, setViewMode] = useState<'BALANCES' | 'MOVEMENTS'>('BALANCES');

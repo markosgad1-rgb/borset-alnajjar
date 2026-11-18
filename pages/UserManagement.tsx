@@ -3,7 +3,7 @@ import { PAGE_DEFS, ACTION_GROUPS, effectiveMap, uniformMap, syncLegacyFlags } f
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Shield, UserPlus, Trash2, Edit, Check, X, Database, Loader2, Upload, Image as ImageIcon, Eye, Lock } from 'lucide-react';
-import { User, UserPermissions } from '../types';
+import { User, UserPermissions, getBranchAreas } from '../types';
 import { BackupModal } from '../components/BackupModal';
 import { useBackHandler } from '../utils/backNavigation';
 
@@ -35,7 +35,7 @@ const initialPermissions: UserPermissions = {
 };
 
 export const UserManagement: React.FC = () => {
-  const { users, addUser, updateUser, deleteUser, currentUser, updateSystemLogo, companyLogo } = useERP();
+  const { users, customers, addUser, updateUser, deleteUser, currentUser, updateSystemLogo, companyLogo } = useERP();
   
   const isSuperAdmin = currentUser?.username === 'admin';
   const canManageBackup = isSuperAdmin || currentUser?.role === 'ADMIN' || Boolean(currentUser?.permissions?.canManageBackup);
@@ -57,7 +57,9 @@ export const UserManagement: React.FC = () => {
     password: '',
     fullName: '',
     role: 'USER' as 'ADMIN' | 'USER',
-    permissions: initialPermissions
+    permissions: initialPermissions,
+    allowedBranch: '' as 'MARG' | 'NOZHA' | '',
+    allowedAreas: [] as string[]
   });
 
   const resetForm = () => {
@@ -66,7 +68,9 @@ export const UserManagement: React.FC = () => {
       password: '',
       fullName: '',
       role: 'USER',
-      permissions: initialPermissions
+      permissions: initialPermissions,
+      allowedBranch: '',
+      allowedAreas: []
     });
     setIsEditing(false);
     setEditingId(null);
@@ -134,7 +138,7 @@ export const UserManagement: React.FC = () => {
         resetForm();
         return;
       }
-      updateUser(editingId, { ...formData, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
+      updateUser(editingId, { ...formData, allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch, allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
       alert(finalRole === 'ADMIN' ? 'تم ترقية/تحديث المستخدم كمدير نظام كامل بنجاح' : 'تم تحديث بيانات المستخدم وتعديل صلاحياته كمستخدم عادي بنجاح');
     } else {
       if (users.some(u => u.username === formData.username)) {
@@ -144,6 +148,8 @@ export const UserManagement: React.FC = () => {
       addUser({
         id: Date.now().toString(),
         ...formData,
+        allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch,
+        allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas,
         role: finalRole,
         permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions)
       });
@@ -170,6 +176,8 @@ export const UserManagement: React.FC = () => {
       password: user.password,
       fullName: user.fullName,
       role: isAdmin ? 'ADMIN' : 'USER',
+      allowedBranch: (user.allowedBranch === 'MARG' || user.allowedBranch === 'NOZHA') ? user.allowedBranch : '',
+      allowedAreas: Array.isArray(user.allowedAreas) ? user.allowedAreas : [],
       permissions: {
         canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales ?? isAdmin),
         canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales ?? isAdmin),
@@ -529,6 +537,33 @@ export const UserManagement: React.FC = () => {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* نطاق العمل: الفرع والمنطقة */}
+            <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+              <h4 className="text-sm font-bold text-gray-800 mb-1">نطاق العمل (الفرع / المنطقة)</h4>
+              <p className="text-xs text-gray-500 mb-3">اتركه "كل الفروع" ليشتغل على كل البيانات. لو اخترت فرع: المستخدم يشوف ويبيع ويشتري ويحصّل لعملاء ومبيعات ومشتريات وخزنة هذا الفرع فقط. وتقدر تحدد مناطق معينة داخله. (لا يسري على المدير الكامل)</p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {([['', 'كل الفروع'], ['MARG', 'إدارة المرج فقط'], ['NOZHA', 'إدارة النزهة فقط']] as const).map(([v, l]) => (
+                  <button key={v || 'all'} type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, allowedBranch: v as any, allowedAreas: [] }))}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${formData.allowedBranch === v ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'}`}>{l}</button>
+                ))}
+              </div>
+              {formData.allowedBranch && (
+                <div>
+                  <div className="text-xs font-bold text-gray-700 mb-2">المناطق المسموحة (لو ما اخترتش أي منطقة = كل مناطق الفرع)</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {getBranchAreas(formData.allowedBranch as any, customers).map(a => (
+                      <label key={a} className="flex items-center gap-2 text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 cursor-pointer">
+                        <input type="checkbox" checked={formData.allowedAreas.includes(a)}
+                          onChange={() => setFormData(prev => ({ ...prev, allowedAreas: prev.allowedAreas.includes(a) ? prev.allowedAreas.filter(x => x !== a) : [...prev.allowedAreas, a] }))} />
+                        <span>{a}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* مدير نظام كامل */}
