@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { 
   Wallet, 
@@ -18,6 +18,7 @@ import {
 import { PaymentMethod, BranchId, BRANCHES } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
 
 export const Treasury: React.FC = () => {
   const { 
@@ -29,12 +30,20 @@ export const Treasury: React.FC = () => {
     balances, 
     clearTreasury, 
     currentUser, 
-    addOpeningBalance 
+    addOpeningBalance,
+    findDuplicateTreasury,
+    removeTreasuryTransactions
   } = useERP();
 
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>('ALL');
   const [selectedFilter, setSelectedFilter] = useState<'ALL' | PaymentMethod>('ALL');
+  const [searchText, setSearchText] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [opFilter, setOpFilter] = useState('ALL');
+  const [dupGroups, setDupGroups] = useState<ReturnType<typeof findDuplicateTreasury> | null>(null);
+  const [dupBusy, setDupBusy] = useState(false);
   
   // Opening Balance Modal State
   const [showOpeningModal, setShowOpeningModal] = useState(false);
@@ -66,6 +75,18 @@ export const Treasury: React.FC = () => {
   useBackHandler(() => setShowCashTransferModal(false), showCashTransferModal, 'treasury-cash-transfer-modal');
   useBackHandler(() => setShowClearConfirm(false), showClearConfirm, 'treasury-clear-confirm');
 
+  const classifyTx = (t: any): string => {
+    const d = String(t.description || '');
+    if (t.source === 'COLLECTION' || d.includes('تحصيل')) return 'COLLECTION';
+    if (t.source === 'TRANSFER' || d.includes('تحويل')) return 'TRANSFER';
+    if (d.includes('رصيد افتتاحي')) return 'OPENING';
+    if (t.source === 'PURCHASE' || d.includes('للمورد') || d.includes('مشتريات')) return 'SUPPLIER';
+    if (d.includes('مصروف')) return 'EXPENSE';
+    if (d.includes('فاتورة')) return 'SALE';
+    return 'OTHER';
+  };
+  const isIncomeTx = (t: any) => (t.credit > 0 || t.type === 'INCOME' || (t.amount && t.amount > 0 && t.type !== 'EXPENSE'));
+
   // Filter transactions by selected branch and payment method
   const sortedTransactions = useMemo(() => {
     return [...treasury]
@@ -74,7 +95,18 @@ export const Treasury: React.FC = () => {
         const branchMatch = selectedBranchFilter === 'ALL' || itemBranch === selectedBranchFilter;
         const normalizedMethod = t.paymentMethod || 'CASH';
         const methodMatch = selectedFilter === 'ALL' || normalizedMethod === selectedFilter;
-        return branchMatch && methodMatch;
+        if (!(branchMatch && methodMatch)) return false;
+        if (dateFrom && String(t.date || '').slice(0, 10) < dateFrom) return false;
+        if (dateTo && String(t.date || '').slice(0, 10) > dateTo) return false;
+        if (opFilter === 'IN' && !isIncomeTx(t)) return false;
+        if (opFilter === 'OUT' && isIncomeTx(t)) return false;
+        if (!['ALL', 'IN', 'OUT'].includes(opFilter) && classifyTx(t) !== opFilter) return false;
+        const q = searchText.trim().toLowerCase();
+        if (q) {
+          const hay = `${t.description || ''} ${t.invoiceNumber || ''} ${t.entityName || ''} ${t.entityCode || ''} ${t.id || ''} ${t.date || ''} ${t.credit || t.debit || t.amount || ''}`.toLowerCase();
+          if (!q.split(/\s+/).every(w => hay.includes(w))) return false;
+        }
+        return true;
       })
       .sort((a, b) => {
         const getTimestamp = (item: any) => {
@@ -90,6 +122,10 @@ export const Treasury: React.FC = () => {
           const match = (item.id || '').match(/\d{10,}/);
           return match ? Number(match[0]) : 0;
         };
+        // الترتيب الأساسي بتاريخ العملية نفسه (الأحدث فوق)، وجوه اليوم الواحد بوقت التسجيل
+        const dayOf = (item: any) => (String(item.date || '').match(/\d{4}-\d{2}-\d{2}/) || [''])[0];
+        const dA = dayOf(a), dB = dayOf(b);
+        if (dA !== dB) return dB.localeCompare(dA);
         const tA = getTimestamp(a);
         const tB = getTimestamp(b);
         if (tA && tB && tA !== tB) return tB - tA;
@@ -97,7 +133,28 @@ export const Treasury: React.FC = () => {
         if (dateDiff !== 0) return dateDiff;
         return (b.id || '').localeCompare(a.id || '');
       });
-  }, [treasury, selectedBranchFilter, selectedFilter]);
+  }, [treasury, selectedBranchFilter, selectedFilter, searchText, dateFrom, dateTo, opFilter]);
+
+  const shownTotals = useMemo(() => {
+    let inc = 0, out = 0;
+    sortedTransactions.forEach((t: any) => {
+      if (isIncomeTx(t)) inc += Number(t.credit || t.amount || 0);
+      else out += Number(t.debit || t.amount || 0);
+    });
+    return { inc, out };
+  }, [sortedTransactions]);
+
+  const runDupCheck = () => setDupGroups(findDuplicateTreasury());
+  const removeDups = async () => {
+    if (!dupGroups || dupBusy) return;
+    const ids = dupGroups.flatMap(g => g.extras.map(e => e.id));
+    if (!ids.length) return;
+    setDupBusy(true);
+    const n = await removeTreasuryTransactions(ids);
+    setDupBusy(false);
+    setDupGroups(null);
+    alert(`تم حذف ${n} حركة مكررة وإبقاء الحركة الأصلية لكل فاتورة.`);
+  };
 
   const handleClearTreasury = async () => {
     const success = await clearTreasury();
@@ -107,7 +164,13 @@ export const Treasury: React.FC = () => {
     }
   };
 
+  const handleOpeningSubmitLock = useRef(false);
   const handleOpeningSubmit = async (e: React.FormEvent) => {
+    if (handleOpeningSubmitLock.current) { e?.preventDefault?.(); return; }
+    handleOpeningSubmitLock.current = true;
+    try { await _handleOpeningSubmit(e); } finally { setTimeout(() => { handleOpeningSubmitLock.current = false; }, 1000); }
+  };
+  const _handleOpeningSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(openingForm.amount);
     if (amount <= 0) return alert("الرجاء إدخال مبلغ صحيح");
@@ -125,7 +188,13 @@ export const Treasury: React.FC = () => {
     alert(`تم إضافة الرصيد الافتتاحي لخزينة ${openingForm.branchId === 'NOZHA' ? 'النزهة' : 'المرج'} بنجاح`);
   };
 
+  const handleExecuteCashTransferLock = useRef(false);
   const handleExecuteCashTransfer = async (e: React.FormEvent) => {
+    if (handleExecuteCashTransferLock.current) { e?.preventDefault?.(); return; }
+    handleExecuteCashTransferLock.current = true;
+    try { await _handleExecuteCashTransfer(e); } finally { setTimeout(() => { handleExecuteCashTransferLock.current = false; }, 1000); }
+  };
+  const _handleExecuteCashTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isTransferringCash) return;
 
@@ -191,7 +260,7 @@ export const Treasury: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {currentUser?.permissions.canManageTreasury && (
+          {canDo(currentUser, 'treasury.manage') && (
             <>
               <button 
                 onClick={() => setShowCashTransferModal(true)}
@@ -209,7 +278,7 @@ export const Treasury: React.FC = () => {
             </>
           )}
 
-          {currentUser?.permissions.canDeleteLedgers && (
+          {canDo(currentUser, 'treasury.clear') && (
             showClearConfirm ? (
                <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
                  <AlertTriangle size={16} className="text-red-500" />
@@ -400,6 +469,72 @@ export const Treasury: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Search / date / operation filters */}
+          <div className="flex flex-wrap gap-2 items-end pt-1 border-t border-gray-100">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-[11px] text-gray-500 mb-1">بحث (اسم / بيان / رقم فاتورة / مبلغ)</label>
+              <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="مثال: R054 أو عبد العليم أو 500000" className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-hidden focus:ring-2 focus:ring-brand-300" />
+            </div>
+            <div>
+              <label className="block text-[11px] text-gray-500 mb-1">من تاريخ</label>
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[11px] text-gray-500 mb-1">إلى تاريخ</label>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[11px] text-gray-500 mb-1">نوع العملية</label>
+              <select value={opFilter} onChange={e => setOpFilter(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white">
+                <option value="ALL">كل العمليات</option>
+                <option value="IN">وارد فقط</option>
+                <option value="OUT">صادر فقط</option>
+                <option value="COLLECTION">تحصيل</option>
+                <option value="SUPPLIER">سداد موردين / مشتريات</option>
+                <option value="SALE">فواتير بيع</option>
+                <option value="TRANSFER">تحويلات</option>
+                <option value="EXPENSE">مصروفات</option>
+                <option value="OPENING">رصيد افتتاحي</option>
+              </select>
+            </div>
+            {(searchText || dateFrom || dateTo || opFilter !== 'ALL') && (
+              <button onClick={() => { setSearchText(''); setDateFrom(''); setDateTo(''); setOpFilter('ALL'); }} className="px-3 py-1.5 rounded-lg border text-xs font-bold text-gray-600 bg-gray-50 hover:bg-gray-100">مسح الفلاتر</button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-3 text-xs font-bold">
+            <span className="text-gray-500">المعروض: {sortedTransactions.length} حركة</span>
+            <span className="text-green-700">إجمالي الوارد: {shownTotals.inc.toLocaleString()} ج.م</span>
+            <span className="text-red-600">إجمالي الصادر: {shownTotals.out.toLocaleString()} ج.م</span>
+          </div>
+
+          {canDo(currentUser, 'treasury.clear') && (
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-gray-100">
+              <button onClick={runDupCheck} className="px-3 py-1.5 rounded-lg border text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100">🔍 فحص الحركات المكررة</button>
+              {dupGroups && dupGroups.length === 0 && <span className="text-xs font-bold text-green-700">لا توجد حركات مكررة ✓</span>}
+              {dupGroups && dupGroups.length > 0 && (
+                <div className="w-full bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs space-y-2">
+                  <div className="font-bold text-amber-900">
+                    تم العثور على {dupGroups.length} فاتورة فيها تكرار ({dupGroups.reduce((a, g) => a + g.extras.length, 0)} حركة زائدة، بقيمة {dupGroups.reduce((a, g) => a + g.extras.reduce((x, e) => x + Number(e.debit || e.credit || 0), 0), 0).toLocaleString()} ج.م). هيتم إبقاء الأقدم وحذف الباقي.
+                  </div>
+                  <div className="max-h-48 overflow-auto divide-y divide-amber-100">
+                    {dupGroups.map(g => (
+                      <div key={g.key} className="py-1 flex flex-wrap gap-x-3">
+                        <span className="font-mono font-bold">{g.keep.invoiceNumber}</span>
+                        <span>{Number(g.keep.debit || g.keep.credit || 0).toLocaleString()} ج.م</span>
+                        <span className="text-gray-600">{g.keep.description}</span>
+                        <span className="text-red-600 font-bold">زيادة: {g.extras.length}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <button disabled={dupBusy} onClick={removeDups} className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 disabled:opacity-50">{dupBusy ? 'جارٍ الحذف...' : 'حذف الحركات الزائدة'}</button>
+                    <button onClick={() => setDupGroups(null)} className="px-3 py-1.5 rounded-lg border bg-white font-bold">إلغاء</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Account Filter Pills */}
           <div className="flex flex-wrap gap-1.5 text-xs font-bold pt-1 border-t border-gray-100">

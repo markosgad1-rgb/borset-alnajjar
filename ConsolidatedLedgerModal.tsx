@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, Printer, Search, Calendar, Filter, Users, Truck, Layers, ArrowUpDown, ChevronDown, CheckCircle2, AlertCircle, MessageCircle } from 'lucide-react';
 import { useERP } from '../context/ERPContext';
+import { getSupplierStatementTransactions } from '../utils/supplierStatement';
 import { shareConsolidatedStatementPdfViaWhatsApp } from '../utils/whatsapp';
 
 interface ConsolidatedLedgerModalProps {
@@ -16,7 +17,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
   initialTab = 'CUSTOMERS',
   onSelectEntity
 }) => {
-  const { customers, suppliers, invoices, purchases, printConsolidatedLedger, companyLogo } = useERP();
+  const { customers, suppliers, invoices, rawPurchases: purchases, printConsolidatedLedger, companyLogo, customerBalanceOf } = useERP();
 
   const [activeTab, setActiveTab] = useState<'CUSTOMERS' | 'SUPPLIERS' | 'ALL'>(initialTab);
   const [viewMode, setViewMode] = useState<'BALANCES' | 'MOVEMENTS'>('BALANCES');
@@ -75,7 +76,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
 
   // 1. Calculate Consolidated Customer Balances & Movement Data
   const customerConsolidatedData = useMemo(() => {
-    return customers.map(cust => {
+    return customers.filter(c => !c.isDeleted).map(cust => {
       let prior = 0;
       let periodDebit = 0;
       let periodCredit = 0;
@@ -127,7 +128,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       // If no start date filter, use real cust.balance. If date filter active, prior - periodDebit + periodCredit
       const finalBal = filterStartDate || filterEndDate
         ? (prior - periodDebit + periodCredit)
-        : cust.balance;
+        : customerBalanceOf(cust);
 
       const status: 'مدين' | 'دائن' | 'متزن' = finalBal < 0 ? 'مدين' : finalBal > 0 ? 'دائن' : 'متزن';
 
@@ -148,7 +149,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
 
   // 2. Calculate Consolidated Supplier Balances & Movement Data
   const supplierConsolidatedData = useMemo(() => {
-    return suppliers.map(supp => {
+    return suppliers.filter(sp => !sp.isDeleted).map(supp => {
       let prior = 0;
       let periodDebit = 0; // سداد للمورد
       let periodCredit = 0; // مشتريات من المورد (علينا)
@@ -208,11 +209,15 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
         }
       });
 
-      // For supplier: positive balance means we owe supplier (دائن/له), negative means supplier owes us (مدين/لنا)
-      const dynamicBal = prior + periodCredit - periodDebit;
-      const finalBal = (supp.history && supp.history.length > 0)
-        ? dynamicBal
-        : ((supp as any).currentBalance !== undefined ? (supp as any).currentBalance : supp.balance);
+      // الرصيد النهائي من كشف حساب المورد نفسه (المصدر الوحيد للأرصدة)، بإشارة معكوسة: موجب = له (علينا)، سالب = لنا (عليه)
+      const stm = getSupplierStatementTransactions(supp, purchases, {
+        startDate: filterStartDate || undefined,
+        endDate: filterEndDate || undefined
+      });
+      const finalBal = Math.round(-Number(stm.finalBalance || 0) * 100) / 100;
+      periodCredit = Number(stm.totalCredit || 0);
+      periodDebit = Number(stm.totalDebit || 0);
+      prior = Math.round((finalBal - periodCredit + periodDebit) * 100) / 100;
 
       const status: 'مدين' | 'دائن' | 'متزن' = finalBal > 0 ? 'دائن' : finalBal < 0 ? 'مدين' : 'متزن';
 
@@ -424,6 +429,16 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
     return activeBalanceRows.reduce((sum, r) => sum + r.finalBalance, 0);
   }, [activeBalanceRows]);
 
+  // Printed / shared statement only: biggest debt first. The on-screen view keeps the code order.
+  // Customers: negative balance = the customer owes us -> most negative first.
+  // Suppliers: positive balance = we owe the supplier -> most positive first.
+  const getPrintBalanceRows = () => {
+    const rows = [...activeBalanceRows];
+    if (activeTab === 'CUSTOMERS') rows.sort((a, b) => (Number(a.finalBalance) || 0) - (Number(b.finalBalance) || 0) || String(a.code).localeCompare(String(b.code)));
+    else if (activeTab === 'SUPPLIERS') rows.sort((a, b) => (Number(b.finalBalance) || 0) - (Number(a.finalBalance) || 0) || String(a.code).localeCompare(String(b.code)));
+    return rows;
+  };
+
   // Handle Print Action
   const handlePrint = () => {
     const reportTitle = activeTab === 'CUSTOMERS'
@@ -433,7 +448,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       : 'كشف حساب مجمع شامل (عملاء وموردين)';
 
     if (viewMode === 'BALANCES') {
-      const balanceRowsForPrint = activeBalanceRows.map((r, i) => ({
+      const balanceRowsForPrint = getPrintBalanceRows().map((r, i) => ({
         num: i + 1,
         code: r.code,
         name: r.name,
@@ -447,7 +462,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       }));
 
       printConsolidatedLedger({
-        title: reportTitle,
+        title: activeTab === 'ALL' ? reportTitle : `${reportTitle} (مرتب بالأعلى مديونية)`,
         reportType: activeTab,
         dateRange: (filterStartDate || filterEndDate) ? { from: filterStartDate, to: filterEndDate } : undefined,
         mode: 'BALANCES',
@@ -501,7 +516,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
       }, 3500);
 
       if (viewMode === 'BALANCES') {
-        const balanceRowsForPrint = activeBalanceRows.map((r, i) => ({
+        const balanceRowsForPrint = getPrintBalanceRows().map((r, i) => ({
           num: i + 1,
           code: r.code,
           name: r.name,
@@ -515,7 +530,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
         }));
 
         await shareConsolidatedStatementPdfViaWhatsApp({
-          title: reportTitle,
+          title: activeTab === 'ALL' ? reportTitle : `${reportTitle} (مرتب بالأعلى مديونية)`,
           reportType: activeTab,
           dateRange: (filterStartDate || filterEndDate) ? { from: filterStartDate, to: filterEndDate } : undefined,
           mode: 'BALANCES',

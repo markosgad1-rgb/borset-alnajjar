@@ -29,7 +29,7 @@ type DateFilterOption = 'TODAY' | 'WEEK' | 'MONTH' | 'ALL' | 'CUSTOM';
 type ActiveTab = 'SALES' | 'PURCHASES' | 'CUSTOMERS';
 
 export const Reports: React.FC = () => {
-  const { invoices, purchases, products, customers, companyLogo } = useERP();
+  const { invoices, purchases, products, customers, companyLogo, customerBalanceOf } = useERP();
 
   // Top Filter State
   const [selectedBranch, setSelectedBranch] = useState<'ALL' | BranchId>('ALL');
@@ -114,6 +114,7 @@ export const Reports: React.FC = () => {
   // --- Filtered Purchases ---
   const filteredPurchases = useMemo(() => {
     return purchases.filter(p => {
+      if (p.isDeleted) return false;
       // Date Check
       if (!isDateInRange(p.date)) return false;
 
@@ -128,6 +129,7 @@ export const Reports: React.FC = () => {
   // --- Filtered Customers ---
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => {
+      if (c.isDeleted) return false; // deleted customers (in the trash) must not appear in the reports
       const cBranch = c.branchId || 'MARG';
       if (selectedBranch !== 'ALL' && cBranch !== selectedBranch) return false;
 
@@ -163,8 +165,8 @@ export const Reports: React.FC = () => {
     // 4. Customer Debts (negative balance = customer owes us money)
     let totalCustomerDebt = 0;
     filteredCustomers.forEach(c => {
-      if (c.balance < 0) {
-        totalCustomerDebt += Math.abs(c.balance);
+      if (customerBalanceOf(c) < 0) {
+        totalCustomerDebt += Math.abs(customerBalanceOf(c));
       }
     });
 
@@ -250,8 +252,8 @@ export const Reports: React.FC = () => {
         invoiceCount: activity.invoiceCount
       };
     }).sort((a, b) => {
-      const balA = typeof a.customer.balance === 'number' ? a.customer.balance : (Number(a.customer.balance) || 0);
-      const balB = typeof b.customer.balance === 'number' ? b.customer.balance : (Number(b.customer.balance) || 0);
+      const balA = customerBalanceOf(a.customer);
+      const balB = customerBalanceOf(b.customer);
       if (balA !== balB) {
         return balA - balB; // Ascending: highest negative debt first (e.g. -556,050 then -544,500 ...), then balanced (0), then credit (+)
       }
@@ -360,7 +362,7 @@ export const Reports: React.FC = () => {
           phone: c.phone || '-',
           totalPurchased: item.totalPurchased,
           invoiceCount: item.invoiceCount,
-          balance: c.balance,
+          balance: customerBalanceOf(c),
           lastDate: item.lastDate
         };
       }) : undefined
@@ -1101,7 +1103,7 @@ export const Reports: React.FC = () => {
                     .map(item => {
                       const c = item.customer;
                       const bId = c.branchId || 'MARG';
-                      const hasDebt = c.balance < 0;
+                      const hasDebt = customerBalanceOf(c) < 0;
 
                       return (
                         <tr key={c.code} className="hover:bg-gray-50/70 transition-colors">
@@ -1119,8 +1121,8 @@ export const Reports: React.FC = () => {
                           <td className="p-3 text-center font-bold text-blue-700 font-mono">{item.totalPurchased.toLocaleString()} ج.م</td>
                           <td className="p-3 text-center font-mono">{item.invoiceCount}</td>
                           <td className="p-3 text-center">
-                            <span className={`font-mono font-black ${hasDebt ? 'text-red-600' : c.balance > 0 ? 'text-green-600' : 'text-gray-500'}`} dir="ltr">
-                              {c.balance.toLocaleString()} ج.م
+                            <span className={`font-mono font-black ${hasDebt ? 'text-red-600' : customerBalanceOf(c) > 0 ? 'text-green-600' : 'text-gray-500'}`} dir="ltr">
+                              {customerBalanceOf(c).toLocaleString()} ج.م
                             </span>
                           </td>
                           <td className="p-3 text-center font-mono text-gray-500">{item.lastDate}</td>

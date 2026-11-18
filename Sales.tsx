@@ -8,15 +8,17 @@ import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp, gen
 import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
 import { useNetworkStatus } from '../utils/useNetworkStatus';
+import { CartNumberInput } from '../components/CartNumberInput';
+import { canDo } from '../utils/permissions';
 
 export const Sales: React.FC = () => {
-  const { addInvoice, products, customers, invoices, printInvoice, companyLogo, currentUser } = useERP();
+  const { addInvoice, products, customers, invoices, rawInvoices, userScope, printInvoice, companyLogo, currentUser, customerBalanceOf } = useERP();
   const netUp = useNetworkStatus();
   
-  const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
+  const canEditPrices = canDo(currentUser, 'price.edit');
 
   // Cascading Branch & Area State
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
 
   // Main Invoice State
@@ -96,10 +98,10 @@ export const Sales: React.FC = () => {
 
   useEffect(() => {
     const suffix = netUp ? '' : `-${getDeviceTag()}`;
-    if (invoices.length === 0) {
+    if (rawInvoices.length === 0) {
       setInvoiceId(`N001${suffix}`);
     } else {
-      const nIds = invoices
+      const nIds = rawInvoices
         .filter(inv => inv.id.startsWith('N'))
         .map(inv => parseInt(inv.id.replace(/\D/g, '')))
         .filter(num => !isNaN(num));
@@ -111,7 +113,7 @@ export const Sales: React.FC = () => {
         setInvoiceId(`N001${suffix}`);
       }
     }
-  }, [invoices, netUp]);
+  }, [rawInvoices, netUp]);
 
   // Calculated Totals
   const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
@@ -180,7 +182,7 @@ export const Sales: React.FC = () => {
     if (customer && !customer.isDeleted) {
       setCustomerCode(customer.code);
       setCustomerName(customer.name);
-      setCustomerBalance(customer.balance);
+      setCustomerBalance(customerBalanceOf(customer));
       setCustomerSearchText(formatCustomerLabel(customer));
       if (customer.branchId && customer.branchId !== selectedBranch) {
         setSelectedBranch(customer.branchId);
@@ -211,7 +213,7 @@ export const Sales: React.FC = () => {
     const customer = activeCustomers.find(c => c.code.toLowerCase() === trimmed);
     if (customer) {
       setCustomerName(customer.name);
-      setCustomerBalance(customer.balance);
+      setCustomerBalance(customerBalanceOf(customer));
       setCustomerSearchText(formatCustomerLabel(customer));
       if (customer.branchId && customer.branchId !== selectedBranch) {
         setSelectedBranch(customer.branchId);
@@ -394,6 +396,27 @@ export const Sales: React.FC = () => {
     }, 60);
   };
 
+  const getBranchStockFor = (code: string): number => {
+    const prod = products.find(p => p.code === code);
+    if (!prod) return Infinity;
+    return selectedBranch === 'NOZHA'
+      ? (prod.quantityNozha !== undefined ? prod.quantityNozha : 0)
+      : (prod.quantityMarg !== undefined ? prod.quantityMarg : prod.quantity);
+  };
+
+  const updateCartQuantity = (index: number, q: number): boolean => {
+    const item = cartItems[index];
+    if (!item) return false;
+    if (q > getBranchStockFor(item.itemCode)) return false;
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, quantity: q, total: q * it.price } : it));
+    return true;
+  };
+
+  const updateCartPrice = (index: number, pr: number): boolean => {
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, price: pr, total: it.quantity * pr } : it));
+    return true;
+  };
+
   const removeFromCart = (index: number) => {
     setCartItems(prev => prev.filter((_, i) => i !== index));
   };
@@ -403,7 +426,13 @@ export const Sales: React.FC = () => {
     setPaidAmountInput(formatWithCommas(amt.toString()));
   };
 
+  const handleSaveInvoiceLock = useRef(false);
   const handleSaveInvoice = async () => {
+    if (handleSaveInvoiceLock.current) return;
+    handleSaveInvoiceLock.current = true;
+    try { await _handleSaveInvoice(); } finally { setTimeout(() => { handleSaveInvoiceLock.current = false; }, 1000); }
+  };
+  const _handleSaveInvoice = async () => {
     if (cartItems.length === 0) {
       alert("الفاتورة فارغة! أضف أصناف أولاً.");
       return;
@@ -633,8 +662,8 @@ export const Sales: React.FC = () => {
                   <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
                   اختيار الإدارة / الفرع
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {BRANCHES.map(b => {
+                <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                  {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => {
                     const isSelected = selectedBranch === b.id;
                     return (
                       <button
@@ -678,7 +707,7 @@ export const Sales: React.FC = () => {
                       }}
                     >
                       <option value="ALL">جميع مناطق {selectedBranch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'} ({availableCustomers.length} عميل)</option>
-                      {availableBranchAreas.map(area => (
+                      {availableBranchAreas.filter(a => !userScope.restricted || userScope.areas.length === 0 || userScope.areas.includes(a)).map(area => (
                         <option key={area} value={area}>{area}</option>
                       ))}
                     </select>
@@ -745,7 +774,7 @@ export const Sales: React.FC = () => {
                   <datalist id="customerNamesList">
                     {availableCustomers.map(c => (
                       <option key={`cust_name_${c.code}`} value={formatCustomerLabel(c)}>
-                        رصيد سابق: {c.balance.toLocaleString()} ج.م
+                        رصيد سابق: {customerBalanceOf(c).toLocaleString()} ج.م
                       </option>
                     ))}
                   </datalist>
@@ -779,9 +808,9 @@ export const Sales: React.FC = () => {
                             </div>
                             <div className="text-left shrink-0">
                               <span className={`font-mono text-xs font-bold ${
-                                c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                customerBalanceOf(c) < 0 ? 'text-red-600' : customerBalanceOf(c) > 0 ? 'text-emerald-700' : 'text-gray-500'
                               }`} dir="ltr">
-                                {c.balance.toLocaleString()} ج.م
+                                {customerBalanceOf(c).toLocaleString()} ج.م
                               </span>
                             </div>
                           </button>
@@ -990,8 +1019,8 @@ export const Sales: React.FC = () => {
               <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="p-2 whitespace-nowrap">الصنف</th>
-                  <th className="p-2 w-16 text-center">الكمية</th>
-                  <th className="p-2 w-20">السعر</th>
+                  <th className="p-2 w-20 text-center">الكمية</th>
+                  <th className="p-2 w-24">السعر</th>
                   <th className="p-2 w-24">الإجمالي</th>
                   <th className="p-2 w-10"></th>
                 </tr>
@@ -1005,8 +1034,12 @@ export const Sales: React.FC = () => {
                         <span className="text-[10px] text-gray-400 font-mono">{item.itemCode}</span>
                       </div>
                     </td>
-                    <td className="p-2 font-bold text-center">{item.quantity}</td>
-                    <td className="p-2">{item.price.toLocaleString()}</td>
+                    <td className="p-2 text-center">
+                      <CartNumberInput value={item.quantity} onCommit={v => updateCartQuantity(idx, v)} className="w-16" title={`المتاح بالمخزن: ${getBranchStockFor(item.itemCode)}`} />
+                    </td>
+                    <td className="p-2">
+                      <CartNumberInput value={item.price} onCommit={v => updateCartPrice(idx, v)} readOnly={!canEditPrices} className="w-20" title={!canEditPrices ? 'ليس لديك صلاحية تعديل السعر يدوياً' : undefined} />
+                    </td>
                     <td className="p-2 font-bold text-brand-600">{item.total.toLocaleString()}</td>
                     <td className="p-2">
                       <button onClick={() => removeFromCart(idx)} className="text-red-500 hover:bg-red-50 p-1 rounded">
@@ -1263,9 +1296,9 @@ export const Sales: React.FC = () => {
                  </tr>
                </thead>
                <tbody className="divide-y">
-                 {invoices.slice(0, 10).map(inv => (
+                 {invoices.filter(inv => !customers.some(c => c.isDeleted && c.code === inv.customerCode)).slice(0, 10).map(inv => (
                    <tr key={inv.id} className="hover:bg-gray-50">
-                     <td className="p-2 text-xs font-mono text-gray-500">{inv.id}</td>
+                     <td className="p-2 text-xs font-mono text-gray-500">{inv.id}{inv.reviewStatus === 'PENDING_REVIEW' && <span className="mr-1 inline-block px-1 rounded bg-rose-100 text-rose-700 text-[9px] font-bold" title="بانتظار المراجعة">جديدة</span>}</td>
                      <td className="p-2 text-xs">{inv.customerName}</td>
                      <td className="p-2 font-bold text-gray-800 text-xs">{inv.total.toLocaleString()}</td>
                    </tr>
@@ -1350,7 +1383,8 @@ export const Sales: React.FC = () => {
 
               {/* شريط سفلي مستقل: رصيد العميل الحالي في كشف الحساب */}
               {(() => {
-                const liveCustBal = customers.find(c => c.code === lastSavedInvoice?.customerCode)?.balance ?? lastSavedInvoice?.currentBalance ?? 0;
+                const __lc = customers.find(c => c.code === lastSavedInvoice?.customerCode);
+                const liveCustBal = __lc ? customerBalanceOf(__lc) : (lastSavedInvoice?.currentBalance ?? 0);
                 return (
                   <div className="mt-2 pt-2 border-t border-gray-200 bg-white p-2 rounded-lg text-[11px] flex justify-between items-center">
                     <span className="text-gray-600 font-bold">رصيد العميل الحالي في كشف الحساب:</span>

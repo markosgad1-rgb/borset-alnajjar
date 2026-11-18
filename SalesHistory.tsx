@@ -25,17 +25,34 @@ import { SalesInvoice, InvoiceItem, PaymentMethod, BranchId, BRANCHES, BRANCH_AR
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
+import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
-  const { invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, currentUser, companyLogo } = useERP();
+  const { customerBalanceOf, invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo, userScope } = useERP();
   
-  const canDeleteInvoices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteInvoices);
-  const canEditInvoices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditInvoices);
-  const canEditPrices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPrices);
+  const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
+  const canEditInvoices = canDo(currentUser, 'invoice.edit');
+  const canEditPrices = canDo(currentUser, 'price.edit');
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>('ALL');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'ALL');
+  // فلتر المراجعة: ALL = الكل، PENDING = لم تُراجع (من كل التواريخ)، REVIEWED = تمت مراجعتها
+  const [reviewFilter, setReviewFilter] = useState<'ALL' | 'PENDING' | 'REVIEWED'>(() => {
+    try {
+      const v = sessionStorage.getItem('erp_hist_review_filter');
+      if (v) sessionStorage.removeItem('erp_hist_review_filter');
+      return v === 'PENDING' ? 'PENDING' : 'ALL';
+    } catch { return 'ALL'; }
+  });
+  const canReview = canDo(currentUser, 'invoice.review');
+  useEffect(() => {
+    const h = () => { try { sessionStorage.removeItem('erp_hist_review_filter'); } catch { /* ignore */ } setReviewFilter('PENDING'); };
+    window.addEventListener('erp-hist-review-filter', h);
+    return () => window.removeEventListener('erp-hist-review-filter', h);
+  }, []);
+  const [reviewing, setReviewing] = useState(false);
   const [selectedAreaFilter, setSelectedAreaFilter] = useState<string>('ALL');
   
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
@@ -44,6 +61,8 @@ export const SalesHistory: React.FC = () => {
 
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
+  const { notify: notifyDone, dialog: doneDialog } = useDialog();
+  const [savingEdit, setSavingEdit] = useState(false);
   const [editInvoiceId, setEditInvoiceId] = useState('');
   const [editDate, setEditDate] = useState('');
   const [editTime, setEditTime] = useState('');
@@ -98,8 +117,8 @@ export const SalesHistory: React.FC = () => {
       const cust = customers.find(c => c.code === inv.customerCode);
       const invoiceWithLiveBal = {
         ...inv,
-        currentBalance: cust ? cust.balance : inv.currentBalance,
-        liveCustomerBalance: cust ? cust.balance : inv.currentBalance
+        currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
+        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance
       };
       await shareSalesInvoiceImageViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, syncTab);
     } catch (err: any) {
@@ -142,8 +161,8 @@ export const SalesHistory: React.FC = () => {
       const cust = customers.find(c => c.code === inv.customerCode);
       const invoiceWithLiveBal = {
         ...inv,
-        currentBalance: cust ? cust.balance : inv.currentBalance,
-        liveCustomerBalance: cust ? cust.balance : inv.currentBalance
+        currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
+        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance
       };
       await shareSalesInvoicePdfViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, null, syncTab);
     } catch (err: any) {
@@ -175,7 +194,12 @@ export const SalesHistory: React.FC = () => {
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       if (inv.isDeleted) return false;
-      const matchesDate = inv.date === selectedDate;
+      // فواتير عميل محذوف (في سلة المهملات) متظهرش، وبترجع مع استرجاعه
+      if (customers.some(c => c.isDeleted && c.code === inv.customerCode)) return false;
+      const matchesDate = reviewFilter === 'PENDING' || inv.date === selectedDate;
+      const isPendingReview = inv.reviewStatus === 'PENDING_REVIEW';
+      if (reviewFilter === 'PENDING' && !isPendingReview) return false;
+      if (reviewFilter === 'REVIEWED' && isPendingReview) return false;
       const matchesSearch = 
         inv.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
         inv.customerName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -189,7 +213,15 @@ export const SalesHistory: React.FC = () => {
 
       return matchesDate && matchesSearch && matchesBranch && matchesArea;
     });
-  }, [invoices, selectedDate, searchTerm, selectedBranchFilter, selectedAreaFilter, customers]);
+  }, [invoices, selectedDate, searchTerm, selectedBranchFilter, selectedAreaFilter, customers, reviewFilter]);
+
+  const pendingReviewTotal = useMemo(() => invoices.filter(i => !i.isDeleted && i.reviewStatus === 'PENDING_REVIEW').length, [invoices]);
+
+  const handleReview = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setReviewing(true);
+    try { await markInvoicesReviewed(ids); } finally { setReviewing(false); }
+  };
 
   const dayTotal = filteredInvoices.reduce((sum, inv) => sum + inv.total, 0);
   const dayPaidTotal = filteredInvoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
@@ -297,9 +329,28 @@ export const SalesHistory: React.FC = () => {
       currentBalance: oldInvoice.previousBalance - newTotal + finalPaid
     };
 
-    await updateInvoice(oldInvoice, newInvoiceData);
+    // تعديل أصناف/إجمالي فاتورة معتمدة بواسطة من لا يملك صلاحية المراجعة يعيدها لقائمة المراجعة
+    const contentChanged = newTotal !== oldInvoice.total || JSON.stringify(editItems) !== JSON.stringify(oldInvoice.items);
+    if (contentChanged && !canReview) {
+      newInvoiceData.reviewStatus = 'PENDING_REVIEW';
+      delete (newInvoiceData as any).reviewedBy;
+      delete (newInvoiceData as any).reviewedAt;
+    }
+
+    if (savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await updateInvoice(oldInvoice, newInvoiceData);
+    } catch (e: any) {
+      setSavingEdit(false);
+      notifyDone('لم يتم حفظ التعديل: ' + (e?.message || e));
+      return;
+    }
+    setSavingEdit(false);
+    // اقفل نافذة التعديل ونافذة عرض الفاتورة (كانت بتفضل مفتوحة بالبيانات القديمة)
     setIsEditing(false);
-    alert("تم تعديل الفاتورة وتصحيح الخزنة والمخزن والرصيد بنجاح");
+    setSelectedInvoice(null);
+    notifyDone(`✅ تم حفظ تعديل الفاتورة ${oldInvoice.id} بنجاح، وتم تصحيح الخزنة والمخزن والرصيد.`);
   };
 
   // Available areas based on selected branch filter (default + custom areas)
@@ -325,7 +376,7 @@ export const SalesHistory: React.FC = () => {
             <p className="text-xs text-gray-500 mt-0.5">استعراض وتدقيق الفواتير حسب التاريخ، الإدارة والمنطقة</p>
           </div>
            
-          {currentUser?.permissions.canDeleteLedgers && (
+          {canDo(currentUser, 'invoice.clearAll') && (
             showClearConfirm ? (
               <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
                 <AlertTriangle size={16} className="text-red-500" />
@@ -354,9 +405,38 @@ export const SalesHistory: React.FC = () => {
           )}
         </div>
 
+        {/* Review filter */}
+        <div className="p-3 bg-rose-50/60 rounded-xl border border-rose-200/70 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-rose-900 ml-1">مراجعة الفواتير:</span>
+          {([['ALL', 'الكل'], ['PENDING', `لم تُراجع (${pendingReviewTotal})`], ['REVIEWED', 'تمت مراجعتها']] as const).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setReviewFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${reviewFilter === k ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'}`}
+            >
+              {label}
+            </button>
+          ))}
+          {reviewFilter === 'PENDING' && <span className="text-[11px] text-rose-700">تظهر من كل التواريخ</span>}
+          {canReview && reviewFilter === 'PENDING' && filteredInvoices.length > 0 && (
+            <button
+              type="button"
+              disabled={reviewing}
+              onClick={() => handleReview(filteredInvoices.map(i => i.id))}
+              className="mr-auto bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+            >
+              <Check size={14} /> اعتماد كل المعروض ({filteredInvoices.length})
+            </button>
+          )}
+        </div>
+
         {/* Branch & Area Cascading Filter Toolbar */}
         <div className="p-3 bg-gradient-to-r from-blue-50/60 to-indigo-50/60 rounded-xl border border-blue-200/60 flex flex-wrap items-center justify-between gap-3">
           {/* Branch filter tabs */}
+          {userScope.restricted ? (
+            <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-gray-200 text-gray-700">{userScope.branch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'}</span>
+          ) : (
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-bold text-blue-900 ml-1">الإدارة / الفرع:</span>
             <button
@@ -393,6 +473,7 @@ export const SalesHistory: React.FC = () => {
               <Building size={13} /> إدارة النزهة
             </button>
           </div>
+          )}
 
           {/* Dynamic Area filter */}
           <div className="flex items-center gap-2 flex-1 sm:flex-initial min-w-[220px]">
@@ -405,7 +486,7 @@ export const SalesHistory: React.FC = () => {
               onChange={e => setSelectedAreaFilter(e.target.value)}
             >
               <option value="ALL">جميع المناطق</option>
-              {availableAreas.map(area => (
+              {availableAreas.filter(a => !userScope.restricted || userScope.areas.length === 0 || userScope.areas.includes(a)).map(area => (
                 <option key={area} value={area}>{area}</option>
               ))}
             </select>
@@ -504,8 +585,18 @@ export const SalesHistory: React.FC = () => {
                 const areaName = inv.area || cust?.area;
 
                 return (
-                  <tr key={inv.id} className="hover:bg-gray-50/80 transition-colors">
-                    <td className="p-3 font-mono font-bold text-brand-700">{inv.id}</td>
+                  <tr key={inv.id} className={`hover:bg-gray-50/80 transition-colors ${inv.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : ''}`}>
+                    <td className="p-3 font-mono font-bold text-brand-700">
+                      {inv.id}
+                      {inv.archivedAt && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold font-sans">مُرحّلة (كشف قديم)</span>
+                      )}
+                      {inv.reviewStatus === 'PENDING_REVIEW' && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold font-sans">جديدة - لم تُراجع</span>
+                      )}
+                      {inv.createdByName && <span className="block text-[10px] font-normal text-gray-500 font-sans">بواسطة: {inv.createdByName}</span>}
+                      {inv.reviewStatus === 'REVIEWED' && inv.reviewedBy && <span className="block text-[10px] font-normal text-emerald-700 font-sans">راجعها: {inv.reviewedBy}</span>}
+                    </td>
                     <td className="p-3 text-gray-500 font-mono">{inv.time}</td>
                     <td className="p-3">
                       <div className="space-y-1">
@@ -513,16 +604,16 @@ export const SalesHistory: React.FC = () => {
                           <span className="font-bold text-gray-900 block">{inv.customerName}</span>
                           <span 
                             className={`text-[10px] font-bold font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${
-                              (cust ? cust.balance : (inv.currentBalance || 0)) < 0 
+                              (cust ? customerBalanceOf(cust) : (inv.currentBalance || 0)) < 0 
                                 ? 'bg-red-50 text-red-700 border-red-200' 
-                                : (cust ? cust.balance : (inv.currentBalance || 0)) > 0
+                                : (cust ? customerBalanceOf(cust) : (inv.currentBalance || 0)) > 0
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                   : 'bg-gray-50 text-gray-600 border-gray-200'
                             }`}
                             title="إجمالي مديونية / رصيد العميل الحالي في النظام"
                           >
                             <span>الرصيد الحالي:</span>
-                            <span dir="ltr">{(cust ? cust.balance : (inv.currentBalance || 0)).toLocaleString()} ج.م</span>
+                            <span dir="ltr">{(cust ? customerBalanceOf(cust) : (inv.currentBalance || 0)).toLocaleString()} ج.م</span>
                           </span>
                         </div>
                         {areaName && (
@@ -582,7 +673,7 @@ export const SalesHistory: React.FC = () => {
 
                       <button 
                         onClick={() => {
-                          const liveBal = cust ? cust.balance : inv.currentBalance;
+                          const liveBal = cust ? customerBalanceOf(cust) : inv.currentBalance;
                           printInvoice({ ...inv, currentBalance: liveBal, liveCustomerBalance: liveBal });
                         }}
                         className="bg-gray-100 text-gray-700 hover:bg-gray-200 p-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
@@ -590,6 +681,17 @@ export const SalesHistory: React.FC = () => {
                       >
                         <Printer size={15} />
                       </button>
+
+                      {canReview && inv.reviewStatus === 'PENDING_REVIEW' && (
+                        <button
+                          disabled={reviewing}
+                          onClick={() => handleReview([inv.id])}
+                          className="bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                          title="تمت المراجعة - اعتماد الفاتورة"
+                        >
+                          <Check size={14} /> تمت المراجعة
+                        </button>
+                      )}
 
                       {canEditInvoices && (
                         <button 
@@ -917,11 +1019,11 @@ export const SalesHistory: React.FC = () => {
                 <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 col-span-2 sm:col-span-1">
                    <span className="block text-amber-800 text-[11px] font-bold mb-0.5">مديونية العميل الحالية</span>
                    <span className={`font-black text-sm font-mono ${
-                     (customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0) < 0
+                     (((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance ?? 0) < 0
                        ? 'text-red-700'
                        : 'text-emerald-700'
                    }`} dir="ltr">
-                     {(customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0).toLocaleString()} ج.م
+                     {(((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance ?? 0).toLocaleString()} ج.م
                    </span>
                 </div>
               </div>
@@ -969,7 +1071,7 @@ export const SalesHistory: React.FC = () => {
                   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
                   // مديونية العميل الحالية الآن (تشمل جميع الحركات والتحصيلات اللاحقة)
-                  const liveCustomerDebt = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance ?? 0;
+                  const liveCustomerDebt = ((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance ?? 0;
 
                   return (
                     <div className="bg-gray-900 text-white p-4 rounded-xl w-full sm:w-2/3 space-y-2">
@@ -1037,7 +1139,7 @@ export const SalesHistory: React.FC = () => {
                 {/* 3. طباعة الفاتورة */}
                 <button 
                   onClick={() => {
-                    const custBal = customers.find(c => c.code === selectedInvoice.customerCode)?.balance ?? selectedInvoice.currentBalance;
+                    const custBal = ((__c) => __c ? customerBalanceOf(__c) : undefined)(customers.find(c => c.code === selectedInvoice.customerCode)) ?? selectedInvoice.currentBalance;
                     printInvoice({ 
                       ...selectedInvoice, 
                       currentBalance: custBal,
@@ -1062,6 +1164,7 @@ export const SalesHistory: React.FC = () => {
           </div>
         </div>
       )}
+      {doneDialog}
     </div>
   );
 };

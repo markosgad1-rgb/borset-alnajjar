@@ -1,11 +1,13 @@
 
-import React, { useState } from 'react';
-import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { canViewPage, canDo } from '../utils/permissions';
+import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, X, Banknote, ArrowRightLeft, ArrowRight, Truck, Briefcase, LogOut, Shield, Wifi, WifiOff, History, Receipt, Database, BarChart3, AlertTriangle, Clock, Trash2, Activity, MonitorSmartphone } from 'lucide-react';
 import { PageView, UserPermissions } from '../types';
 import { useERP } from '../context/ERPContext';
 import { BackupModal } from './BackupModal';
 import { useBackHandler } from '../utils/backNavigation';
-import { useNetworkStatus } from '../utils/useNetworkStatus';
+import { useNetworkStatus, usePendingWrites, usePersistenceOk } from '../utils/useNetworkStatus';
+import { onOfflineSave } from '../utils/connectionStatus';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -16,12 +18,40 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
-  const { currentUser, logout, isOnline, permissionError, purchases } = useERP();
+  const { currentUser, logout, isOnline, permissionError, purchases, invoices } = useERP();
   const netUp = useNetworkStatus();
-  
-  const canManageBackup = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canManageBackup);
+  const pendingWrites = usePendingWrites();
+  const persistenceOk = usePersistenceOk();
+  const [offlineSaveToast, setOfflineSaveToast] = useState<string | null>(null);
 
-  const pendingPurchasesCount = purchases.filter(p => p.pricingStatus === 'PENDING_PRICE').length;
+  // Tell the user when something was saved only on this device (offline)
+  useEffect(() => {
+    let t: any;
+    const off = onOfflineSave((name) => {
+      const what = name === 'invoices' ? 'الفاتورة' : name === 'purchases' ? 'فاتورة المشتريات' : 'العملية';
+      setOfflineSaveToast(`⚠️ أنت الآن في وضع أوفلاين! تم حفظ ${what} على جهازك فقط، وستُرفع تلقائياً عند عودة الإنترنت. لا تمسح بيانات المتصفح ولا تغلق البرنامج قبل أن يتحول المؤشر إلى أخضر (متصل).`);
+      clearTimeout(t);
+      t = setTimeout(() => setOfflineSaveToast(null), 12000);
+    });
+    return () => { off(); clearTimeout(t); };
+  }, []);
+
+  // Warn before closing the page while some data is not uploaded yet
+  useEffect(() => {
+    if (pendingWrites <= 0) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [pendingWrites]);
+  
+  const canManageBackup = canDo(currentUser, 'backup');
+
+  const pendingPurchasesCount = purchases.filter(p => !p.isDeleted && p.pricingStatus === 'PENDING_PRICE').length;
+  // فواتير بيع جديدة لم تُراجع بعد (التنبيه لمن عنده صلاحية المراجعة فقط)
+  const canReviewInvoices = canDo(currentUser, 'invoice.review');
+  const canReviewPurchases = canDo(currentUser, 'purchase.review');
+  const pendingPurchaseReviewCount = canReviewPurchases ? purchases.filter(p => !p.isDeleted && p.reviewStatus === 'PENDING_REVIEW').length : 0;
+  const pendingReviewCount = canReviewInvoices ? invoices.filter(i => !i.isDeleted && i.reviewStatus === 'PENDING_REVIEW').length : 0;
 
   // Back Button integration for mobile sidebar menu & backup modal
   useBackHandler(() => setIsSidebarOpen(false), isSidebarOpen, 'layout-mobile-sidebar');
@@ -43,33 +73,37 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
     { id: 'reports', label: 'التقارير', icon: <BarChart3 size={20} />, permission: 'canViewReports' },
     { id: 'trash', label: 'سلة المهملات', icon: <Trash2 size={20} /> },
     { id: 'users', label: 'المستخدمين', icon: <Shield size={20} />, permission: 'admin' },
+    { id: 'activity', label: 'سجل النشاط', icon: <Activity size={20} /> },
+    { id: 'system', label: 'إدارة السيستم', icon: <MonitorSmartphone size={20} /> },
   ];
 
-  // Filter items based on permission
-  const filteredNav = navItems.filter(item => {
-    // إتاحة صفحة إدارة المستخدمين للسوبر أدمن الأساسي فقط (admin)
-    if (item.id === 'users') {
-      return currentUser?.username === 'admin';
-    }
-    if (currentUser?.role === 'ADMIN' || currentUser?.username === 'admin') return true;
-    if (item.id === 'trash') {
-      return Boolean(
-        currentUser?.permissions?.canDeleteInvoices ||
-        currentUser?.permissions?.canDeleteCustomers ||
-        currentUser?.permissions?.canDeleteSuppliers
-      );
-    }
-    if (!item.permission) return true; 
-    return Boolean(currentUser?.permissions?.[item.permission]);
-  });
+  // Filter items based on permission (see utils/permissions.ts)
+  const filteredNav = navItems.filter(item => canViewPage(currentUser, item.id));
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-brand-50 print:bg-white print:block">
-      {!netUp && (
-        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg z-50 print:hidden">
-          لا يوجد إنترنت - الشغل مستمر وسيتم رفع البيانات تلقائياً عند عودة الاتصال
+    <div className="min-h-screen md:h-screen md:overflow-hidden flex flex-col md:flex-row bg-brand-50 print:bg-white print:block print:h-auto print:overflow-visible">
+      {!persistenceOk && (
+        <div className="fixed top-0 left-0 right-0 bg-red-700 text-white text-sm font-bold p-2 z-50 text-center print:hidden">
+          ⚠️ هذا المتصفح لا يحفظ البيانات على الجهاز (غالباً وضع التصفح الخاص). لا تعتمد على العمل أوفلاين هنا، واستخدم نافذة عادية.
         </div>
       )}
+      {offlineSaveToast && (
+        <div className="fixed top-14 md:top-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs md:text-sm font-bold px-3 py-2 md:px-4 md:py-3 rounded-xl shadow-2xl z-[60] max-w-[92vw] md:max-w-xl text-center print:hidden" onClick={() => setOfflineSaveToast(null)}>
+          {offlineSaveToast}
+        </div>
+      )}
+      <div className="fixed bottom-3 left-3 hidden xl:flex flex-col gap-2 z-50 print:hidden pointer-events-none">
+        {!netUp && (
+          <div className="bg-red-600 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg">
+            أوفلاين: لا يوجد إنترنت، الشغل مستمر وسيتم رفع البيانات تلقائياً عند عودة الاتصال
+          </div>
+        )}
+        {pendingWrites > 0 && (
+          <div className="bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-full shadow-lg">
+            {netUp ? 'جاري رفع البيانات...' : 'بيانات محفوظة على الجهاز ولم تُرفع بعد'}
+          </div>
+        )}
+      </div>
       {/* Error Banner for Permissions */}
       {permissionError && (
         <div className="fixed top-0 left-0 right-0 bg-red-600 text-white p-4 z-50 text-center shadow-xl animate-bounce-in print:hidden">
@@ -101,6 +135,20 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
             </button>
           )}
           <h1 className="text-base font-bold truncate">بورصة النجار</h1>
+          {netUp ? (
+            <span className="flex items-center gap-1 bg-green-600/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+              <span className="w-1.5 h-1.5 bg-white rounded-full"></span>متصل
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 animate-pulse">
+              <span className="w-1.5 h-1.5 bg-white rounded-full"></span>أوفلاين
+            </span>
+          )}
+          {pendingWrites > 0 && (
+            <span className="bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+              {netUp ? 'جاري الرفع' : 'لم تُرفع'}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {canManageBackup && (
@@ -121,7 +169,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
 
       {/* Sidebar */}
       <aside className={`
-        print:hidden fixed md:static inset-y-0 right-0 z-50 w-72 md:w-64 bg-gradient-to-b from-brand-800 to-brand-900 text-white shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col scrollbar-none no-scrollbar
+        print:hidden fixed md:static md:h-screen md:shrink-0 md:overflow-hidden inset-y-0 right-0 z-50 w-72 md:w-64 bg-gradient-to-b from-brand-800 to-brand-900 text-white shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col scrollbar-none no-scrollbar
         ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
       `}>
         {/* Drawer Header: Compact on Mobile, Luxurious & Centered on Desktop */}
@@ -129,15 +177,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           <div className="flex items-center gap-2 min-w-0 lg:block">
             <h1 className="text-base lg:text-lg xl:text-xl font-black text-white tracking-wide lg:tracking-wider truncate">بورصة النجار</h1>
             <div className="flex items-center gap-1 lg:gap-1.5 bg-brand-900/60 py-0.5 px-2 lg:py-1 lg:px-3 rounded-full border border-brand-700/40 shrink-0 lg:mt-2 lg:mx-auto lg:w-fit">
-              {isOnline ? (
+              {netUp ? (
                 <>
                   <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-green-500 rounded-full animate-pulse"></div>
                   <span className="text-[10px] lg:text-xs text-green-300 font-bold">متصل (أونلاين)</span>
                 </>
               ) : (
                 <>
-                  <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-gray-400 rounded-full"></div>
-                  <span className="text-[10px] lg:text-xs text-gray-400 font-bold">محلي (أوفلاين)</span>
+                  <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-[10px] lg:text-xs text-red-400 font-bold">غير متصل (أوفلاين)</span>
                 </>
               )}
             </div>
@@ -155,7 +203,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           </button>
         </div>
 
-        <nav className="flex-1 mt-1.5 lg:mt-3 px-2 lg:px-3 overflow-y-auto scrollbar-none no-scrollbar lg:space-y-1.5">
+        <nav className="flex-1 min-h-0 mt-1.5 lg:mt-3 px-2 lg:px-3 overflow-y-auto scrollbar-none no-scrollbar lg:space-y-1.5">
           {filteredNav.map((item) => (
             <button
               key={item.id}
@@ -172,6 +220,16 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
             >
               <span className="shrink-0 [&>svg]:w-4.5 [&>svg]:h-4.5 lg:[&>svg]:w-5 lg:[&>svg]:h-5">{item.icon}</span>
               <span className="truncate">{item.label}</span>
+              {(item.id === 'sales' || item.id === 'sales-history') && pendingReviewCount > 0 && (
+                <span className="mr-auto bg-rose-500 text-white text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs" title="فواتير جديدة لم تُراجع">
+                  {pendingReviewCount}
+                </span>
+              )}
+              {item.id === 'purchases' && pendingPurchaseReviewCount > 0 && (
+                <span className="mr-auto bg-rose-500 text-white text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs" title="فواتير مشتريات جديدة لم تُراجع">
+                  {pendingPurchaseReviewCount}
+                </span>
+              )}
               {item.id === 'purchases' && pendingPurchasesCount > 0 && (
                 <span className="mr-auto bg-amber-400 text-amber-950 text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs">
                   {pendingPurchasesCount}
@@ -219,21 +277,26 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto print:overflow-visible print:h-auto print:p-0 p-2 md:p-4 h-screen">
+      <main className="flex-1 min-w-0 overflow-y-auto print:overflow-visible print:h-auto print:p-0 p-2 md:p-4 h-screen">
         {activePage !== 'customers' && activePage !== 'suppliers' && (
           <header className="mb-3 hidden md:flex print:hidden justify-between items-center bg-white py-2 px-4 rounded-xl shadow-xs border border-brand-100">
              <div className="flex items-center gap-4">
                 <h2 className="text-xl font-bold text-brand-900">
                   {navItems.find(i => i.id === activePage)?.label}
                 </h2>
-                {!isOnline && (
-                  <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-amber-200">
+                {!netUp && (
+                  <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-red-300">
                      <WifiOff size={12}/> وضع غير متصل (Offline)
                   </span>
                 )}
-                {isOnline && (
+                {netUp && (
                   <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-lg flex items-center gap-1 border border-green-200">
                      <Wifi size={12}/> متصل (Online)
+                  </span>
+                )}
+                {pendingWrites > 0 && (
+                  <span className="xl:hidden bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-lg border border-amber-300">
+                     {netUp ? 'جاري رفع البيانات...' : 'بيانات لم تُرفع بعد'}
                   </span>
                 )}
              </div>
@@ -253,6 +316,60 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
              </div>
           </header>
         )}
+        {/* Persistent New-Invoices-To-Review Banner */}
+        {pendingReviewCount > 0 && (activePage === 'sales' || activePage === 'sales-history') && (
+          <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
+                <FileText size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm md:text-base text-rose-900 flex items-center gap-2">
+                  <span>تنبيه: فواتير بيع جديدة بانتظار المراجعة</span>
+                  <span className="bg-rose-200 text-rose-950 text-xs px-2 py-0.5 rounded-full font-black">{pendingReviewCount}</span>
+                </h4>
+                <p className="text-xs md:text-sm text-rose-800">
+                  يوجد ({pendingReviewCount}) فواتير بيع تم إنشاؤها ولم تتم مراجعتها واعتمادها بعد (قد لا تكون خرجت للعميل).
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { try { sessionStorage.setItem('erp_hist_review_filter', 'PENDING'); } catch { /* ignore */ } if (activePage === 'sales-history') { window.dispatchEvent(new Event('erp-hist-review-filter')); } else { onNavigate('sales-history'); } }}
+              className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
+            >
+              <FileText size={16} />
+              <span>مراجعة الفواتير الآن</span>
+            </button>
+          </div>
+        )}
+
+        {/* Purchases awaiting review banner */}
+        {pendingPurchaseReviewCount > 0 && activePage === 'purchases' && (
+          <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
+                <ShoppingCart size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm md:text-base text-rose-900 flex items-center gap-2">
+                  <span>تنبيه: فواتير مشتريات جديدة بانتظار المراجعة</span>
+                  <span className="bg-rose-200 text-rose-950 text-xs px-2 py-0.5 rounded-full font-black">{pendingPurchaseReviewCount}</span>
+                </h4>
+                <p className="text-xs md:text-sm text-rose-800">
+                  يوجد ({pendingPurchaseReviewCount}) فواتير مشتريات تم إضافتها ولم تتم مراجعتها واعتمادها بعد.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { try { sessionStorage.setItem('erp_pur_review_filter', 'PENDING'); } catch { /* ignore */ } window.dispatchEvent(new Event('erp-pur-review-filter')); }}
+              className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
+            >
+              <ShoppingCart size={16} />
+              <span>مراجعة الفواتير الآن</span>
+            </button>
+          </div>
+        )}
+
         {/* Persistent Pending Price Alert Banner */}
         {pendingPurchasesCount > 0 && activePage !== 'purchases' && (
           <div className="mb-4 bg-amber-500/10 border-2 border-amber-500/40 rounded-xl p-3 md:p-4 text-amber-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">

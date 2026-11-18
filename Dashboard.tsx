@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { TrendingUp, Users, Package, Truck, Trash2, Check, X, AlertTriangle, Clock, ShoppingCart } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { canDo } from '../utils/permissions';
+import { calculateSupplierBalance } from '../utils/supplierStatement';
 
 export const Dashboard: React.FC = () => {
   const { 
@@ -10,21 +12,25 @@ export const Dashboard: React.FC = () => {
     customers, 
     suppliers, 
     purchases,
+    rawPurchases,
     currentTreasuryBalance, 
     currentTreasuryBalanceMarg,
     currentTreasuryBalanceNozha,
     invoices, 
     deleteInvoice,
-    currentUser
+    currentUser,
+    customerBalanceOf
   } = useERP();
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  const canDeleteInvoices = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteInvoices);
+  const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
 
   // Filter out deleted items (Soft Delete)
   const activeCustomers = customers.filter(c => !c.isDeleted);
   const activeSuppliers = suppliers.filter(s => !s.isDeleted);
-  const activeInvoices = invoices.filter(i => !i.isDeleted);
+  // فواتير العميل المحذوف (في سلة المهملات) متظهرش، وبترجع مع استرجاعه
+  const deletedCustCodes = new Set(customers.filter(c => c.isDeleted).map(c => c.code));
+  const activeInvoices = invoices.filter(i => !i.isDeleted && !deletedCustCodes.has(i.customerCode));
   const activePurchases = purchases.filter(p => !p.isDeleted);
 
   const pendingPurchases = activePurchases.filter(p => p.pricingStatus === 'PENDING_PRICE');
@@ -35,16 +41,17 @@ export const Dashboard: React.FC = () => {
   const totalStockNozhaValue = products.reduce((sum, p) => sum + ((p.quantityNozha ?? 0) * p.price), 0);
 
   // Calculations for Customer Debt (Split by branch)
-  const totalCustomerDebt = activeCustomers.reduce((sum, c) => sum + c.balance, 0);
+  const totalCustomerDebt = activeCustomers.reduce((sum, c) => sum + customerBalanceOf(c), 0);
   const customerDebtMarg = activeCustomers
     .filter(c => (c.branchId || 'MARG') === 'MARG')
-    .reduce((sum, c) => sum + c.balance, 0);
+    .reduce((sum, c) => sum + customerBalanceOf(c), 0);
   const customerDebtNozha = activeCustomers
     .filter(c => c.branchId === 'NOZHA')
-    .reduce((sum, c) => sum + c.balance, 0);
+    .reduce((sum, c) => sum + customerBalanceOf(c), 0);
 
   // Calculations for Supplier Debt (Split by branch delivery attribution)
-  const totalSupplierDebt = activeSuppliers.reduce((sum, s) => sum + (s.balance > 0 ? s.balance : 0), 0);
+  // نفس مصدر كشف الحساب المجمع: صافي أرصدة الموردين من كشف حساب كل مورد (سالب في الكشف = علينا، فبنقلب الإشارة)
+  const totalSupplierDebt = Math.round(activeSuppliers.reduce((sum, s) => sum - calculateSupplierBalance(s, rawPurchases), 0) * 100) / 100;
   const purchasesMargTotal = activePurchases
     .filter(p => (p.branchId || 'MARG') === 'MARG' && p.pricingStatus !== 'PENDING_PRICE')
     .reduce((sum, p) => sum + (p.total || 0), 0);

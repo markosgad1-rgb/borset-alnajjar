@@ -4,9 +4,11 @@ import { useERP } from '../context/ERPContext';
 import { UserPlus, FileText, Edit, Briefcase, RefreshCcw, Trash2, AlertTriangle, Check, X } from 'lucide-react';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useBackHandler } from '../utils/backNavigation';
+import { canDo } from '../utils/permissions';
 
 export const Employees: React.FC = () => {
   const { employees, addEmployee, updateEmployee, deleteEmployee, clearLedger, currentUser } = useERP();
+  const __me = useERP().currentUser;
   
   const [formData, setFormData] = useState({ code: '', name: '', role: '', salary: '', balance: '' });
   const [selectedEmployeeCode, setSelectedEmployeeCode] = useState<string | null>(null);
@@ -223,15 +225,15 @@ export const Employees: React.FC = () => {
                     </div>
                     
                     <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
+                      {canDo(__me, 'employee.edit') && (<button 
                         onClick={(event) => handleEditClick(event, e)}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
                         title="تعديل"
                       >
                         <Edit size={16} />
-                      </button>
+                      </button>)}
 
-                      {currentUser?.permissions.canDeleteLedgers && (
+                      {canDo(currentUser, 'employee.delete') && (
                         deleteConfirmId === e.code ? (
                            <div className="flex items-center gap-1 bg-red-50 p-1 rounded border border-red-100" onClick={e => e.stopPropagation()}>
                              <button 
@@ -279,12 +281,12 @@ export const Employees: React.FC = () => {
                   <div>
                     <h2 className="text-2xl font-bold text-brand-900 flex items-center gap-3">
                       {selectedEmployee.name}
-                      <button 
+                      {canDo(__me, 'employee.edit') && (<button 
                         onClick={(e) => handleEditClick(e, selectedEmployee)}
                         className="text-sm font-normal bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded flex items-center gap-1 transition-colors"
                       >
                         <Edit size={14}/> تعديل
-                      </button>
+                      </button>)}
                     </h2>
                     <div className="flex gap-2 mt-1">
                         <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-mono">#{selectedEmployee.code}</span>
@@ -313,7 +315,7 @@ export const Employees: React.FC = () => {
                       <FileText size={18} /> سجل الرواتب والسلف
                     </h4>
                     
-                    {currentUser?.permissions.canDeleteLedgers && (
+                    {canDo(currentUser, 'ledger.clear') && (
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-2 bg-red-50 p-1.5 rounded-lg border border-red-200 animate-fade-in">
                            <AlertTriangle size={16} className="text-red-500" />

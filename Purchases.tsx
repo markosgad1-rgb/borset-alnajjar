@@ -1,14 +1,17 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Plus, Search, Trash2, Check, X, ShoppingCart, PlusCircle, Save, Eye, Edit, FileText, Printer, Truck, MessageCircle, Building, AlertTriangle, Clock, Calculator, Wallet, Building2, Smartphone } from 'lucide-react';
 import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { CartNumberInput } from '../components/CartNumberInput';
+import { canDo } from '../utils/permissions';
 
 export const Purchases: React.FC = () => {
-  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, products, suppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance } = useERP();
+  const { addPurchase, updatePurchase, finalizePurchasePrice, purchases, rawPurchases, userScope, products, suppliers: allSuppliers, deletePurchase, deletePurchaseInvoice, currentUser, printPurchaseInvoice, companyLogo, calculateSupplierBalance, markPurchasesReviewed } = useERP();
+  // الموردين المحذوفين (اللي في سلة المهملات) ما يظهروش في الاختيار أو الحفظ
+  const suppliers = useMemo(() => allSuppliers.filter(s => !s.isDeleted), [allSuppliers]);
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
   // PDF sharing state
@@ -16,7 +19,7 @@ export const Purchases: React.FC = () => {
 
   // Header State
   const [purchaseId, setPurchaseId] = useState('R001'); // Auto-generated ID
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [supplierCode, setSupplierCode] = useState('');
   const [supplierName, setSupplierName] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
@@ -73,15 +76,26 @@ export const Purchases: React.FC = () => {
 
   const currentSupplier = suppliers.find(s => s.code === supplierCode);
 
-  const canEditPurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canEditPurchases);
-  const canDeletePurchases = !currentUser || currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeletePurchases || currentUser?.permissions?.canEditPurchases);
+  const canEditPurchases = canDo(currentUser, 'purchase.edit');
+  const canReviewPurchases = canDo(currentUser, 'purchase.review');
+  const [reviewFilter, setReviewFilter] = useState<'ALL' | 'PENDING' | 'REVIEWED'>(() => {
+    try { const v = sessionStorage.getItem('erp_pur_review_filter'); if (v) { sessionStorage.removeItem('erp_pur_review_filter'); return v === 'PENDING' ? 'PENDING' : 'ALL'; } } catch { /* ignore */ }
+    return 'ALL';
+  });
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  useEffect(() => {
+    const h = () => { try { sessionStorage.removeItem('erp_pur_review_filter'); } catch { /* ignore */ } setReviewFilter('PENDING'); };
+    window.addEventListener('erp-pur-review-filter', h);
+    return () => window.removeEventListener('erp-pur-review-filter', h);
+  }, []);
+  const canDeletePurchases = canDo(currentUser, 'purchase.delete');
 
   // Auto-generate Purchase ID (R001 series)
   useEffect(() => {
-    if (purchases.length === 0) {
+    if (rawPurchases.length === 0) {
       setPurchaseId('R001');
     } else {
-      const rIds = purchases
+      const rIds = rawPurchases
         .filter(p => p.id && p.id.startsWith('R'))
         .map(p => parseInt(p.id.replace(/\D/g, '')))
         .filter(num => !isNaN(num));
@@ -93,7 +107,7 @@ export const Purchases: React.FC = () => {
         setPurchaseId('R001');
       }
     }
-  }, [purchases]);
+  }, [rawPurchases]);
 
   const handleSupplierChange = (name: string) => {
     const supplier = suppliers.find(s => s.name === name);
@@ -195,6 +209,16 @@ export const Purchases: React.FC = () => {
     }, 60);
   };
 
+  const updateCartQuantity = (index: number, q: number): boolean => {
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, quantity: q, total: q * it.price } : it));
+    return true;
+  };
+
+  const updateCartPrice = (index: number, pr: number): boolean => {
+    setCartItems(prev => prev.map((it, i) => i === index ? { ...it, price: pr, total: it.quantity * pr } : it));
+    return true;
+  };
+
   const removeFromCart = (index: number) => {
     setCartItems(prev => prev.filter((_, i) => i !== index));
   };
@@ -206,10 +230,16 @@ export const Purchases: React.FC = () => {
   const remainingOnInvoice = Math.max(0, cartTotal - paidAmountVal);
 
   // Calculate expected new balance for display
-  const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, purchases) : 0;
+  const currentBalance = currentSupplier ? calculateSupplierBalance(currentSupplier, rawPurchases) : 0;
   const expectedBalance = isPricePending ? currentBalance : (currentBalance - cartTotal + paidAmountVal);
 
+  const handleSaveInvoiceLock = useRef(false);
   const handleSaveInvoice = async () => {
+    if (handleSaveInvoiceLock.current) return;
+    handleSaveInvoiceLock.current = true;
+    try { await _handleSaveInvoice(); } finally { setTimeout(() => { handleSaveInvoiceLock.current = false; }, 1000); }
+  };
+  const _handleSaveInvoice = async () => {
     if (isSubmitting) return;
 
     if (cartItems.length === 0) {
@@ -375,7 +405,13 @@ export const Purchases: React.FC = () => {
     });
   };
 
+  const handleSaveEditLock = useRef(false);
   const handleSaveEdit = async () => {
+    if (handleSaveEditLock.current) return;
+    handleSaveEditLock.current = true;
+    try { await _handleSaveEdit(); } finally { setTimeout(() => { handleSaveEditLock.current = false; }, 1000); }
+  };
+  const _handleSaveEdit = async () => {
     if (!editPurchase || isSavingEdit) return;
     if (editItems.length === 0) return notify("لا يمكن حفظ فاتورة فارغة");
 
@@ -413,8 +449,10 @@ export const Purchases: React.FC = () => {
 
   const filteredPurchases = activePurchases
     .filter(p => {
-      if (historyFilter === 'PENDING_PRICE') return p.pricingStatus === 'PENDING_PRICE';
-      if (historyFilter === 'PRICED') return p.pricingStatus !== 'PENDING_PRICE';
+      if (historyFilter === 'PENDING_PRICE' && p.pricingStatus !== 'PENDING_PRICE') return false;
+      if (historyFilter === 'PRICED' && p.pricingStatus === 'PENDING_PRICE') return false;
+      if (reviewFilter === 'PENDING' && p.reviewStatus !== 'PENDING_REVIEW') return false;
+      if (reviewFilter === 'REVIEWED' && p.reviewStatus === 'PENDING_REVIEW') return false;
       return true;
     })
     .sort((a, b) => {
@@ -507,8 +545,8 @@ export const Purchases: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b">
           <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-700">المخزن المستقبل (الإدارة)</label>
-            <div className="grid grid-cols-2 gap-2">
-              {BRANCHES.map(b => (
+            <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+              {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => (
                 <button
                   key={b.id}
                   type="button"
@@ -693,15 +731,11 @@ export const Purchases: React.FC = () => {
               {cartItems.map((item, idx) => (
                 <tr key={idx} className="hover:bg-gray-50">
                   <td className="p-3">{item.itemName} <span className="text-xs text-gray-400">({item.itemCode})</span></td>
-                  <td className="p-3 font-bold">{item.quantity}</td>
                   <td className="p-3">
-                    {item.price > 0 ? (
-                      item.price.toLocaleString()
-                    ) : (
-                      <span className="text-xs text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        معلّق
-                      </span>
-                    )}
+                    <CartNumberInput value={item.quantity} onCommit={v => updateCartQuantity(idx, v)} className="w-20" />
+                  </td>
+                  <td className="p-3">
+                    <CartNumberInput value={item.price} onCommit={v => updateCartPrice(idx, v)} allowZero={isPricePending} className="w-24" title={isPricePending ? 'السعر معلّق (يمكن تركه 0)' : undefined} />
                   </td>
                   <td className="p-3 font-bold text-green-600">
                     {item.total > 0 ? (
@@ -978,6 +1012,16 @@ export const Purchases: React.FC = () => {
           </div>
         </div>
 
+        <div className="p-3 bg-rose-50/60 border-y border-rose-200/70 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-rose-900 ml-1">مراجعة الفواتير:</span>
+          {([['ALL', 'الكل'], ['PENDING', `لم تُراجع (${activePurchases.filter(p => p.reviewStatus === 'PENDING_REVIEW').length})`], ['REVIEWED', 'تمت مراجعتها']] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setReviewFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${reviewFilter === k ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-right text-sm">
             <thead className="bg-brand-50 text-brand-700">
@@ -998,8 +1042,15 @@ export const Purchases: React.FC = () => {
                 const bId = purchase.branchId || 'MARG';
 
                 return (
-                  <tr key={purchase.id} className={`hover:bg-gray-50 ${isPending ? 'bg-amber-50/30' : ''}`}>
-                    <td className="p-4 font-mono font-bold text-blue-600">{purchase.id}</td>
+                  <tr key={purchase.id} className={`hover:bg-gray-50 ${purchase.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : isPending ? 'bg-amber-50/30' : ''}`}>
+                    <td className="p-4 font-mono font-bold text-blue-600">
+                      {purchase.id}
+                      {purchase.reviewStatus === 'PENDING_REVIEW' && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold font-sans">جديدة - لم تُراجع</span>
+                      )}
+                      {purchase.createdByName && <span className="block text-[10px] font-normal text-gray-500 font-sans">بواسطة: {purchase.createdByName}</span>}
+                      {purchase.reviewStatus === 'REVIEWED' && purchase.reviewedBy && <span className="block text-[10px] font-normal text-emerald-700 font-sans">راجعها: {purchase.reviewedBy}</span>}
+                    </td>
                     <td className="p-4 text-gray-600 font-mono text-xs">{purchase.date}</td>
                     <td className="p-4 font-medium text-gray-800">{purchase.supplierName}</td>
                     <td className="p-4">
@@ -1037,6 +1088,17 @@ export const Purchases: React.FC = () => {
                       )}
                     </td>
                     <td className="p-4 flex gap-1.5 items-center flex-wrap">
+                      {canReviewPurchases && purchase.reviewStatus === 'PENDING_REVIEW' && (
+                        <button
+                          type="button"
+                          disabled={reviewingId === purchase.id}
+                          onClick={async () => { setReviewingId(purchase.id); try { await markPurchasesReviewed([purchase.id]); } finally { setReviewingId(null); } }}
+                          className="bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1"
+                          title="تمت المراجعة - اعتماد الفاتورة"
+                        >
+                          <Check size={14} /> تمت المراجعة
+                        </button>
+                      )}
                       {/* Price Setting Button for Pending Invoices */}
                       {isPending && (
                         <button

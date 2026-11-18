@@ -8,14 +8,20 @@ import {
 import { PaymentMethod, BranchId, BRANCHES, getBranchAreas, Customer, Supplier, Employee } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
+import { canDo } from '../utils/permissions';
+import { calculateSupplierBalance } from '../utils/supplierStatement';
+import { CustomerToSupplierTransfer } from '../components/CustomerToSupplierTransfer';
 
 export const Transfers: React.FC = () => {
-  const { customers, suppliers, employees, treasury, addTransfer, deleteTransfer } = useERP();
+  const { customers, suppliers, employees, treasury, rawPurchases: purchases, addTransfer, deleteTransfer, customerBalanceOf, userScope } = useERP();
+  // رصيد المورد بيتحسب من كشف حسابه (نفس المصدر في صفحة الموردين)، مش من الرقم المخزّن
+  const balanceOf = (e: any): number => (entityType === 'SUPPLIER' ? calculateSupplierBalance(e as Supplier, purchases) : entityType === 'CUSTOMER' ? customerBalanceOf(e) : e.balance);
+  const __me = useERP().currentUser;
   const { confirm: askConfirm, notify, dialog } = useDialog();
   
   const [entityType, setEntityType] = useState<'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'>('CUSTOMER');
   
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
 
   const [formData, setFormData] = useState({
@@ -118,7 +124,7 @@ export const Transfers: React.FC = () => {
         code: entity.code,
         name: entity.name
       }));
-      setCurrentBalance(entity.balance);
+      setCurrentBalance(balanceOf(entity));
       setEntitySearchText(formatEntityLabel(entity));
 
       if (entityType === 'CUSTOMER') {
@@ -194,7 +200,7 @@ export const Transfers: React.FC = () => {
     const entity = allActiveOfType.find(e => e.code.toLowerCase() === trimmed);
     if (entity) {
       setFormData(prev => ({ ...prev, name: entity.name }));
-      setCurrentBalance(entity.balance);
+      setCurrentBalance(balanceOf(entity));
       setEntitySearchText(formatEntityLabel(entity));
       if (entityType === 'CUSTOMER') {
         const c = entity as Customer;
@@ -220,6 +226,7 @@ export const Transfers: React.FC = () => {
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showC2S, setShowC2S] = useState(false);
 
   // Filter and sort transfers strictly descending: newest first
   const recentTransfers = useMemo(() => {
@@ -250,13 +257,19 @@ export const Transfers: React.FC = () => {
     const directionStr = isIncoming ? 'وارد (استلام)' : 'صادر (دفع)';
     
     const confirmed = await askConfirm(
-      `هل أنت متأكد من حذف حركة التحويل بقيمة ${amountStr} (${directionStr})؟ سيتم إلغاء أثرها تلقائياً من الخزنة ومن كشف الحساب المرتبط.`
+      `هل أنت متأكد من حذف حركة التحويل بقيمة ${amountStr} (${directionStr})؟ سيتم إلغاء أثرها تلقائياً من الخزنة ومن كشف الحساب المرتبط.` +
+      (t.groupId ? '\nهذه الحركة جزء من تحويل عميل ← مورد، وسيتم حذف الجزء الآخر منها (العميل والمورد) معاً.' : '')
     );
     
     if (!confirmed) return;
     
     try {
       const res = await deleteTransfer(t.id);
+      // تحويل عميل ← مورد: بنحذف النصف التاني من نفس العملية
+      if (res.success && t.groupId) {
+        const other = treasury.find(x => x.groupId === t.groupId && x.id !== t.id);
+        if (other) await deleteTransfer(other.id);
+      }
       if (res.success) {
         notify('تم حذف حركة التحويل وإلغاء أثرها من الخزينة وكشف الحساب بنجاح.');
       } else {
@@ -268,7 +281,13 @@ export const Transfers: React.FC = () => {
     }
   };
 
+  const handleSubmitLock = useRef(false);
   const handleSubmit = async (e: React.FormEvent) => {
+    if (handleSubmitLock.current) { e?.preventDefault?.(); return; }
+    handleSubmitLock.current = true;
+    try { await _handleSubmit(e); } finally { setTimeout(() => { handleSubmitLock.current = false; }, 1000); }
+  };
+  const _handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(formData.amount);
 
@@ -338,6 +357,10 @@ export const Transfers: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      <button type="button" onClick={() => setShowC2S(v => !v)} className="w-full flex items-center justify-center gap-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 font-bold py-3 rounded-xl">
+        <ArrowRightLeft size={18} /> {showC2S ? 'إخفاء تحويل عميل ← مورد' : 'تحويل عميل ← مورد (العميل سدّد للمورد من بره)'}
+      </button>
+      {showC2S && <CustomerToSupplierTransfer notify={notify} />}
       <div className="bg-white rounded-xl shadow-sm border border-brand-100 overflow-hidden">
         <div className="p-6 bg-purple-600 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -518,8 +541,8 @@ export const Transfers: React.FC = () => {
                       <span className="w-5 h-5 rounded-full bg-purple-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
                       اختيار الفرع / الإدارة
                     </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {BRANCHES.map(b => {
+                    <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                      {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => {
                         const isSelected = selectedBranch === b.id;
                         return (
                           <button
@@ -636,7 +659,7 @@ export const Transfers: React.FC = () => {
                       <datalist id="transfersEntityList">
                         {availableCustomers.map(c => (
                           <option key={`tr_cust_${c.code}`} value={formatEntityLabel(c)}>
-                            رصيد سابق: {c.balance.toLocaleString()} ج.م
+                            رصيد سابق: {customerBalanceOf(c).toLocaleString()} ج.م
                           </option>
                         ))}
                       </datalist>
@@ -671,9 +694,9 @@ export const Transfers: React.FC = () => {
                                 </div>
                                 <div className="text-left shrink-0">
                                   <span className={`font-mono text-xs font-bold ${
-                                    c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                    customerBalanceOf(c) < 0 ? 'text-red-600' : customerBalanceOf(c) > 0 ? 'text-emerald-700' : 'text-gray-500'
                                   }`} dir="ltr">
-                                    {c.balance.toLocaleString()} ج.م
+                                    {customerBalanceOf(c).toLocaleString()} ج.م
                                   </span>
                                 </div>
                               </button>
@@ -734,7 +757,7 @@ export const Transfers: React.FC = () => {
                     <datalist id="transfersEntityList">
                       {currentDisplayList.map(e => (
                         <option key={`tr_ent_${e.code}`} value={formatEntityLabel(e)}>
-                          رصيد: {e.balance.toLocaleString()} ج.م
+                          رصيد: {balanceOf(e).toLocaleString()} ج.م
                         </option>
                       ))}
                     </datalist>
@@ -769,9 +792,9 @@ export const Transfers: React.FC = () => {
                               </div>
                               <div className="text-left shrink-0">
                                 <span className={`font-mono text-xs font-bold ${
-                                  e.balance < 0 ? 'text-red-600' : e.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                  balanceOf(e) < 0 ? 'text-red-600' : balanceOf(e) > 0 ? 'text-emerald-700' : 'text-gray-500'
                                 }`} dir="ltr">
-                                  {e.balance.toLocaleString()} ج.م
+                                  {balanceOf(e).toLocaleString()} ج.م
                                 </span>
                               </div>
                             </button>
@@ -987,7 +1010,7 @@ export const Transfers: React.FC = () => {
                         </span>
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
-                        <button
+                        {canDo(__me, 'transfer.delete') && (<button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -997,7 +1020,7 @@ export const Transfers: React.FC = () => {
                           title="حذف حركة التحويل وإلغاؤها"
                         >
                           <Trash2 className="w-4 h-4" />
-                        </button>
+                        </button>)}
                       </td>
                     </tr>
                   );

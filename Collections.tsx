@@ -6,10 +6,10 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { useDialog } from '../utils/useDialog';
 
 export const Collections: React.FC = () => {
-  const { customers, addCollection, treasury } = useERP();
+  const { customers, addCollection, treasury, customerBalanceOf, userScope } = useERP();
   const { notify, dialog } = useDialog();
   
-  const [selectedBranch, setSelectedBranch] = useState<BranchId>('MARG');
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
   const [selectedArea, setSelectedArea] = useState<string>('ALL');
 
   const [formData, setFormData] = useState({
@@ -92,7 +92,7 @@ export const Collections: React.FC = () => {
         customerCode: c.code,
         customerName: c.name
       }));
-      setCustomerBalance(c.balance);
+      setCustomerBalance(customerBalanceOf(c));
       setCustomerSearchText(formatCustomerLabel(c));
       if (c.branchId && c.branchId !== selectedBranch) {
         setSelectedBranch(c.branchId);
@@ -170,7 +170,7 @@ export const Collections: React.FC = () => {
     const customer = activeCustomers.find(c => c.code.toLowerCase() === trimmed);
     if (customer) {
       setFormData(prev => ({ ...prev, customerName: customer.name }));
-      setCustomerBalance(customer.balance);
+      setCustomerBalance(customerBalanceOf(customer));
       setCustomerSearchText(formatCustomerLabel(customer));
       if (customer.branchId && customer.branchId !== selectedBranch) {
         setSelectedBranch(customer.branchId);
@@ -202,7 +202,13 @@ export const Collections: React.FC = () => {
       });
   }, [treasury]);
 
+  const handleSubmitLock = useRef(false);
   const handleSubmit = async (e: React.FormEvent) => {
+    if (handleSubmitLock.current) { e?.preventDefault?.(); return; }
+    handleSubmitLock.current = true;
+    try { await _handleSubmit(e); } finally { setTimeout(() => { handleSubmitLock.current = false; }, 1000); }
+  };
+  const _handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseNumberFromCommas(formData.amount);
 
@@ -271,8 +277,8 @@ export const Collections: React.FC = () => {
                     <span className="w-5 h-5 rounded-full bg-blue-600 text-white inline-flex items-center justify-center text-[11px] font-bold">1</span>
                     اختيار الفرع / الإدارة
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {BRANCHES.map(b => {
+                  <div className={`grid gap-2 ${userScope.restricted ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                    {BRANCHES.filter(b => !userScope.restricted || b.id === userScope.branch).map(b => {
                       const isSelected = selectedBranch === b.id;
                       return (
                         <button
@@ -382,7 +388,7 @@ export const Collections: React.FC = () => {
                     <datalist id="customerNamesList">
                       {availableCustomers.map(c => (
                         <option key={`col_cust_${c.code}`} value={formatCustomerLabel(c)}>
-                          رصيد سابق: {c.balance.toLocaleString()} ج.م
+                          رصيد سابق: {customerBalanceOf(c).toLocaleString()} ج.م
                         </option>
                       ))}
                     </datalist>
@@ -416,9 +422,9 @@ export const Collections: React.FC = () => {
                               </div>
                               <div className="text-left shrink-0">
                                 <span className={`font-mono text-xs font-bold ${
-                                  c.balance < 0 ? 'text-red-600' : c.balance > 0 ? 'text-emerald-700' : 'text-gray-500'
+                                  customerBalanceOf(c) < 0 ? 'text-red-600' : customerBalanceOf(c) > 0 ? 'text-emerald-700' : 'text-gray-500'
                                 }`} dir="ltr">
-                                  {c.balance.toLocaleString()} ج.م
+                                  {customerBalanceOf(c).toLocaleString()} ج.م
                                 </span>
                               </div>
                             </button>
@@ -598,12 +604,25 @@ export const Collections: React.FC = () => {
                   />
                   <span className="absolute left-3 top-4 text-gray-400 font-bold text-sm">ج.م</span>
                 </div>
-                {parseNumberFromCommas(formData.amount) > 0 && (
+                {parseNumberFromCommas(formData.amount) > 0 && (customerBalance !== null ? (() => {
+                  // Expected balance after this collection: current balance + collected amount.
+                  // Negative = customer still owes us (shown with minus), positive = customer has credit (no minus).
+                  let projectedBal = Math.round((customerBalance + parseNumberFromCommas(formData.amount)) * 100) / 100;
+                  if (Object.is(projectedBal, -0) || Math.abs(projectedBal) < 0.005) projectedBal = 0;
+                  return (
+                    <p className="text-xs font-bold text-gray-700 bg-gray-50 p-2 rounded border border-gray-200 flex justify-between items-center">
+                      <span>الرصيد المتوقع بعد التحصيل:</span>
+                      <span className={`font-mono font-bold ${projectedBal < 0 ? 'text-red-600' : projectedBal > 0 ? 'text-green-700' : 'text-gray-800'}`} dir="ltr">
+                        {projectedBal.toLocaleString()} ج.م
+                      </span>
+                    </p>
+                  );
+                })() : (
                   <p className="text-xs font-bold text-emerald-700 bg-emerald-50 p-2 rounded border border-emerald-100 flex justify-between">
                     <span>المبلغ المحدد:</span>
                     <span dir="ltr">{parseNumberFromCommas(formData.amount).toLocaleString()} ج.م</span>
                   </p>
-                )}
+                ))}
               </div>
             </div>
 

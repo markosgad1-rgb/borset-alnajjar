@@ -1,16 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
+import { subscribeConnection, isConnected, getPendingCount, isPersistenceOk } from './connectionStatus';
 
-export const useNetworkStatus = (): boolean => {
-  const [online, setOnline] = useState<boolean>(typeof navigator === 'undefined' ? true : navigator.onLine);
-  useEffect(() => {
-    const up = () => setOnline(true);
-    const down = () => setOnline(false);
-    window.addEventListener('online', up);
-    window.addEventListener('offline', down);
-    return () => {
-      window.removeEventListener('online', up);
-      window.removeEventListener('offline', down);
-    };
-  }, []);
-  return online;
-};
+// true  = browser has internet AND Firestore reaches the server
+// false = offline (writes are kept on this device and uploaded later)
+export const useNetworkStatus = (): boolean =>
+  useSyncExternalStore(subscribeConnection, isConnected, () => true);
+
+export const usePendingWrites = (): number =>
+  useSyncExternalStore(subscribeConnection, getPendingCount, () => 0);
+
+export const usePersistenceOk = (): boolean =>
+  useSyncExternalStore(subscribeConnection, isPersistenceOk, () => true);

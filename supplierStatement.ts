@@ -179,6 +179,34 @@ export function getSupplierStatementTransactions(
     }
   });
 
+  // فواتير المشتريات اللي مالهاش حركة في كشف المورد: بتدخل كحركة عادية عشان تتوزع بتاريخها وبأصنافها
+  // (وبتتحط قبل باقي حركات نفس اليوم، فدفعة الفاتورة تيجي بعد أصنافها)
+  {
+    const linkedIds = new Set<string>();
+    allMovements.forEach(m => {
+      if (m.isOpening) return;
+      const d = m.description || '';
+      if ((d.includes('فاتورة مشتريات') || d.includes('استلام بضاعة')) && !d.includes('سداد') && !d.includes('دفعة')) {
+        const mm = d.match(/#([A-Za-z0-9-]+)/);
+        if (mm) linkedIds.add(mm[1].trim());
+      }
+    });
+    const codeKey = (supplier.code || '').trim().toLowerCase();
+    const synthetic: UnifiedMovement[] = [];
+    (purchases || []).forEach(pu => {
+      if (pu.isDeleted) return;
+      if ((pu.supplierCode || '').trim().toLowerCase() !== codeKey) return;
+      if (linkedIds.has(String(pu.id))) return;
+      if (!/^[A-Za-z0-9-]+$/.test(String(pu.id))) return; // الرقم غير مناسب للربط: يتعامل معاه الجزء الاحتياطي تحت
+      synthetic.push({
+        date: pu.date || creationDate,
+        description: pu.pricingStatus === 'PENDING_PRICE' ? `استلام بضاعة (سعر معلّق) #${pu.id}` : `فاتورة مشتريات #${pu.id}`,
+        amount: pu.pricingStatus === 'PENDING_PRICE' ? 0 : -(parseFloat(String(pu.total || 0)) || 0)
+      });
+    });
+    if (synthetic.length) allMovements.unshift(...synthetic);
+  }
+
   // Make sure opening balance movement is strictly at index 0 (قمة مصفوفة العمليات قبل الفواتير)
   allMovements.sort((a, b) => {
     if (a.isOpening && !b.isOpening) return -1;
@@ -469,8 +497,41 @@ export function getSupplierStatementTransactions(
       ? 0 
       : (parseFloat(String(unlinked.total || 0)) || 0);
 
-    running = Math.round((running - pTotal) * 100) / 100;
     seenPurchaseIds.add(unlinked.id);
+
+    // نفس عرض الأصناف بتاع الفواتير العادية (كانت بتظهر كسطر واحد من غير أصناف)
+    if (viewMode === 'ITEMS' && unlinked.pricingStatus !== 'PENDING_PRICE' && unlinked.items && unlinked.items.length > 0) {
+      unlinked.items.forEach((item, itemIdx) => {
+        const itemQty = parseFloat(String(item.quantity || 0)) || 0;
+        const itemPrice = parseFloat(String(item.price || 0)) || 0;
+        const lineTotal = Math.round(itemQty * itemPrice * 100) / 100;
+        running = Math.round((running - lineTotal) * 100) / 100;
+        rows.push({
+          id: `p_item_${unlinked.id}_${item.itemCode || itemIdx}`,
+          num: counter++,
+          date: unlinked.date || new Date().toISOString().split('T')[0],
+          ref: unlinked.id,
+          itemName: item.itemName,
+          quantity: itemQty,
+          price: itemPrice,
+          lineTotal,
+          credit: lineTotal,
+          debit: 0,
+          runningBalance: running,
+          status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
+          isInvoiceItem: true,
+          purchaseId: unlinked.id,
+          invoiceId: unlinked.id,
+          invoiceNo: unlinked.id,
+          type: 'invoice',
+          description: `فاتورة مشتريات #${unlinked.id} - ${item.itemName}`,
+          amount: -lineTotal
+        });
+      });
+      continue;
+    }
+
+    running = Math.round((running - pTotal) * 100) / 100;
 
     rows.push({
       id: `p_unlinked_${unlinked.id}`,

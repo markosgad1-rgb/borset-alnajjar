@@ -8,12 +8,17 @@ export const Login: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const success = login(username, password);
-    if (!success) {
-      setError('اسم المستخدم أو كلمة المرور غير صحيحة');
+    setError('');
+    setBusy(true);
+    try {
+      const res = await login(username, password);
+      if (!res.ok) setError(res.message || 'اسم المستخدم أو كلمة المرور غير صحيحة');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -58,9 +63,10 @@ export const Login: React.FC = () => {
 
             <button 
               type="submit" 
-              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 rounded-lg transition-colors flex justify-center items-center gap-2"
+              disabled={busy}
+              className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-bold py-3 rounded-lg transition-colors flex justify-center items-center gap-2"
             >
-              <LogIn size={20} /> تسجيل الدخول
+              <LogIn size={20} /> {busy ? 'جاري التحقق...' : 'تسجيل الدخول'}
             </button>
           </form>
         </div>

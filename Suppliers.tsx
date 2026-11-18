@@ -12,17 +12,22 @@ import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsAp
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
+import { canDo } from '../utils/permissions';
+import { logOp, opMoney, opChange } from '../utils/auditLog';
 
 export const Suppliers: React.FC = () => {
   const { 
     suppliers, addSupplier, updateSupplier, deleteSupplier,
     clearLedger, cleanCorruptedSupplierOpeningBalance,
-    currentUser, purchases, printLedger, printPurchaseInvoice,
+    currentUser, rawPurchases: purchases, printLedger, printPurchaseInvoice,
     companyLogo, deleteSupplierLedgerMovement, deletePurchase
   } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();
 
-  const canDeleteSuppliers = currentUser?.role === 'ADMIN' || currentUser?.username === 'admin' || Boolean(currentUser?.permissions?.canDeleteSuppliers);
+  const canDeleteSuppliers = canDo(currentUser, 'supplier.delete');
+  const canAddSupplier = canDo(currentUser, 'supplier.add');
+  const canEditSupplier = canDo(currentUser, 'supplier.edit');
+  const canDeleteMovement = canDo(currentUser, 'ledger.deleteMovement');
   
   // Mobile Master-Detail view state: 'LIST' or 'DETAILS'
   const [mobileView, setMobileView] = useState<'LIST' | 'DETAILS'>('LIST');
@@ -178,6 +183,16 @@ export const Suppliers: React.FC = () => {
       const today = new Date().toISOString().split('T')[0];
 
       if (isEditing && editingOldCode) {
+        {
+          const oldS = suppliers.find(s => s.code === editingOldCode);
+          logOp('update', `تعديل بيانات المورد ${oldS?.name || editingOldCode}`, [
+            `المورد: ${oldS?.name || ''} (${editingOldCode})`,
+            ...opChange('الاسم', oldS?.name, formData.name),
+            ...opChange('الكود', editingOldCode, formData.code),
+            ...opChange('الهاتف', oldS?.phone, formData.phone),
+            ...opChange('الرصيد الافتتاحي', oldS?.openingBalance ?? 0, signedBal, true)
+          ], editingOldCode);
+        }
         updateSupplier(editingOldCode, { 
           code: formData.code, 
           name: formData.name, 
@@ -226,7 +241,7 @@ export const Suppliers: React.FC = () => {
 
     // Safety check: check if supplier has any purchases, non-zero balance, or history
     const cleanCode = (supplier.code || '').trim().toLowerCase();
-    const hasPurchases = purchases.some(p => (p.supplierCode || '').trim().toLowerCase() === cleanCode);
+    const hasPurchases = purchases.some(p => !p.isDeleted && (p.supplierCode || '').trim().toLowerCase() === cleanCode);
     const hasBalance = Number(supplier.balance || 0) !== 0;
     const hasHistory = Array.isArray(supplier.history) && supplier.history.length > 0;
 
@@ -443,6 +458,12 @@ export const Suppliers: React.FC = () => {
       const updatedHistory = [...(selectedSupplier.history || []), historyMovement];
       const updatedManualTxs = [...(selectedSupplier.manualTransactions || []), manualTxRecord];
 
+      logOp('create', `حركة يدوية في كشف حساب المورد ${selectedSupplier.name} - ${opMoney(amt)}`, [
+        `المورد: ${selectedSupplier.name} (${selectedSupplier.code})`,
+        `البيان: ${desc}`,
+        `النوع: ${finalType === 'DEBIT' ? 'سداد/خصم (بيقلّل اللي علينا للمورد)' : 'مستحقات إضافية (بيزوّد اللي علينا للمورد)'}`,
+        `المبلغ: ${opMoney(amt)}`
+      ], selectedSupplier.code);
       await updateSupplier(selectedSupplier.code, {
         balance: newBal,
         history: updatedHistory,
@@ -651,12 +672,12 @@ export const Suppliers: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button 
+          {canAddSupplier && (<button 
             onClick={handleOpenAddModal}
             className="flex items-center gap-1.5 bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 transition-colors shadow-xs"
           >
             <PlusCircle size={15} /> إضافة مورد جديد
-          </button>
+          </button>)}
           
           <button 
             onClick={() => {
@@ -730,13 +751,13 @@ export const Suppliers: React.FC = () => {
                         </p>
                       </div>
 
-                      <button 
+                      {canEditSupplier && (<button 
                         onClick={(e) => handleOpenEditModal(e, s)}
                         className="opacity-0 group-hover:opacity-100 p-1 text-blue-600 hover:bg-blue-50 rounded transition-all"
                         title="تعديل بيانات المورد"
                       >
                         <Edit size={13} />
-                      </button>
+                      </button>)}
                       {canDeleteSuppliers && (
                         <button 
                           onClick={(e) => handleInitiateDelete(e, s)}
@@ -782,13 +803,13 @@ export const Suppliers: React.FC = () => {
                           {selectedSupplier.code}
                         </span>
                       </h2>
-                      <button 
+                      {canEditSupplier && (<button 
                         onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
                         className="p-1 text-gray-500 hover:text-orange-700 bg-gray-50 hover:bg-orange-50 border border-gray-200 rounded transition-colors shrink-0"
                         title="تعديل بيانات المورد"
                       >
                         <Edit size={11} />
-                      </button>
+                      </button>)}
                       {canDeleteSuppliers && (
                         <button 
                           onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
@@ -916,13 +937,13 @@ export const Suppliers: React.FC = () => {
                         >
                           <PlusCircle size={12} className="stroke-[2.5]" /> + تسوية
                         </button>
-                        <button 
+                        {canEditSupplier && (<button 
                           onClick={(e) => handleOpenEditModal(e, selectedSupplier)}
                           className="text-xs font-normal text-gray-500 hover:text-orange-700 bg-white border border-gray-200 hover:border-orange-300 px-2 py-0.5 rounded-md flex items-center gap-1 transition-colors shadow-2xs"
                           title="تعديل بيانات المورد"
                         >
                           <Edit size={12}/> تعديل
-                        </button>
+                        </button>)}
                         {canDeleteSuppliers && (
                           <button 
                             onClick={(e) => handleInitiateDelete(e, selectedSupplier)}
@@ -1049,11 +1070,11 @@ export const Suppliers: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {currentUser?.permissions.canDeleteLedgers && (
+                    {canDo(currentUser, 'ledger.clear') && (
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
-                           <span className="font-bold text-red-600">تأكيد التصفير؟</span>
+                           <span className="font-bold text-red-600">تأكيد التصفير؟ (هتتحذف فواتير المشتريات وكل الحركات)</span>
                            <button 
                              onClick={handleClearLedger}
                              className="bg-red-600 text-white px-2 py-0.5 rounded text-xs font-bold hover:bg-red-700"
@@ -1239,7 +1260,7 @@ export const Suppliers: React.FC = () => {
                               )}
                             </td>
                             <td className="p-2 text-center" key={`action_${r.id || idx}`}>
-                              <button 
+                              {canDeleteMovement && (<button 
                                 type="button"
                                 onClick={async (e) => {
                                   e.stopPropagation();
@@ -1286,7 +1307,7 @@ export const Suppliers: React.FC = () => {
                                 title="حذف هذا السطر"
                               >
                                 <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
-                              </button>
+                              </button>)}
                             </td>
                           </tr>
                         ))
@@ -1401,7 +1422,7 @@ export const Suppliers: React.FC = () => {
                               )}
                             </td>
                             <td className="p-2.5 text-center" key={`action_${r.id || idx}`}>
-                              <button 
+                              {canDeleteMovement && (<button 
                                 type="button"
                                 onClick={async (e) => {
                                   e.stopPropagation();
@@ -1448,7 +1469,7 @@ export const Suppliers: React.FC = () => {
                                 title="حذف هذا السطر"
                               >
                                 <Trash2 className="w-4 h-4 text-red-500 hover:text-red-700" />
-                              </button>
+                              </button>)}
                             </td>
                           </tr>
                         ))

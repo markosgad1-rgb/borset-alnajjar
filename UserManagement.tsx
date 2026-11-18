@@ -1,8 +1,9 @@
+import { PAGE_DEFS, ACTION_GROUPS, effectiveMap, uniformMap, syncLegacyFlags } from '../utils/permissions';
 
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
 import { Shield, UserPlus, Trash2, Edit, Check, X, Database, Loader2, Upload, Image as ImageIcon, Eye, Lock } from 'lucide-react';
-import { User, UserPermissions } from '../types';
+import { User, UserPermissions, getBranchAreas } from '../types';
 import { BackupModal } from '../components/BackupModal';
 import { useBackHandler } from '../utils/backNavigation';
 
@@ -30,10 +31,11 @@ const initialPermissions: UserPermissions = {
   canEditWarehouse: false,
   canManageTreasury: false,
   canEditPurchases: false,
+  perms: uniformMap(false),
 };
 
 export const UserManagement: React.FC = () => {
-  const { users, addUser, updateUser, deleteUser, currentUser, updateSystemLogo, companyLogo } = useERP();
+  const { users, customers, addUser, updateUser, deleteUser, currentUser, updateSystemLogo, companyLogo } = useERP();
   
   const isSuperAdmin = currentUser?.username === 'admin';
   const canManageBackup = isSuperAdmin || currentUser?.role === 'ADMIN' || Boolean(currentUser?.permissions?.canManageBackup);
@@ -55,7 +57,11 @@ export const UserManagement: React.FC = () => {
     password: '',
     fullName: '',
     role: 'USER' as 'ADMIN' | 'USER',
-    permissions: initialPermissions
+    permissions: initialPermissions,
+    allowedBranch: '' as 'MARG' | 'NOZHA' | '',
+    allowedAreas: [] as string[],
+    allowSystemPage: false,
+    features: {} as { clearStatement?: boolean; archiveStatement?: boolean }
   });
 
   const resetForm = () => {
@@ -64,7 +70,11 @@ export const UserManagement: React.FC = () => {
       password: '',
       fullName: '',
       role: 'USER',
-      permissions: initialPermissions
+      permissions: initialPermissions,
+      allowedBranch: '',
+      allowedAreas: [],
+      allowSystemPage: false,
+      features: {}
     });
     setIsEditing(false);
     setEditingId(null);
@@ -98,6 +108,7 @@ export const UserManagement: React.FC = () => {
         canEditWarehouse: true,
         canManageTreasury: true,
         canEditPurchases: true,
+        perms: uniformMap(true),
       }
     }));
   };
@@ -131,7 +142,7 @@ export const UserManagement: React.FC = () => {
         resetForm();
         return;
       }
-      updateUser(editingId, { ...formData, role: finalRole });
+      updateUser(editingId, { ...formData, features: formData.features, allowSystemPage: finalRole === 'ADMIN' && formData.allowSystemPage, allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch, allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
       alert(finalRole === 'ADMIN' ? 'تم ترقية/تحديث المستخدم كمدير نظام كامل بنجاح' : 'تم تحديث بيانات المستخدم وتعديل صلاحياته كمستخدم عادي بنجاح');
     } else {
       if (users.some(u => u.username === formData.username)) {
@@ -141,7 +152,11 @@ export const UserManagement: React.FC = () => {
       addUser({
         id: Date.now().toString(),
         ...formData,
-        role: finalRole
+        allowSystemPage: finalRole === 'ADMIN' && formData.allowSystemPage,
+        allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch,
+        allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas,
+        role: finalRole,
+        permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions)
       });
       alert('تم إضافة المستخدم بنجاح');
     }
@@ -166,6 +181,10 @@ export const UserManagement: React.FC = () => {
       password: user.password,
       fullName: user.fullName,
       role: isAdmin ? 'ADMIN' : 'USER',
+      allowedBranch: (user.allowedBranch === 'MARG' || user.allowedBranch === 'NOZHA') ? user.allowedBranch : '',
+      allowedAreas: Array.isArray(user.allowedAreas) ? user.allowedAreas : [],
+      allowSystemPage: user.allowSystemPage === true,
+      features: { clearStatement: user.features?.clearStatement === true, archiveStatement: user.features?.archiveStatement === true },
       permissions: {
         canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales ?? isAdmin),
         canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales ?? isAdmin),
@@ -190,6 +209,7 @@ export const UserManagement: React.FC = () => {
         canEditWarehouse: Boolean(userPerms.canEditWarehouse),
         canManageTreasury: Boolean(userPerms.canManageTreasury),
         canEditPurchases: Boolean(userPerms.canEditPurchases),
+        perms: isAdmin ? uniformMap(true) : effectiveMap(userPerms),
       }
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -257,6 +277,7 @@ export const UserManagement: React.FC = () => {
           updated.canEditInvoices = true;
           updated.canManageBackup = true;
           updated.admin = true;
+          updated.perms = uniformMap(true);
           return {
             ...prev,
             role: 'ADMIN',
@@ -287,6 +308,30 @@ export const UserManagement: React.FC = () => {
         ...prev,
         permissions: updated
       };
+    });
+  };
+
+  const togglePerm = (key: string) => {
+    setFormData(prev => {
+      const perms = { ...(prev.permissions.perms || {}) };
+      perms[key] = !perms[key];
+      const permissions: UserPermissions = { ...prev.permissions, perms };
+      // أي إلغاء لصلاحية يُنزل المستخدم من رتبة مدير النظام الكامل
+      if (!perms[key] && prev.permissions.admin) {
+        permissions.admin = false;
+        return { ...prev, role: 'USER', permissions };
+      }
+      return { ...prev, permissions };
+    });
+  };
+
+  const setGroup = (keys: string[], value: boolean) => {
+    setFormData(prev => {
+      const perms = { ...(prev.permissions.perms || {}) };
+      keys.forEach(k => { perms[k] = value; });
+      const permissions: UserPermissions = { ...prev.permissions, perms };
+      if (!value && prev.permissions.admin) { permissions.admin = false; return { ...prev, role: 'USER', permissions }; }
+      return { ...prev, permissions };
     });
   };
 
@@ -450,167 +495,102 @@ export const UserManagement: React.FC = () => {
           </div>
 
           <div className="space-y-6">
-            {/* القسم الأول: صلاحيات الوصول للصفحات */}
+            {/* التحكم التفصيلي: كل صفحة وكل إجراء بمفتاح مستقل */}
             <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-              <div className="flex items-center gap-2 mb-3">
-                <Eye className="text-blue-600" size={18} />
-                <h4 className="text-sm font-bold text-gray-800">
-                  القسم الأول: صلاحيات الوصول للصفحات (تظهر في القائمة الجانبية فقط الصفحات الممنوحة)
-                </h4>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <Eye className="text-blue-600" size={18} />
+                  <h4 className="text-sm font-bold text-gray-800">الصفحات المسموح بفتحها (الصفحة غير المسموحة تختفي من القائمة ولا تُفتح)</h4>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setGroup(PAGE_DEFS.map(d => d.key), true)} className="text-xs font-bold px-3 py-1 rounded-lg bg-white border border-gray-300 text-gray-700">تحديد الكل</button>
+                  <button type="button" onClick={() => setGroup(PAGE_DEFS.map(d => d.key), false)} className="text-xs font-bold px-3 py-1 rounded-lg bg-white border border-gray-300 text-gray-700">إلغاء الكل</button>
+                </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewSales}
-                    onChange={() => handlePermissionChange('canViewSales')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">فواتير البيع (canViewSales)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewInvoicesLog}
-                    onChange={() => handlePermissionChange('canViewInvoicesLog')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">سجل الفواتير (canViewInvoicesLog)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewPurchases}
-                    onChange={() => handlePermissionChange('canViewPurchases')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">المشتريات (canViewPurchases)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewInventory}
-                    onChange={() => handlePermissionChange('canViewInventory')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">المخزن والجرد (canViewInventory)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewCustomers}
-                    onChange={() => handlePermissionChange('canViewCustomers')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">العملاء (canViewCustomers)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewSuppliers}
-                    onChange={() => handlePermissionChange('canViewSuppliers')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">الموردين (canViewSuppliers)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewTreasury}
-                    onChange={() => handlePermissionChange('canViewTreasury')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">الخزينة والمصروفات (canViewTreasury)</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canViewReports}
-                    onChange={() => handlePermissionChange('canViewReports')}
-                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="font-semibold text-gray-800 text-sm">التقارير (canViewReports)</span>
-                </label>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {PAGE_DEFS.map(d => (
+                  <label key={d.key} className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-400 transition-colors">
+                    <input type="checkbox" checked={!!formData.permissions.perms?.[d.key]} onChange={() => togglePerm(d.key)} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
+                    <span className="font-semibold text-gray-800 text-sm">{d.label}</span>
+                  </label>
+                ))}
               </div>
             </div>
 
-            {/* القسم الثاني: صلاحيات الإجراءات الحساسة */}
             <div className="bg-red-50/50 p-5 rounded-xl border border-red-200">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-1">
                 <Lock className="text-red-600" size={18} />
-                <h4 className="text-sm font-bold text-gray-800">
-                  القسم الثاني: صلاحيات الإجراءات الحساسة (الحذف والتعديل)
-                </h4>
+                <h4 className="text-sm font-bold text-gray-800">الإجراءات المسموحة (إضافة وتعديل وحذف) لكل قسم</h4>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-red-200 hover:border-red-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canDeleteInvoices}
-                    onChange={() => handlePermissionChange('canDeleteInvoices')}
-                    className="w-5 h-5 text-red-600 rounded focus:ring-red-500"
-                  />
-                  <span className="font-semibold text-red-700 text-sm">حذف فواتير البيع</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-red-200 hover:border-red-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canDeleteCustomers}
-                    onChange={() => handlePermissionChange('canDeleteCustomers')}
-                    className="w-5 h-5 text-red-600 rounded focus:ring-red-500"
-                  />
-                  <span className="font-semibold text-red-700 text-sm">حذف العملاء</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-red-200 hover:border-red-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canDeleteSuppliers}
-                    onChange={() => handlePermissionChange('canDeleteSuppliers')}
-                    className="w-5 h-5 text-red-600 rounded focus:ring-red-500"
-                  />
-                  <span className="font-semibold text-red-700 text-sm">حذف الموردين</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-amber-200 hover:border-amber-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canEditPrices}
-                    onChange={() => handlePermissionChange('canEditPrices')}
-                    className="w-5 h-5 text-amber-600 rounded focus:ring-amber-500"
-                  />
-                  <span className="font-semibold text-amber-800 text-sm">تعديل أسعار البيع والتكلفة</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-purple-200 hover:border-purple-400 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canEditInvoices}
-                    onChange={() => handlePermissionChange('canEditInvoices')}
-                    className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500"
-                  />
-                  <span className="font-semibold text-purple-800 text-sm">تعديل الفواتير السابقة</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-lg border border-amber-300 hover:border-amber-500 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.permissions.canManageBackup}
-                    onChange={() => handlePermissionChange('canManageBackup')}
-                    className="w-5 h-5 text-amber-600 rounded focus:ring-amber-500"
-                  />
-                  <span className="font-semibold text-amber-900 text-sm">النسخ الاحتياطي والاسترجاع (canManageBackup)</span>
-                </label>
+              <p className="text-xs text-gray-600 mb-3">الإجراء غير المسموح يُمنع داخل البرنامج نفسه، حتى لو ظهر الزر في أي صفحة.</p>
+              <div className="space-y-4">
+                {ACTION_GROUPS.map(g => (
+                  <div key={g.title} className="bg-white rounded-lg border border-red-100 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-bold text-sm text-gray-800">{g.title}</span>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setGroup(g.items.map(i => i.key), true)} className="text-[11px] font-bold px-2 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-600">الكل</button>
+                        <button type="button" onClick={() => setGroup(g.items.map(i => i.key), false)} className="text-[11px] font-bold px-2 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-600">لا شيء</button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {g.items.map(it => (
+                        <label key={it.key} className="flex items-center gap-2 cursor-pointer p-2 rounded-lg border border-gray-100 hover:border-red-300 transition-colors">
+                          <input type="checkbox" checked={!!formData.permissions.perms?.[it.key]} onChange={() => togglePerm(it.key)} className="w-5 h-5 text-red-600 rounded focus:ring-red-500" />
+                          <span className="font-semibold text-gray-800 text-sm">{it.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+
+            {/* نطاق العمل: الفرع والمنطقة */}
+            <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+              <h4 className="text-sm font-bold text-gray-800 mb-1">نطاق العمل (الفرع / المنطقة)</h4>
+              <p className="text-xs text-gray-500 mb-3">اتركه "كل الفروع" ليشتغل على كل البيانات. لو اخترت فرع: المستخدم يشوف ويبيع ويشتري ويحصّل لعملاء ومبيعات ومشتريات وخزنة هذا الفرع فقط. وتقدر تحدد مناطق معينة داخله. (لا يسري على المدير الكامل)</p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {([['', 'كل الفروع'], ['MARG', 'إدارة المرج فقط'], ['NOZHA', 'إدارة النزهة فقط']] as const).map(([v, l]) => (
+                  <button key={v || 'all'} type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, allowedBranch: v as any, allowedAreas: [] }))}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${formData.allowedBranch === v ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'}`}>{l}</button>
+                ))}
+              </div>
+              {formData.allowedBranch && (
+                <div>
+                  <div className="text-xs font-bold text-gray-700 mb-2">المناطق المسموحة (لو ما اخترتش أي منطقة = كل مناطق الفرع)</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {getBranchAreas(formData.allowedBranch as any, customers).map(a => (
+                      <label key={a} className="flex items-center gap-2 text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 cursor-pointer">
+                        <input type="checkbox" checked={formData.allowedAreas.includes(a)}
+                          onChange={() => setFormData(prev => ({ ...prev, allowedAreas: prev.allowedAreas.includes(a) ? prev.allowedAreas.filter(x => x !== a) : [...prev.allowedAreas, a] }))} />
+                        <span>{a}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+              <div className="text-sm font-bold text-gray-800">أزرار اختيارية في كشف حساب العميل (مخفية لو ما اتفعلتش)</div>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!formData.features.clearStatement} onChange={() => setFormData(prev => ({ ...prev, features: { ...prev.features, clearStatement: !prev.features.clearStatement } }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm text-gray-800">زرار "تصفير" (بيحذف فواتير العميل لسلة المهملات ويرجّع المخزن ويشيل الدفعات من الخزنة)</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!formData.features.archiveStatement} onChange={() => setFormData(prev => ({ ...prev, features: { ...prev.features, archiveStatement: !prev.features.archiveStatement } }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm text-gray-800">زرار "ترحيل / كشف جديد" و"إلغاء الترحيل" (مفيش تأثير على المخزن ولا الخزنة)</span>
+              </label>
+            </div>
+
+            {formData.permissions.admin && (
+              <label className="flex items-center gap-3 cursor-pointer bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <input type="checkbox" checked={formData.allowSystemPage} onChange={() => setFormData(prev => ({ ...prev, allowSystemPage: !prev.allowSystemPage }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm font-bold text-gray-800">السماح له بصفحة "إدارة السيستم" (مخفية عنه لو ما اتفعلتش)</span>
+              </label>
+            )}
 
             {/* مدير نظام كامل */}
             <div className={`p-4 rounded-xl border transition-all ${formData.permissions.admin ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-200' : 'bg-slate-50 border-slate-200'}`}>
