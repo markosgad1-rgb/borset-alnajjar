@@ -42,7 +42,13 @@ export const Trash: React.FC = () => {
   };
 
   // 1. Deleted Sales Invoices & Purchases
-  const deletedSalesInvoices = useMemo(() => invoices.filter(i => i.isDeleted), [invoices]);
+  const deletedSalesInvoices = useMemo(() => [
+    ...invoices.filter(i => i.isDeleted),
+    // فواتير البيع المحذوفة محفوظة كنسخة كاملة في سلة الحركات (kind = INVOICE)
+    ...ledgerTrash.filter(x => x.kind === 'INVOICE' && x.invoice).map(x => ({ ...x.invoice, deletedAt: x.deletedAt, isDeleted: true } as SalesInvoice))
+  ], [invoices, ledgerTrash]);
+  const trashIdOfInvoice = (id: string) => ledgerTrash.find(x => x.kind === 'INVOICE' && x.invoice?.id === id)?.id;
+  const movementsList = useMemo(() => ledgerTrash.filter(x => x.kind !== 'INVOICE'), [ledgerTrash]);
   const deletedPurchases = useMemo(() => purchases.filter(p => p.isDeleted), [purchases]);
 
   // Combined deleted invoices
@@ -114,7 +120,8 @@ export const Trash: React.FC = () => {
   const handleRestore = async (type: 'customer' | 'supplier' | 'invoice' | 'purchase', id: string, name: string) => {
     setProcessingId(id);
     try {
-      const res = await restoreEntity(type, id);
+      const tid = type === 'invoice' ? trashIdOfInvoice(id) : undefined;
+      const res = tid ? await restoreLedgerMovement(tid) : await restoreEntity(type, id);
       if (res.success) {
         showNotification(`تم استرجاع (${name}) بنجاح إلى النظام.`);
       } else {
@@ -131,7 +138,8 @@ export const Trash: React.FC = () => {
     const { type, id, name } = confirmDeleteTarget;
     setProcessingId(id);
     try {
-      const res = await permanentDeleteEntity(type, id);
+      const tid = type === 'invoice' ? trashIdOfInvoice(id) : undefined;
+      const res = tid ? await purgeLedgerMovement(tid) : await permanentDeleteEntity(type, id);
       if (res.success) {
         showNotification(`تم حذف (${name}) نهائياً من قاعدة البيانات.`);
       } else {
@@ -262,7 +270,7 @@ export const Trash: React.FC = () => {
             <FileText size={15} />
             <span>حركات كشوف الحسابات</span>
             <span className="bg-gray-200 text-gray-700 px-1.5 py-0.2 rounded-full text-[10px]">
-              {ledgerTrash.length}
+              {movementsList.length}
             </span>
           </button>
         </div>
@@ -503,7 +511,7 @@ export const Trash: React.FC = () => {
         {/* TAB 4: حركات محذوفة من كشوف الحسابات */}
         {activeTab === 'MOVEMENTS' && (
           <div>
-            {ledgerTrash.length === 0 ? (
+            {movementsList.length === 0 ? (
               <div className="p-12 text-center">
                 <h3 className="text-sm font-bold text-gray-700">لا توجد حركات محذوفة</h3>
                 <p className="text-xs text-gray-400 mt-1">أي دفعة أو حركة تتحذف من كشف حساب عميل أو مورد بتظهر هنا ويمكن استرجاعها.</p>
@@ -524,7 +532,7 @@ export const Trash: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {ledgerTrash
+                    {movementsList
                       .filter(m => !searchTerm.trim() || `${m.entityName} ${m.entityCode} ${m.description}`.toLowerCase().includes(searchTerm.trim().toLowerCase()))
                       .map(m => (
                       <tr key={m.id} className="hover:bg-gray-50/70 transition-colors">

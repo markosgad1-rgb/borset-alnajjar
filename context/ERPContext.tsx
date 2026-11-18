@@ -2289,6 +2289,36 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const item = ledgerTrash.find(x => x.id === id);
     if (!item) return { success: false, message: 'الحركة غير موجودة في السلة.' };
     const key = (item.entityCode || '').trim().toLowerCase();
+    if (item.kind === 'INVOICE') {
+      try {
+        const inv = item.invoice;
+        if (!inv) return { success: false, message: 'بيانات الفاتورة غير متاحة.' };
+        const cu = customers.find(x => (x.code || '').trim().toLowerCase() === String(inv.customerCode || '').trim().toLowerCase());
+        if (!cu || cu.isDeleted) return { success: false, message: 'العميل الخاص بالفاتورة غير موجود أو محذوف. استرجع العميل أولاً.' };
+        if (invoices.some(i => String(i.id).toLowerCase() === String(inv.id).toLowerCase())) return { success: false, message: 'يوجد فاتورة بنفس الرقم حالياً، لا يمكن استرجاعها.' };
+        // نعيد تسجيل الفاتورة بنفس بياناتها: بترجّع حساب العميل والخزنة والمخزن زي ما كانت
+        await quietOps(async () => {
+          await addInvoice({
+            id: inv.id, branchId: inv.branchId, area: inv.area, date: inv.date, time: inv.time,
+            customerCode: inv.customerCode, customerName: inv.customerName, items: inv.items || [], total: inv.total,
+            paidAmount: inv.paidAmount, remainingAmount: inv.remainingAmount, paymentMethod: inv.paymentMethod
+          });
+        });
+        const keep: any = { createdBy: inv.createdBy, createdByName: inv.createdByName, reviewStatus: inv.reviewStatus, reviewedBy: inv.reviewedBy, reviewedAt: inv.reviewedAt };
+        Object.keys(keep).forEach(k => keep[k] === undefined && delete keep[k]);
+        if (Object.keys(keep).length) {
+          setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...keep } : i));
+          if (isOnline) { try { await setDoc(doc(db, 'invoices', inv.id), cleanDoc(keep), { merge: true }); } catch { /* ignore */ } }
+        }
+        logOp('update', `استرجاع فاتورة بيع ${inv.id} من سلة المهملات - العميل ${inv.customerName}`, [`العميل: ${inv.customerName} (${inv.customerCode})`, `الإجمالي: ${opMoney(inv.total)}`, `المدفوع: ${opMoney(inv.paidAmount || 0)}`, `التاريخ: ${inv.date}`, 'رجعت بكل أصنافها وحساب العميل والخزنة والمخزن'], inv.id);
+        setLedgerTrash(prev => prev.filter(x => x.id !== id));
+        if (isOnline) await deleteDoc(doc(db, 'ledgerTrash', id)).catch(() => {});
+        return { success: true };
+      } catch (e) {
+        handleFirebaseError(e);
+        return { success: false, message: 'حدث خطأ أثناء الاسترجاع.' };
+      }
+    }
     if (item.kind === 'TRANSFER') {
       try {
         const tr = item.transfer;
@@ -2348,7 +2378,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const purgeLedgerMovement = async (id: string): Promise<{ success: boolean; message?: string }> => {
     const item = ledgerTrash.find(x => x.id === id);
-    logOp('delete', `حذف نهائي لحركة من سلة المهملات${item ? `: ${item.description}` : ''}`, item ? [`${item.kind === 'CUSTOMER' ? 'العميل' : 'المورد'}: ${item.entityName} (${item.entityCode})`, `المبلغ: ${opMoney(Math.abs(item.amount))}`, `التاريخ: ${item.date}`] : [], id);
+    logOp('delete', `حذف نهائي لحركة من سلة المهملات${item ? `: ${item.description}` : ''}`, item ? [`${item.kind === 'CUSTOMER' || item.kind === 'INVOICE' ? 'العميل' : 'المورد'}: ${item.entityName} (${item.entityCode})`, `المبلغ: ${opMoney(Math.abs(item.amount))}`, `التاريخ: ${item.date}`] : [], id);
     setLedgerTrash(prev => prev.filter(x => x.id !== id));
     if (isOnline) await deleteDoc(doc(db, 'ledgerTrash', id)).catch(() => {});
     return { success: true };
@@ -3158,6 +3188,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       `التاريخ: ${inv.date}`,
       ...opItemLines(inv.items)
     ] : ['الفاتورة غير موجودة في البيانات المحلية'], cleanId);
+    if (inv) {
+      // نسخة كاملة من الفاتورة في سلة المهملات عشان تتسترجع بكل تفاصيلها
+      saveLedgerTrash({ kind: 'INVOICE', entityCode: inv.customerCode, entityName: inv.customerName, description: `فاتورة بيع ${inv.id}`, amount: Number(inv.total) || 0, date: inv.date, removedHistory: [], removedManual: [], invoice: JSON.parse(JSON.stringify(inv)) });
+    }
 
     // Determine target customer
     const custCode = inv?.customerCode || customers.find(c => 

@@ -150,7 +150,7 @@ export interface Employee {
 // حركة اتحذفت من كشف حساب (عميل / مورد) ومحفوظة في سلة المهملات عشان تتسترجع بأثرها الكامل
 export interface LedgerTrashItem {
   id: string;
-  kind: 'CUSTOMER' | 'SUPPLIER' | 'TRANSFER';
+  kind: 'CUSTOMER' | 'SUPPLIER' | 'TRANSFER' | 'INVOICE';
   entityCode: string;
   entityName: string;
   description: string;
@@ -164,6 +164,7 @@ export interface LedgerTrashItem {
   wasOpening?: boolean;
   openingBefore?: number;
   transfer?: any; // بيانات تحويل محذوف عشان يتعاد تسجيله
+  invoice?: any;  // نسخة كاملة من فاتورة البيع المحذوفة عشان تتسجل تاني
 }
 
 export interface CustomerHistory {
