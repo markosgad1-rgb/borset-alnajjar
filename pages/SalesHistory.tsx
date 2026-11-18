@@ -29,7 +29,7 @@ import { canDo } from '../utils/permissions';
 import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
-  const { customerBalanceOf, invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo } = useERP();
+  const { customerBalanceOf, invoices, products, customers, printInvoice, deleteInvoice, clearAllInvoices, updateInvoice, markInvoicesReviewed, currentUser, companyLogo, userScope } = useERP();
   
   const canDeleteInvoices = canDo(currentUser, 'invoice.delete');
   const canEditInvoices = canDo(currentUser, 'invoice.edit');
@@ -37,7 +37,7 @@ export const SalesHistory: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>('ALL');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'ALL');
   // فلتر المراجعة: ALL = الكل، PENDING = لم تُراجع (من كل التواريخ)، REVIEWED = تمت مراجعتها
   const [reviewFilter, setReviewFilter] = useState<'ALL' | 'PENDING' | 'REVIEWED'>(() => {
     try {
@@ -434,6 +434,9 @@ export const SalesHistory: React.FC = () => {
         {/* Branch & Area Cascading Filter Toolbar */}
         <div className="p-3 bg-gradient-to-r from-blue-50/60 to-indigo-50/60 rounded-xl border border-blue-200/60 flex flex-wrap items-center justify-between gap-3">
           {/* Branch filter tabs */}
+          {userScope.restricted ? (
+            <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-gray-200 text-gray-700">{userScope.branch === 'NOZHA' ? 'إدارة النزهة' : 'إدارة المرج'}</span>
+          ) : (
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-bold text-blue-900 ml-1">الإدارة / الفرع:</span>
             <button
@@ -470,6 +473,7 @@ export const SalesHistory: React.FC = () => {
               <Building size={13} /> إدارة النزهة
             </button>
           </div>
+          )}
 
           {/* Dynamic Area filter */}
           <div className="flex items-center gap-2 flex-1 sm:flex-initial min-w-[220px]">
@@ -482,7 +486,7 @@ export const SalesHistory: React.FC = () => {
               onChange={e => setSelectedAreaFilter(e.target.value)}
             >
               <option value="ALL">جميع المناطق</option>
-              {availableAreas.map(area => (
+              {availableAreas.filter(a => !userScope.restricted || userScope.areas.length === 0 || userScope.areas.includes(a)).map(area => (
                 <option key={area} value={area}>{area}</option>
               ))}
             </select>
