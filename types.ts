@@ -93,6 +93,8 @@ export interface Customer {
   balance: number; // Negative = Debt (Owes us), Positive = Credit (We owe him)
   currentBalance?: number;
   history: CustomerHistory[];
+  /** كشوف قديمة اتّرحّلت (بدء كشف جديد) - بتتحفظ ويمكن إلغاء الترحيل */
+  archives?: { at: string; balance: number; history: CustomerHistory[]; invoiceIds: string[] }[];
   manualTransactions?: ManualCustomerTransaction[];
   isDeleted?: boolean;
   deletedAt?: string;
@@ -224,6 +226,7 @@ export interface InvoiceItem {
 
 export interface SalesInvoice {
   id: string; // Invoice Number
+  archivedAt?: string; // اتّرحّلت مع كشف عميل (بدء كشف جديد) - لا تتأثر المبيعات ولا المخزن ولا الخزنة
   branchId: BranchId; // Sales branch ('MARG' | 'NOZHA')
   area?: string; // Geographical area
   date: string;

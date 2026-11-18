@@ -21,7 +21,7 @@ export const Customers: React.FC = () => {
     customers, rawCustomers, userScope, addCustomer, updateCustomer, deleteCustomer, customerBalanceOf, 
     clearLedger, 
     currentUser, invoices, printInvoice, printLedger, companyLogo,
-    deleteCustomerLedgerMovement, deleteInvoice
+    deleteCustomerLedgerMovement, deleteInvoice, archiveCustomerStatement, undoArchiveCustomerStatement
   } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();
 
@@ -310,12 +310,25 @@ export const Customers: React.FC = () => {
     }
   };
 
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const handleArchiveStatement = async () => {
+    if (!selectedCustomer) return;
+    const ok = await archiveCustomerStatement(selectedCustomer.code);
+    setShowArchiveConfirm(false);
+    if (ok) notify('تم الترحيل: الكشف بدأ من صفر. الفواتير باقية في السجل بعلامة "مُرحّلة" والمخزن والخزنة ما اتأثروش.');
+  };
+  const handleUndoArchive = async () => {
+    if (!selectedCustomer) return;
+    const ok = await undoArchiveCustomerStatement(selectedCustomer.code);
+    if (ok) notify('تم إلغاء الترحيل ورجع الكشف القديم.');
+  };
+
   const handleClearLedger = async () => {
     if (!selectedCustomer) return;
     const success = await clearLedger('CUSTOMER', selectedCustomer.code);
     if (success) {
        setShowClearLedgerConfirm(false);
-       notify("تم تصفير الحساب ومسح السجلات بنجاح.");
+       notify("تم تصفير الحساب، وفواتير العميل راحت سلة المهملات (تقدر ترجّعها منها).");
     }
   };
 
@@ -1291,7 +1304,7 @@ export const Customers: React.FC = () => {
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
-                           <span className="font-bold text-red-600">تأكيد التصفير؟</span>
+                           <span className="font-bold text-red-600">تأكيد التصفير؟ (الفواتير هتروح السلة)</span>
                            <button 
                              onClick={handleClearLedger}
                              className="bg-red-600 text-white px-2 py-0.5 rounded text-xs font-bold hover:bg-red-700"
@@ -1313,6 +1326,35 @@ export const Customers: React.FC = () => {
                         >
                           <Trash2 size={13} /> تصفير
                         </button>
+                      )
+                    )}
+
+                    {canDo(currentUser, 'ledger.clear') && (
+                      showArchiveConfirm ? (
+                        <div className="flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-lg border border-amber-300 text-xs">
+                          <span className="font-bold text-amber-800">ترحيل وبدء كشف جديد من صفر؟ (الرصيد الحالي هيتصفّر، مفيش مخزن ولا خزنة هتتأثر)</span>
+                          <button onClick={handleArchiveStatement} className="bg-amber-600 text-white px-2 py-0.5 rounded font-bold">نعم</button>
+                          <button onClick={() => setShowArchiveConfirm(false)} className="bg-white text-gray-600 px-2 py-0.5 rounded border font-bold">إلغاء</button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => setShowArchiveConfirm(true)}
+                            className="flex items-center gap-1 bg-amber-50 text-amber-800 px-2 py-1 rounded-md text-xs font-bold hover:bg-amber-100 border border-amber-300"
+                            title="تصفير الكشف وبدء كشف جديد من غير ما المخزن أو الخزنة يتأثروا، والفواتير تفضل في السجل"
+                          >
+                            ترحيل / كشف جديد
+                          </button>
+                          {(selectedCustomer?.archives?.length || 0) > 0 && (
+                            <button
+                              onClick={handleUndoArchive}
+                              className="flex items-center gap-1 bg-white text-gray-700 px-2 py-1 rounded-md text-xs font-bold hover:bg-gray-100 border border-gray-300"
+                              title="رجوع الكشف المرحّل الأخير"
+                            >
+                              إلغاء الترحيل
+                            </button>
+                          )}
+                        </>
                       )
                     )}
 

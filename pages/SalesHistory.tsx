@@ -588,6 +588,9 @@ export const SalesHistory: React.FC = () => {
                   <tr key={inv.id} className={`hover:bg-gray-50/80 transition-colors ${inv.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : ''}`}>
                     <td className="p-3 font-mono font-bold text-brand-700">
                       {inv.id}
+                      {inv.archivedAt && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold font-sans">مُرحّلة (كشف قديم)</span>
+                      )}
                       {inv.reviewStatus === 'PENDING_REVIEW' && (
                         <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold font-sans">جديدة - لم تُراجع</span>
                       )}

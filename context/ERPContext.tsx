@@ -230,6 +230,8 @@ interface ERPContextType {
   exportAllCustomersToExcel: () => void;
   exportAllSuppliersToExcel: () => void;
   clearLedger: (entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) => Promise<boolean>;
+  archiveCustomerStatement: (code: string) => Promise<boolean>;
+  undoArchiveCustomerStatement: (code: string) => Promise<boolean>;
   cleanCorruptedSupplierOpeningBalance: (code: string) => Promise<void>;
   clearTreasury: () => Promise<boolean>;
   findDuplicateTreasury: () => { key: string; keep: TreasuryTransaction; extras: TreasuryTransaction[] }[];
@@ -2954,6 +2956,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateInvoice = async (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => {
+    if ((oldInvoice as any).archivedAt || invoices.find(i => i.id === oldInvoice.id)?.archivedAt) {
+      alert('الفاتورة دي مُرحّلة مع كشف قديم للعميل، فمينفعش تتعدّل. لو محتاج تعدلها ألغِ ترحيل كشف العميل الأول.');
+      return;
+    }
     const oldPaid = Number(oldInvoice.paidAmount || 0);
     const newPaid = Number(newInvoiceData.paidAmount || 0);
     const oldRemaining = oldInvoice.total - oldPaid;
@@ -4251,12 +4257,18 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           `${lbl}: ${ent?.name || ''} (${code})`,
           ...(entityType === 'SUPPLIER' ? [`رصيد المورد قبل التصفير (من الكشف): ${opMoney(calculateSupplierBalance(ent || {}, purchases))}`] : [`الرصيد قبل التصفير: ${opMoney(ent?.balance || 0)}`]),
           `عدد الحركات اللي اتمسحت من الكشف: ${(ent?.history || []).length}`,
+          ...(entityType === 'CUSTOMER' ? [`عدد فواتير البيع اللي راحت سلة المهملات (قابلة للاسترجاع): ${invoices.filter(i => !i.isDeleted && String(i.customerCode || '').trim().toLowerCase() === cleanCode).length}`] : []),
           ...(entityType === 'SUPPLIER' ? [`عدد فواتير المشتريات اللي اتمسحت: ${supPurchases.length}`] : []),
           'بعد التصفير: الرصيد = 0'
         ], code);
       }
       return quietOps(async () => {
       if(entityType === 'CUSTOMER') {
+          // فواتير العميل تروح سلة المهملات (قابلة للاسترجاع) ويتردّ مخزنها وتتشال دفعاتها من الخزنة زي حذف الفاتورة
+          const custInvIds = invoices
+            .filter(i => !i.isDeleted && String(i.customerCode || '').trim().toLowerCase() === cleanCode)
+            .map(i => String(i.id));
+          for (const iid of custInvIds) { await deleteInvoice(iid); }
           await updateCustomer(code, { balance: 0, history: [] });
       } else if (entityType === 'SUPPLIER') {
           const ids = purchases
@@ -4269,6 +4281,64 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       return true;
       });
+  };
+
+  // ترحيل: كشف العميل يبدأ من صفر، الفواتير تفضل في السجل (علامة مُرحّلة)، المخزن والخزنة والتقارير ما بتتأثرش
+  const archiveCustomerStatement = async (code: string): Promise<boolean> => {
+    const cleanCode = (code || '').trim().toLowerCase();
+    const cust = customers.find(c => (c.code || '').trim().toLowerCase() === cleanCode);
+    if (!cust) return false;
+    const at = new Date().toISOString();
+    const stmt = statementBalanceOf(cust, invoices);
+    const invIds = invoices.filter(i => !i.isDeleted && !i.archivedAt && String(i.customerCode || '').trim().toLowerCase() === cleanCode).map(i => String(i.id));
+    logOp('update', `ترحيل كشف حساب العميل ${cust.name} (بدء كشف جديد)`, [
+      `العميل: ${cust.name} (${cust.code})`,
+      `رقم الكشف وقت الترحيل: ${opMoney(stmt)}`,
+      `عدد الحركات المرحّلة: ${(cust.history || []).length}`,
+      `عدد الفواتير المرحّلة (باقية في السجل): ${invIds.length}`,
+      'المخزن والخزنة والتقارير ما اتأثروش',
+      'بعد الترحيل: الكشف والرصيد = 0'
+    ], cust.code);
+    return quietOps(async () => {
+      const set = new Set(invIds);
+      setInvoices(prev => prev.map(inv => set.has(String(inv.id)) ? { ...inv, archivedAt: at } : inv));
+      for (const id of invIds) {
+        try { await updateDoc(doc(db, 'invoices', id), { archivedAt: at }); } catch (e) { console.error('archive invoice failed', id, e); }
+      }
+      await updateCustomer(cust.code, {
+        archives: [...(cust.archives || []), { at, balance: stmt, history: cust.history || [], invoiceIds: invIds }],
+        history: [],
+        balance: 0
+      });
+      return true;
+    });
+  };
+
+  const undoArchiveCustomerStatement = async (code: string): Promise<boolean> => {
+    const cleanCode = (code || '').trim().toLowerCase();
+    const cust = customers.find(c => (c.code || '').trim().toLowerCase() === cleanCode);
+    const list = cust?.archives || [];
+    if (!cust || list.length === 0) return false;
+    const last = list[list.length - 1];
+    logOp('update', `إلغاء ترحيل كشف العميل ${cust.name}`, [
+      `العميل: ${cust.name} (${cust.code})`,
+      `رجوع الكشف المرحّل بتاريخ: ${last.at.slice(0, 10)}`,
+      `عدد الحركات الراجعة: ${last.history.length}`,
+      `عدد الفواتير الراجعة للكشف: ${last.invoiceIds.length}`
+    ], cust.code);
+    return quietOps(async () => {
+      const set = new Set(last.invoiceIds);
+      setInvoices(prev => prev.map(inv => set.has(String(inv.id)) ? (({ archivedAt, ...rest }) => rest as any)(inv) : inv));
+      for (const id of last.invoiceIds) {
+        try { await updateDoc(doc(db, 'invoices', id), { archivedAt: null as any }); } catch (e) { console.error('unarchive invoice failed', id, e); }
+      }
+      await updateCustomer(cust.code, {
+        archives: list.slice(0, -1),
+        history: [...last.history, ...(cust.history || [])],
+        balance: (Number(cust.balance) || 0) + (Number(last.balance) || 0)
+      });
+      return true;
+    });
   };
 
   const cleanCorruptedSupplierOpeningBalance = async (code: string) => {
@@ -5415,6 +5485,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gDeleteCustLedger = gate('ledger.deleteMovement', deleteCustomerLedgerMovement);
   const gDeleteSuppLedger = gate('ledger.deleteMovement', deleteSupplierLedgerMovement);
   const gClearLedger = gate('ledger.clear', clearLedger, false);
+  const gArchiveStmt = gate('ledger.clear', archiveCustomerStatement, false);
+  const gUndoArchiveStmt = gate('ledger.clear', undoArchiveCustomerStatement, false);
   const gRestoreEntity = gate('trash.restore', restoreEntity, noPerm('trash.restore'));
   const gRestoreLedger = gate('trash.restore', restoreLedgerMovement, noPerm('trash.restore'));
   const gPurgeLedger = gate('trash.purge', purgeLedgerMovement, noPerm('trash.purge'));
@@ -5490,7 +5562,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection, addTreasuryTransaction, addTransfer, addCustomerToSupplierTransfer, deleteTransfer: gDeleteTransfer, addExpense, addOpeningBalance: gAddOpeningBalance, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
-      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
+      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
       exportBackupData, restoreBackupData: gRestoreBackup,
       currentTreasuryBalance: userScope.restricted ? sumTr(scopedTreasury) : currentTreasuryBalance,
       currentTreasuryBalanceMarg: userScope.restricted && userScope.branch !== 'MARG' ? 0 : currentTreasuryBalanceMarg,
