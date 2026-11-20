@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, ReactNode, useEffect, useRe
 import { Product, Customer, CustomerHistory, Supplier, Employee, Purchase, SalesInvoice, TreasuryTransaction, InvoiceItem, User, PaymentMethod, SystemBackup, BranchId, LedgerTrashItem } from '../types';
 import { app, db, isFirebaseConfigured, firebaseConfig } from '../firebaseConfig';
 import * as XLSX from 'xlsx';
+import { getLinkedPaidTotal } from '../utils/linkedPayments';
 import { getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance } from '../utils/supplierStatement';
 import { 
   getFirestore, 
@@ -2440,7 +2441,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     ], customer.code);
 
     // If an invoice payment is being removed, update the invoice's paidAmount to 0
-    if (targetInvId && movement.paymentId) {
+    const isCollectionPay = /^(cust_pay_T_COL_|T_COL_)/.test(String(movement.id || '')) || /^T_COL_/.test(String(movement.paymentId || ''));
+    if (targetInvId && movement.paymentId && !isCollectionPay) {
       const cleanInvId = targetInvId.replace(/^#/, '').trim();
       setInvoices(prev => prev.map(inv => {
         if (String(inv.id).replace(/^#/, '').trim() === cleanInvId) {
@@ -2507,7 +2509,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Check if matched a Treasury transaction (e.g. collection/cash receipt)
     const amountVal = Math.abs(movement.amount);
     let matchedTreasuryId: string | null = null;
-    if (targetInvId) {
+    if (targetInvId && !(isCollectionPay && movement.paymentId && treasury.some(t => t.id === movement.paymentId))) {
       const invTreasury = treasury.find(t => t.invoiceNumber === targetInvId || t.id.includes(targetInvId) || (t.description && t.description.includes(targetInvId)));
       if (invTreasury) matchedTreasuryId = invTreasury.id;
     }
@@ -4789,10 +4791,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const liveCustomerBalance = (invoice as any).liveCustomerBalance !== undefined
       ? (invoice as any).liveCustomerBalance
       : (cust ? cust.balance : (invoice.currentBalance !== undefined ? invoice.currentBalance : 0));
-    const paidAmount = invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0);
-    const remainingAmount = invoice.remainingAmount !== undefined
+    const linkedPaid = getLinkedPaidTotal(invoice, cust);
+    const paidAmount = (invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0)) + linkedPaid;
+    const remainingAmount = Math.max(0, (invoice.remainingAmount !== undefined
       ? invoice.remainingAmount
-      : (invoice.total - paidAmount);
+      : (invoice.total - (paidAmount - linkedPaid))) - linkedPaid);
 
     // 1. حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
     let oldDebt = invoice.previousBalance !== undefined ? invoice.previousBalance : 0;
@@ -4800,7 +4803,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // 2. إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
     let totalAfterInvoice = invoice.currentBalance !== undefined
-      ? invoice.currentBalance
+      ? invoice.currentBalance + ((invoice as any).liveCustomerBalance !== undefined ? 0 : linkedPaid)
       : (oldDebt - remainingAmount);
     if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
@@ -4865,6 +4868,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             <div class="totals-section">
               <div style="flex: 1;"></div>
               <div class="totals-box">
+                ${(invoice.discount || 0) > 0 ? `<div class="total-row"><span>إجمالي الأصناف:</span><span>${((invoice.total || 0) + (invoice.discount || 0)).toLocaleString()} ج.م</span></div><div class="total-row"><span>خصم${invoice.discountPct ? ` (${invoice.discountPct}%)` : ''}:</span><span>- ${Number(invoice.discount).toLocaleString()} ج.م</span></div>` : ''}
                 <div class="total-row main">
                   <span>إجمالي الفاتورة:</span>
                   <strong>${invoice.total.toLocaleString()} ج.م</strong>
@@ -4873,9 +4877,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   <span>المديونية السابقة:</span>
                   <span style="direction: ltr;">${oldDebt.toLocaleString()} ج.م</span>
                 </div>
-                <div class="total-row" style="color: ${(invoice.paidAmount !== undefined && invoice.paidAmount > 0) ? '#047857' : '#4b5563'}; font-size: 17.5px;">
+                <div class="total-row" style="color: ${paidAmount > 0 ? '#047857' : '#4b5563'}; font-size: 17.5px;">
                   <span>دفعة مسددة:</span>
-                  <strong>${(invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0)).toLocaleString()} ج.م</strong>
+                  <strong>${paidAmount.toLocaleString()} ج.م</strong>
                 </div>
                 <div class="total-row final">
                   <span>الإجمالي:</span>

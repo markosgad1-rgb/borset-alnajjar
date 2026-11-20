@@ -6,7 +6,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { useDialog } from '../utils/useDialog';
 
 export const Collections: React.FC = () => {
-  const { customers, addCollection, treasury, customerBalanceOf, userScope } = useERP();
+  const { customers, invoices, addCollection, treasury, customerBalanceOf, userScope } = useERP();
   const { notify, dialog } = useDialog();
   
   const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
@@ -26,6 +26,17 @@ export const Collections: React.FC = () => {
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const [customerBalance, setCustomerBalance] = useState<number | null>(null);
+
+  // آخر 3 فواتير للعميل المختار (للربط الاختياري بالتحصيل)
+  const customerRecentInvoices = useMemo(() => {
+    const code = (formData.customerCode || '').trim().toLowerCase();
+    if (!code) return [];
+    return (invoices || [])
+      .filter(i => !i.isDeleted && !i.archivedAt && (i.customerCode || '').trim().toLowerCase() === code)
+      .sort((a, b) => `${b.date || ''} ${b.time || ''}`.localeCompare(`${a.date || ''} ${a.time || ''}`))
+      .slice(0, 3);
+  }, [invoices, formData.customerCode]);
+  const selectedInvoiceId = customerRecentInvoices.some(i => i.id === formData.invoiceId) ? formData.invoiceId : '';
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -225,7 +236,7 @@ export const Collections: React.FC = () => {
       await addCollection({
         customerCode: formData.customerCode,
         customerName: formData.customerName,
-        invoiceId: formData.invoiceId?.trim() || undefined,
+        invoiceId: selectedInvoiceId || undefined,
         amount: amount,
         date: formData.date,
         paymentMethod: formData.paymentMethod,
@@ -557,14 +568,20 @@ export const Collections: React.FC = () => {
 
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-gray-700">رقم الفاتورة (مرجع)</label>
-                <input 
-                  type="text"
-                  className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none"
-                  placeholder="اختياري (مثال: N005)"
-                  value={formData.invoiceId}
+                <select
+                  className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none bg-white"
+                  value={selectedInvoiceId}
+                  disabled={!formData.customerCode}
                   onChange={e => setFormData({...formData, invoiceId: e.target.value})}
-                />
-                <p className="text-xs text-gray-500">اتركه فارغاً إذا كانت دفعة عامة</p>
+                >
+                  <option value="">{formData.customerCode ? 'بدون فاتورة (دفعة عامة)' : 'اختار العميل الأول'}</option>
+                  {customerRecentInvoices.map(i => (
+                    <option key={i.id} value={i.id}>
+                      #{i.id} — {i.date} — {Number(i.total || 0).toLocaleString()} ج.م
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500">لو اخترت فاتورة، الدفعة بتظهر فيها لما تطبعها. لو سيبتها فاضية بتنزل تحصيل عادي في الكشف.</p>
               </div>
 
               <div className="space-y-2">

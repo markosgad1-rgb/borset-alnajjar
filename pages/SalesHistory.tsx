@@ -26,6 +26,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
 import { canDo, canFeature } from '../utils/permissions';
+import { getLinkedPaidTotal } from '../utils/linkedPayments';
 import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
@@ -126,8 +127,9 @@ export const SalesHistory: React.FC = () => {
       const invoiceWithLiveBal = {
         ...inv,
         currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
-        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance
-      };
+        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
+        linkedPaid: getLinkedPaidTotal(inv, cust)
+      } as any;
       await shareSalesInvoiceImageViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, syncTab);
     } catch (err: any) {
       if (syncTab && !syncTab.closed) syncTab.close();
@@ -170,8 +172,9 @@ export const SalesHistory: React.FC = () => {
       const invoiceWithLiveBal = {
         ...inv,
         currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
-        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance
-      };
+        liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
+        linkedPaid: getLinkedPaidTotal(inv, cust)
+      } as any;
       await shareSalesInvoicePdfViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, null, syncTab);
     } catch (err: any) {
       if (syncTab && !syncTab.closed) syncTab.close();
@@ -590,8 +593,10 @@ export const SalesHistory: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredInvoices.map((inv) => {
-                const paid = inv.paidAmount || 0;
-                const remaining = inv.remainingAmount !== undefined ? inv.remainingAmount : (inv.total - paid);
+                const bCust = customers.find(c => c.code === inv.customerCode);
+                const linkedPaid = getLinkedPaidTotal(inv, bCust);
+                const paid = (inv.paidAmount || 0) + linkedPaid;
+                const remaining = Math.max(0, (inv.remainingAmount !== undefined ? inv.remainingAmount : (inv.total - (inv.paidAmount || 0))) - linkedPaid);
                 const isFullyPaid = paid >= inv.total;
                 const isPartial = paid > 0 && paid < inv.total;
                 const bId = inv.branchId || 'MARG';
@@ -1085,10 +1090,11 @@ export const SalesHistory: React.FC = () => {
 
               <div className="flex justify-end">
                 {(() => {
-                  const paid = selectedInvoice.paidAmount || 0;
-                  const remaining = selectedInvoice.remainingAmount !== undefined 
+                  const linkedPaid = getLinkedPaidTotal(selectedInvoice, customers.find(c => c.code === selectedInvoice.customerCode));
+                  const paid = (selectedInvoice.paidAmount || 0) + linkedPaid;
+                  const remaining = Math.max(0, (selectedInvoice.remainingAmount !== undefined 
                     ? selectedInvoice.remainingAmount 
-                    : (selectedInvoice.total - paid);
+                    : (selectedInvoice.total - (selectedInvoice.paidAmount || 0))) - linkedPaid);
                   
                   // حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
                   let oldDebt = selectedInvoice.previousBalance !== undefined 
@@ -1098,7 +1104,7 @@ export const SalesHistory: React.FC = () => {
 
                   // إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
                   let totalAfterInvoice = selectedInvoice.currentBalance !== undefined
-                    ? selectedInvoice.currentBalance
+                    ? selectedInvoice.currentBalance + linkedPaid
                     : (oldDebt - remaining);
                   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 

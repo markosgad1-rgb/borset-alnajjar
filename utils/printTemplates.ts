@@ -269,10 +269,12 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
     ? 'فودافون كاش كيرلس'
     : 'خزنة (كاش)';
 
-  const paidAmount = invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0);
-  const remainingAmount = invoice.remainingAmount !== undefined 
+  const linkedPaid = Number((invoice as any).linkedPaid || 0);
+  const basePaid = invoice.paidAmount !== undefined ? invoice.paidAmount : (invoice.paid || 0);
+  const paidAmount = basePaid + linkedPaid;
+  const remainingAmount = Math.max(0, (invoice.remainingAmount !== undefined 
     ? invoice.remainingAmount 
-    : (invoice.total - paidAmount);
+    : (invoice.total - basePaid)) - linkedPaid);
   const displayCustomerBalance = (invoice as any).liveCustomerBalance !== undefined 
     ? (invoice as any).liveCustomerBalance 
     : (invoice.currentBalance !== undefined ? invoice.currentBalance : 0);
