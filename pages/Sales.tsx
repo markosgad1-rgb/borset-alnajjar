@@ -452,7 +452,7 @@ export const Sales: React.FC = () => {
       alert("يجب تحديد رقم الفاتورة");
       return;
     }
-    if (invoices.some(inv => inv.id === invoiceId)) {
+    if (rawInvoices.some(inv => inv.id === invoiceId)) {
       alert("رقم الفاتورة موجود بالفعل، الرجاء تغييره.");
       return;
     }
@@ -476,7 +476,19 @@ export const Sales: React.FC = () => {
       ...(currentPaid > 0 && paymentMethod ? { paymentMethod } : {})
     };
 
-    await addInvoice(invoiceData);
+    let savedId: string = invoiceId;
+    try {
+      const r = await addInvoice(invoiceData);
+      if (typeof r === 'string' && r) savedId = r;
+    } catch (err: any) {
+      alert('تعذّر حفظ الفاتورة، حاول تاني.');
+      console.error(err);
+      return;
+    }
+    if (savedId !== invoiceId) {
+      alert(`رقم الفاتورة ${invoiceId} كان مستخدم، فاتحفظت برقم ${savedId}.`);
+    }
+    invoiceData.id = savedId;
     
     // Store for printing/modal
     setLastSavedInvoice({

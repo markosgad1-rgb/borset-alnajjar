@@ -255,7 +255,7 @@ export const Purchases: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      await addPurchase({
+      const savedPurchaseId = await addPurchase({
         id: purchaseId, // Use auto-generated ID
         branchId: selectedBranch,
         supplierCode: supplierCode || 'UNKNOWN',
@@ -271,6 +271,9 @@ export const Purchases: React.FC = () => {
         paymentMethod: (!isPricePending && paidAmountVal > 0) ? paymentMethod : undefined
       });
 
+      if (typeof savedPurchaseId === 'string' && savedPurchaseId && savedPurchaseId !== purchaseId) {
+        notify(`رقم الفاتورة ${purchaseId} كان مستخدم، فاتحفظت برقم ${savedPurchaseId}.`);
+      }
       setCartItems([]);
       setSupplierName('');
       setSupplierCode('');

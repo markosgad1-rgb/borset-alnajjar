@@ -19,7 +19,10 @@ const STATUS_META: Record<DeviceStatus, { label: string; cls: string }> = {
 };
 
 export const SystemAdmin: React.FC = () => {
-  const { users, currentUser } = useERP();
+  const { users, currentUser, restoreLostInvoice } = useERP();
+  const [fixStep, setFixStep] = useState<0 | 1>(0);
+  const [fixBusy, setFixBusy] = useState(false);
+  const [fixMsg, setFixMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [devices, setDevices] = useState<DeviceDoc[]>([]);
   const [enforce, setEnforce] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -166,6 +169,46 @@ export const SystemAdmin: React.FC = () => {
           ))}
         </div>
       )}
+
+      {currentUser?.username === 'admin' && !fixMsg?.ok && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 mb-4">
+          <h3 className="font-bold text-amber-900 mb-1">إصلاح فاتورة عماد رزق (اتمسحت بتكرار الرقم N239)</h3>
+          <p className="text-xs text-amber-800 mb-2">
+            هترجّع الفاتورة بنفس محتواها (ابيض كبير 350×118، احمر كبير 126×200، بلدي كبير 150×123، اكراميه 1×200 = 85,150 ج.م) برقم جديد فاضي، وتصلّح رقمها في كشف عماد بس.
+            فاتورة محمد معروف N239 ما بتتغيرش. الأرصدة والمخزون والخزنة ما بتتلمسش.
+          </p>
+          {fixStep === 0 ? (
+            <button onClick={() => { setFixStep(1); setFixMsg(null); }} className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-bold">إصلاح الفاتورة</button>
+          ) : (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold text-red-700">متأكد؟</span>
+              <button
+                disabled={fixBusy}
+                onClick={async () => {
+                  setFixBusy(true);
+                  try {
+                    const r = await restoreLostInvoice({
+                      oldId: 'N239', customerCode: 'C012', date: '2026-11-20', time: '19:46',
+                      previousBalance: -743650, createdByName: 'Omer', createdBy: 'Omer',
+                      items: [
+                        { itemName: 'ابيض كبير', quantity: 350, price: 118 },
+                        { itemName: 'احمر كبير', quantity: 126, price: 200 },
+                        { itemName: 'بلدي كبير', quantity: 150, price: 123 },
+                        { itemName: 'اكراميه', quantity: 1, price: 200 }
+                      ]
+                    });
+                    setFixMsg({ ok: r.success, text: r.message });
+                  } finally { setFixBusy(false); setFixStep(0); }
+                }}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-bold disabled:opacity-60"
+              >{fixBusy ? 'جاري التنفيذ...' : 'نعم، نفّذ'}</button>
+              <button disabled={fixBusy} onClick={() => setFixStep(0)} className="px-3 py-2 rounded-lg bg-white border text-sm">إلغاء</button>
+            </div>
+          )}
+          {fixMsg && !fixMsg.ok && <div className="mt-2 text-sm font-bold text-red-700">{fixMsg.text}</div>}
+        </div>
+      )}
+      {fixMsg?.ok && <div className="bg-green-50 border border-green-300 rounded-2xl p-4 mb-4 text-sm font-bold text-green-800">{fixMsg.text}</div>}
 
       <div className={card}>
         <h3 className="font-bold text-gray-800 mb-1">المفتوح الآن ({online.length})</h3>
