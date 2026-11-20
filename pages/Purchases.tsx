@@ -1045,6 +1045,9 @@ export const Purchases: React.FC = () => {
                   <tr key={purchase.id} className={`hover:bg-gray-50 ${purchase.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : isPending ? 'bg-amber-50/30' : ''}`}>
                     <td className="p-4 font-mono font-bold text-blue-600">
                       {purchase.id}
+                      {purchase.archivedAt && (
+                        <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold font-sans">مُرحّلة (كشف قديم)</span>
+                      )}
                       {purchase.reviewStatus === 'PENDING_REVIEW' && (
                         <span className="block mt-1 w-fit px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold font-sans">جديدة - لم تُراجع</span>
                       )}

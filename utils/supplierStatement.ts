@@ -194,7 +194,7 @@ export function getSupplierStatementTransactions(
     const codeKey = (supplier.code || '').trim().toLowerCase();
     const synthetic: UnifiedMovement[] = [];
     (purchases || []).forEach(pu => {
-      if (pu.isDeleted) return;
+      if (pu.isDeleted || (pu as any).archivedAt) return;
       if ((pu.supplierCode || '').trim().toLowerCase() !== codeKey) return;
       if (linkedIds.has(String(pu.id))) return;
       if (!/^[A-Za-z0-9-]+$/.test(String(pu.id))) return; // الرقم غير مناسب للربط: يتعامل معاه الجزء الاحتياطي تحت
@@ -484,7 +484,7 @@ export function getSupplierStatementTransactions(
   // Account for any active purchases for this supplier not yet registered in history
   const cleanSupplierCode = (supplier.code || '').trim().toLowerCase();
   const unlinkedPurchases = (purchases || []).filter(p => 
-    !p.isDeleted &&
+    !p.isDeleted && !(p as any).archivedAt &&
     (p.supplierCode || '').trim().toLowerCase() === cleanSupplierCode &&
     !seenPurchaseIds.has(p.id)
   );

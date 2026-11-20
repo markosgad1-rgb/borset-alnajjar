@@ -12,7 +12,7 @@ import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsAp
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
-import { canDo } from '../utils/permissions';
+import { canDo, isFullAdmin, canFeature } from '../utils/permissions';
 import { logOp, opMoney, opChange } from '../utils/auditLog';
 
 export const Suppliers: React.FC = () => {
@@ -20,7 +20,7 @@ export const Suppliers: React.FC = () => {
     suppliers, addSupplier, updateSupplier, deleteSupplier,
     clearLedger, cleanCorruptedSupplierOpeningBalance,
     currentUser, rawPurchases: purchases, printLedger, printPurchaseInvoice,
-    companyLogo, deleteSupplierLedgerMovement, deletePurchase
+    companyLogo, deleteSupplierLedgerMovement, deletePurchase, archiveSupplierStatement, undoArchiveSupplierStatement
   } = useERP();
   const { confirm: askConfirm, notify, dialog } = useDialog();
 
@@ -139,6 +139,21 @@ export const Suppliers: React.FC = () => {
     return map;
   }, [activeSuppliers, purchases]);
 
+  // ===== مراجعة الأرصدة: الرقم المخزّن مقابل رقم كشف الحساب =====
+  const [auditOpen, setAuditOpen] = useState(false);
+  const auditRows = useMemo(() => {
+    return activeSuppliers
+      .map(s => {
+        const stmt = Math.round(Number(supplierBalancesMap.get(s.code) ?? getSupplierBalance(s, purchases)) * 100) / 100;
+        const stored = Math.round((Number(s.balance) || 0) * 100) / 100;
+        return { s, stmt, stored, diff: Math.round((stmt - stored) * 100) / 100 };
+      })
+      .filter(r => r.diff !== 0);
+  }, [activeSuppliers, supplierBalancesMap, purchases]);
+  const applyAudit = async (code: string, value: number) => {
+    await updateSupplier(code, { balance: value });
+  };
+
   const handleOpenAddModal = () => {
     setIsEditing(false);
     setEditingOldCode(null);
@@ -239,18 +254,6 @@ export const Suppliers: React.FC = () => {
       return;
     }
 
-    // Safety check: check if supplier has any purchases, non-zero balance, or history
-    const cleanCode = (supplier.code || '').trim().toLowerCase();
-    const hasPurchases = purchases.some(p => !p.isDeleted && (p.supplierCode || '').trim().toLowerCase() === cleanCode);
-    const hasBalance = Number(supplier.balance || 0) !== 0;
-    const hasHistory = Array.isArray(supplier.history) && supplier.history.length > 0;
-
-    if (hasPurchases || hasBalance || hasHistory) {
-      setDeleteWarningReason(`لا يمكن حذف المورد لوجود حركات مالية وفواتير مرتبطة به، يمكنك تعديل بياناته فقط.`);
-      setSupplierToDelete(supplier);
-      return;
-    }
-
     setDeleteWarningReason(null);
     setSupplierToDelete(supplier);
   };
@@ -275,6 +278,19 @@ export const Suppliers: React.FC = () => {
     } finally {
       setIsDeletingSupplier(false);
     }
+  };
+
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const handleArchiveStatement = async () => {
+    if (!selectedSupplier) return;
+    const ok = await archiveSupplierStatement(selectedSupplier.code);
+    setShowArchiveConfirm(false);
+    if (ok) notify('تم الترحيل: كشف المورد بدأ من صفر. الفواتير باقية والمخزن والخزنة ما اتأثروش.');
+  };
+  const handleUndoArchive = async () => {
+    if (!selectedSupplier) return;
+    const ok = await undoArchiveSupplierStatement(selectedSupplier.code);
+    if (ok) notify('تم إلغاء الترحيل ورجع الكشف القديم.');
   };
 
   const handleClearLedger = async () => {
@@ -672,6 +688,16 @@ export const Suppliers: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {isFullAdmin(currentUser) && (
+            <button
+              onClick={() => setAuditOpen(true)}
+              className="flex items-center gap-1.5 bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-amber-600 transition-colors shadow-xs"
+              title="مقارنة رقم كل مورد المخزّن برقم كشف حسابه"
+            >
+              <AlertTriangle size={15} /> مراجعة الأرصدة
+              {auditRows.length > 0 && <span className="bg-white text-amber-700 rounded-full px-1.5 text-[10px] font-black">{auditRows.length}</span>}
+            </button>
+          )}
           {canAddSupplier && (<button 
             onClick={handleOpenAddModal}
             className="flex items-center gap-1.5 bg-orange-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 transition-colors shadow-xs"
@@ -1070,7 +1096,7 @@ export const Suppliers: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {canDo(currentUser, 'ledger.clear') && (
+                    {canFeature(currentUser, 'clearStatement') && (
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
@@ -1096,6 +1122,35 @@ export const Suppliers: React.FC = () => {
                         >
                           <Trash2 size={13} /> تصفير
                         </button>
+                      )
+                    )}
+
+                    {canFeature(currentUser, 'archiveStatement') && (
+                      showArchiveConfirm ? (
+                        <div className="flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-lg border border-amber-300 text-xs">
+                          <span className="font-bold text-amber-800">ترحيل وبدء كشف جديد من صفر؟ (مفيش مخزن ولا خزنة هتتأثر)</span>
+                          <button onClick={handleArchiveStatement} className="bg-amber-600 text-white px-2 py-0.5 rounded font-bold">نعم</button>
+                          <button onClick={() => setShowArchiveConfirm(false)} className="bg-white text-gray-600 px-2 py-0.5 rounded border font-bold">إلغاء</button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => setShowArchiveConfirm(true)}
+                            className="flex items-center gap-1 bg-amber-50 text-amber-800 px-2 py-1 rounded-md text-xs font-bold hover:bg-amber-100 border border-amber-300"
+                            title="تصفير الكشف وبدء كشف جديد من غير ما المخزن أو الخزنة يتأثروا، والفواتير تفضل في السجل"
+                          >
+                            ترحيل / كشف جديد
+                          </button>
+                          {(selectedSupplier?.archives?.length || 0) > 0 && (
+                            <button
+                              onClick={handleUndoArchive}
+                              className="flex items-center gap-1 bg-white text-gray-700 px-2 py-1 rounded-md text-xs font-bold hover:bg-gray-100 border border-gray-300"
+                              title="رجوع الكشف المرحّل الأخير"
+                            >
+                              إلغاء الترحيل
+                            </button>
+                          )}
+                        </>
                       )
                     )}
 
@@ -1945,6 +2000,48 @@ export const Suppliers: React.FC = () => {
       />
 
       {/* Supplier Delete Confirmation / Safety Check Modal */}
+      {auditOpen && (
+        <div className="fixed inset-0 z-[120] bg-black/50 flex items-center justify-center p-3" onClick={() => setAuditOpen(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl text-right" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-gray-900">مراجعة أرصدة الموردين</h3>
+                <p className="text-xs text-gray-500">بتقارن الرقم المخزّن لكل مورد برقم كشف حسابه (اللي بيظهر في القائمة والكشف).</p>
+              </div>
+              <button onClick={() => setAuditOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+            </div>
+            <div className="overflow-auto p-3">
+              {auditRows.length === 0 ? (
+                <div className="p-8 text-center text-emerald-700 font-bold text-sm">✔ كل أرصدة الموردين مطابقة لكشف الحساب</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr><th className="p-2">المورد</th><th className="p-2">الرقم المخزّن</th><th className="p-2">رقم الكشف</th><th className="p-2">الفرق</th><th className="p-2"></th></tr>
+                  </thead>
+                  <tbody>
+                    {auditRows.map(r => (
+                      <tr key={r.s.code} className="border-t">
+                        <td className="p-2 font-bold">{r.s.name} <span className="font-mono text-gray-400">({r.s.code})</span></td>
+                        <td className="p-2 font-mono" dir="ltr">{r.stored.toLocaleString()}</td>
+                        <td className="p-2 font-mono font-bold" dir="ltr">{r.stmt.toLocaleString()}</td>
+                        <td className="p-2 font-mono text-red-600" dir="ltr">{r.diff.toLocaleString()}</td>
+                        <td className="p-2"><button onClick={() => applyAudit(r.s.code, r.stmt)} className="bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded-lg font-bold">اعتماد رقم الكشف</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            {auditRows.length > 0 && (
+              <div className="p-3 border-t flex items-center justify-between gap-2">
+                <span className="text-[11px] text-gray-500">"اعتماد" بيظبط الرقم المخزّن على رقم الكشف فقط، ما بيغيّر أي حركة ولا مشتريات.</span>
+                <button onClick={async () => { for (const r of auditRows) await applyAudit(r.s.code, r.stmt); }} className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg font-bold text-xs">اعتماد الكل</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {supplierToDelete && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
           <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 text-right transform transition-all">
@@ -2016,16 +2113,16 @@ export const Suppliers: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-base font-black text-gray-900">تأكيد حذف المورد</h3>
-                    <p className="text-xs text-gray-500">لا يمكن التراجع عن هذا الإجراء</p>
+                    <p className="text-xs text-gray-500">نقل لسلة المهملات</p>
                   </div>
                 </div>
 
                 <div className="mb-4">
                   <p className="text-sm font-bold text-gray-800 leading-relaxed mb-2">
-                    هل أنت متأكد من حذف المورد ({supplierToDelete.name})؟ لا يمكن التراجع عن هذا الإجراء.
+                    هل أنت متأكد من حذف المورد ({supplierToDelete.name})؟
                   </p>
                   <p className="text-xs text-gray-500">
-                    تم التحقق من عدم وجود أي فواتير مشتريات أو رصيد مالي قائم أو حركات مسجلة بحساب المورد.
+                    هيتنقل لسلة المهملات بكل بياناته وتقدر ترجّعه منها. لو حذفته نهائياً من السلة بيتمسح تاريخه كله (فواتيره وكشفه) ويتحرر كوده لاستخدام جديد.
                   </p>
                 </div>
 

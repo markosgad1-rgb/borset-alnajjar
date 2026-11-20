@@ -106,6 +106,8 @@ export interface Supplier {
   phone?: string; // New Field
   balance: number; // Negative = We Owe Him (Liability), Positive = He Owes Us (Asset)
   openingBalance?: number; // Opening balance upon creation (negative = debt to supplier / له علينا, positive = advance payment / لنا عليه)
+  /** كشوف قديمة اتّرحّلت (بدء كشف جديد) - ممكن إلغاء الترحيل */
+  archives?: { at: string; balance: number; openingBalance: number; history: CustomerHistory[]; purchaseIds: string[] }[];
   createdAt?: string; // Creation date for opening movement
   history: CustomerHistory[];
   manualTransactions?: ManualSupplierTransaction[];
@@ -185,6 +187,7 @@ export interface CustomerHistory {
 
 export interface Purchase {
   id: string;
+  archivedAt?: string; // اتّرحّلت مع كشف مورد (بدء كشف جديد)
   branchId?: BranchId; // Receiving branch (defaults to MARG)
   supplierCode: string; // Linked to Supplier
   supplierName: string;

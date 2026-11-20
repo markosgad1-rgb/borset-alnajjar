@@ -700,6 +700,14 @@ export const Trash: React.FC = () => {
               </p>
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-red-900 leading-relaxed">
                 سيتم إزالة هذا المستند نهائياً من قاعدة بيانات Firestore ولن يظهر في سلة المهملات مجدداً.
+                {(confirmDeleteTarget.type === 'customer' || confirmDeleteTarget.type === 'supplier') && (
+                  <span className="block mt-2 font-bold">
+                    {confirmDeleteTarget.type === 'customer'
+                      ? 'هيتمسح كمان كل فواتير بيع العميل وسجلاته في السلة، وحركات الخزنة المرتبطة بيه بتفضل بس بتتفصل عن الكود. المخزن وأرصدة الخزنة ما بتتأثرش.'
+                      : 'هيتمسح كمان كل فواتير مشتريات المورد وسجلاته في السلة، وحركات الخزنة المرتبطة بيه بتفضل بس بتتفصل عن الكود. المخزن وأرصدة الخزنة ما بتتأثرش.'}
+                    {' '}بعدها تقدر تسجّل نفس الكود من جديد بدون أي تداخل مع القديم.
+                  </span>
+                )}
               </div>
             </div>
 
