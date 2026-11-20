@@ -442,7 +442,7 @@ export const Customers: React.FC = () => {
     if (!selectedCustomer) return;
 
     try {
-      const invId = row.invoiceId || (row.ref && row.ref !== '-' && row.ref !== 'افتتاحي' && row.ref !== 'تسوية' ? row.ref : null);
+      const invId = row.linkedPayment ? null : (row.invoiceId || (row.ref && row.ref !== '-' && row.ref !== 'افتتاحي' && row.ref !== 'تسوية' ? row.ref : null));
       if (row.isInvoiceItem || invId) {
         const targetInvId = row.invoiceId || invId;
         const confirmMsg = `هذا البند تابع لفاتورة بيع رقم #${targetInvId}.\n\nهل تريد حذف هذه الفاتورة بالكامل نهائياً من كشف الحساب والمخزن والخزينة؟`;
@@ -1506,7 +1506,7 @@ export const Customers: React.FC = () => {
                                   e.stopPropagation();
                                   e.preventDefault();
                                   
-                                  const invNo = r.invoiceNo || r.invoiceId || (r.ref && r.ref !== '-' && r.ref !== 'افتتاحي' && r.ref !== 'تسوية' ? r.ref : null);
+                                  const invNo = (r as any).linkedPayment ? null : (r.invoiceNo || r.invoiceId || (r.ref && r.ref !== '-' && r.ref !== 'افتتاحي' && r.ref !== 'تسوية' ? r.ref : null));
                                   if (invNo) {
                                     if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
                                       return;
@@ -1530,6 +1530,7 @@ export const Customers: React.FC = () => {
 
                                   try {
                                     await deleteCustomerLedgerMovement(selectedCustomer.code, {
+                                      ...((r as any).linkedPayment ? { id: r.id, paymentId: (r as any).linkedPaymentId } : {}),
                                       date: r.date,
                                       description: r.description || r.itemName,
                                       amount: r.amount !== undefined ? r.amount : ((r.debit && r.debit > 0) ? -r.debit : (r.credit || 0))

@@ -93,6 +93,8 @@ export const getConsumedPaymentIndices = (history: Array<{ date: string; descrip
   return consumedIndices;
 };
 
+const amountPositive = (h: any) => Number(h?.amount) > 0;
+
 export const getItemizedRowsForRange = (cust: any, invoices: SalesInvoice[], startDate?: string, endDate?: string) => {
   if (!cust || !cust.history) return [];
 
@@ -297,6 +299,11 @@ export const getItemizedRowsForRange = (cust: any, invoices: SalesInvoice[], sta
         refCol = 'تسوية';
       }
 
+      // تحصيل من صفحة التحصيل مربوط برقم فاتورة: يظهر برقم الفاتورة في الكشف (من غير ما يتحسب جزء من الفاتورة)
+      const linkedInvNo = (/^cust_pay_T_COL_/.test(String((h as any).id || '')) || /^T_COL_/.test(String((h as any).paymentId || ''))) && amountPositive(h)
+        ? String((h as any).invoiceId || (h as any).invoiceNo || '').trim().replace(/^#/, '') : '';
+      if (linkedInvNo) refCol = linkedInvNo;
+
       const isPay = h.description.includes('سداد') || h.description.includes('دفعة') || h.description.includes('تحصيل');
 
       rows.push({
@@ -314,8 +321,9 @@ export const getItemizedRowsForRange = (cust: any, invoices: SalesInvoice[], sta
         runningBalance: running,
         status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
         isInvoiceItem: false,
-        invoiceId: invId || undefined,
-        invoiceNo: invId || undefined,
+        invoiceId: linkedInvNo || invId || undefined,
+        invoiceNo: linkedInvNo ? undefined : (invId || undefined),
+        ...(linkedInvNo ? { linkedPayment: true, linkedPaymentId: (h as any).paymentId } : {}),
         type: isPay ? 'payment' : 'adjustment',
         description: h.description,
         amount: h.amount,
