@@ -9,13 +9,17 @@ import { getSalesInvoiceHtml } from '../utils/printTemplates';
 import { useBackHandler } from '../utils/backNavigation';
 import { useNetworkStatus } from '../utils/useNetworkStatus';
 import { CartNumberInput } from '../components/CartNumberInput';
-import { canDo } from '../utils/permissions';
+import { canDo, canFeature } from '../utils/permissions';
 
 export const Sales: React.FC = () => {
   const { addInvoice, products, customers, invoices, rawInvoices, userScope, printInvoice, companyLogo, currentUser, customerBalanceOf } = useERP();
   const netUp = useNetworkStatus();
   
   const canEditPrices = canDo(currentUser, 'price.edit');
+  const canDiscount = canFeature(currentUser, 'invoiceDiscount');
+  const [showDiscount, setShowDiscount] = useState(false);
+  const [discountMode, setDiscountMode] = useState<'AMT' | 'PCT'>('AMT');
+  const [discountInput, setDiscountInput] = useState('');
 
   // Cascading Branch & Area State
   const [selectedBranch, setSelectedBranch] = useState<BranchId>(userScope.restricted ? (userScope.branch as BranchId) : 'MARG');
@@ -116,7 +120,10 @@ export const Sales: React.FC = () => {
   }, [rawInvoices, netUp]);
 
   // Calculated Totals
-  const cartTotal = cartItems.reduce((sum, item) => sum + item.total, 0);
+  const itemsSubtotal = cartItems.reduce((sum, item) => sum + item.total, 0);
+  const discountRaw = canDiscount && showDiscount ? (parseNumberFromCommas(discountInput) || 0) : 0;
+  const discountAmount = Math.min(itemsSubtotal, Math.max(0, Math.round((discountMode === 'PCT' ? itemsSubtotal * Math.min(discountRaw, 100) / 100 : discountRaw) * 100) / 100));
+  const cartTotal = Math.round((itemsSubtotal - discountAmount) * 100) / 100;
 
   // Effective Paid Amount (Supports comma separators like 10,000 / 100,000)
   const parsedPaid = parseNumberFromCommas(paidAmountInput);
@@ -463,6 +470,7 @@ export const Sales: React.FC = () => {
       customerPhone: cust?.phone || '',
       items: cartItems,
       total: cartTotal,
+      ...(discountAmount > 0 ? { discount: discountAmount, ...(discountMode === 'PCT' ? { discountPct: discountRaw } : {}) } : {}),
       paidAmount: currentPaid,
       remainingAmount: remainingAmount,
       ...(currentPaid > 0 && paymentMethod ? { paymentMethod } : {})
@@ -481,6 +489,7 @@ export const Sales: React.FC = () => {
 
     // Clear Form
     setCartItems([]);
+    setShowDiscount(false); setDiscountInput(''); setDiscountMode('AMT');
     setCustomerCode('');
     setCustomerName('');
     setCustomerSearchText('');
@@ -1058,6 +1067,24 @@ export const Sales: React.FC = () => {
               </tbody>
             </table>
           </div>
+          {canDiscount && cartItems.length > 0 && (
+            <div className="px-3 py-2 border-t border-gray-100 bg-gray-50">
+              {!showDiscount ? (
+                <button type="button" onClick={() => setShowDiscount(true)} className="text-xs font-bold text-brand-700 hover:underline">+ إضافة خصم</button>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-bold text-gray-700">خصم:</span>
+                  <div className="flex rounded-lg overflow-hidden border border-gray-300">
+                    <button type="button" onClick={() => setDiscountMode('AMT')} className={`px-2 py-1 ${discountMode === 'AMT' ? 'bg-brand-600 text-white' : 'bg-white text-gray-600'}`}>مبلغ</button>
+                    <button type="button" onClick={() => setDiscountMode('PCT')} className={`px-2 py-1 ${discountMode === 'PCT' ? 'bg-brand-600 text-white' : 'bg-white text-gray-600'}`}>%</button>
+                  </div>
+                  <input type="text" inputMode="decimal" value={discountInput} onChange={e => setDiscountInput(e.target.value)} placeholder={discountMode === 'PCT' ? 'النسبة' : 'المبلغ'} className="w-24 border border-gray-300 rounded px-2 py-1 text-center font-mono" />
+                  {discountAmount > 0 && <span className="font-bold text-red-600">- {discountAmount.toLocaleString()} ج.م → الصافي {cartTotal.toLocaleString()}</span>}
+                  <button type="button" onClick={() => { setShowDiscount(false); setDiscountInput(''); }} className="text-gray-500 hover:text-red-600 mr-auto">إلغاء الخصم</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 4. Payment & Settlement Section */}
@@ -1232,6 +1259,12 @@ export const Sales: React.FC = () => {
         <div className="bg-gray-900 text-white p-6 rounded-xl shadow-lg space-y-3">
            <h3 className="text-lg font-bold border-b border-gray-700 pb-2 text-gray-300">ملخص الفاتورة والحساب</h3>
            
+           {discountAmount > 0 && (
+             <div className="flex justify-between items-center text-amber-300 text-sm">
+               <span>خصم (إجمالي الأصناف {itemsSubtotal.toLocaleString()})</span>
+               <span className="font-mono">- {discountAmount.toLocaleString()} ج.م</span>
+             </div>
+           )}
            <div className="flex justify-between items-center text-gray-300">
              <span>إجمالي الفاتورة</span>
              <span className="font-mono text-xl text-white">{cartTotal.toLocaleString()} ج.م</span>
@@ -1355,6 +1388,12 @@ export const Sales: React.FC = () => {
                 <span className="text-gray-500">العميل:</span>
                 <span className="font-bold text-gray-800">{lastSavedInvoice?.customerName}</span>
               </div>
+              {(lastSavedInvoice?.discount || 0) > 0 && (
+                <div className="flex justify-between items-center text-sm text-amber-700 border-b border-gray-200 pb-1.5">
+                  <span>خصم{lastSavedInvoice?.discountPct ? ` (${lastSavedInvoice?.discountPct}%)` : ''}:</span>
+                  <span className="font-bold font-mono">- {Number(lastSavedInvoice?.discount).toLocaleString()} ج.م</span>
+                </div>
+              )}
               {/* السطر الأول: إجمالي الفاتورة */}
               <div className="flex justify-between items-center text-sm font-bold text-gray-900 border-b border-gray-200 pb-1.5">
                 <span>إجمالي الفاتورة:</span>

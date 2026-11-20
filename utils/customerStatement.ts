@@ -113,7 +113,7 @@ export const getItemizedRowsForRange = (cust: any, invoices: SalesInvoice[], sta
 
         if (isInvoiceSale && invId && !invoice) continue; // Skip deleted invoice
         if (isInvoiceSale && invoice && invoice.items && invoice.items.length > 0) {
-          const invoiceTotal = invoice.items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+          const invoiceTotal = invoice.items.reduce((sum, item) => sum + (item.quantity * item.price), 0) - Math.max(0, Number((invoice as any).discount || 0));
           const invoicePaid = Math.max(0, Number(invoice.paidAmount || 0));
           // Net debt increase from invoice = total - paid
           priorBalance -= (invoiceTotal - invoicePaid);
@@ -220,6 +220,33 @@ export const getItemizedRowsForRange = (cust: any, invoices: SalesInvoice[], sta
           amount: -debit
         });
       });
+
+      // 1.b سطر الخصم (لو الفاتورة عليها خصم): دائن بقيمة الخصم تحت أصناف الفاتورة مباشرة
+      const invDiscount = Math.max(0, Number((invoice as any).discount || 0));
+      if (invDiscount > 0) {
+        running += invDiscount;
+        const pct = Number((invoice as any).discountPct || 0);
+        rows.push({
+          id: `inv_disc_${invoice.id}`,
+          num: counter++,
+          date: invoice.date || h.date,
+          ref: invoice.id,
+          itemName: pct > 0 ? `خصم (${pct}%)` : 'خصم',
+          quantity: '-',
+          price: '-',
+          lineTotal: '-',
+          debit: 0,
+          credit: invDiscount,
+          runningBalance: running,
+          status: running < 0 ? 'مدين' : running > 0 ? 'دائن' : 'متزن',
+          isInvoiceItem: false,
+          invoiceId: invoice.id,
+          invoiceNo: invoice.id,
+          type: 'discount',
+          description: `خصم فاتورة بيع #${invoice.id}`,
+          amount: invDiscount
+        });
+      }
 
       // 2. Add the single dedicated payment row right below the last item of the invoice
       if (invoicePaid > 0) {

@@ -230,6 +230,9 @@ export interface InvoiceItem {
 export interface SalesInvoice {
   id: string; // Invoice Number
   archivedAt?: string; // اتّرحّلت مع كشف عميل (بدء كشف جديد) - لا تتأثر المبيعات ولا المخزن ولا الخزنة
+  /** خصم الفاتورة (اختياري). total = مجموع الأصناف - discount (يعني total هو الصافي) */
+  discount?: number;
+  discountPct?: number; // لو الخصم اتحدد بنسبة (للعرض فقط)
   branchId: BranchId; // Sales branch ('MARG' | 'NOZHA')
   area?: string; // Geographical area
   date: string;
@@ -328,7 +331,7 @@ export interface User {
   /** للمدير الكامل: السماح بصفحة إدارة السيستم (الأدمن الأساسي دايماً مسموح) */
   allowSystemPage?: boolean;
   /** مزايا اختيارية في كشف العميل (الأدمن الأساسي دايماً مسموح له) */
-  features?: { clearStatement?: boolean; archiveStatement?: boolean };
+  features?: { clearStatement?: boolean; archiveStatement?: boolean; invoiceDiscount?: boolean };
 }
 
 export type PageView = 'dashboard' | 'reports' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users' | 'trash' | 'activity' | 'system';

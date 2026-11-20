@@ -348,6 +348,7 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
           
           <div class="totals-section">
             <div class="totals-box">
+              ${(invoice.discount || 0) > 0 ? `<div class="total-row"><span>إجمالي الأصناف:</span><span>${((invoice.total || 0) + (invoice.discount || 0)).toLocaleString()} ج.م</span></div><div class="total-row"><span>خصم${invoice.discountPct ? ` (${invoice.discountPct}%)` : ''}:</span><span>- ${Number(invoice.discount).toLocaleString()} ج.م</span></div>` : ''}
               <div class="total-row main">
                 <span>إجمالي الفاتورة:</span>
                 <strong>${invoice.total.toLocaleString()} ج.م</strong>

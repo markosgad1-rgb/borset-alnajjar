@@ -104,7 +104,7 @@ export const canDo = (user: Partial<User> | null | undefined, key: string): bool
 };
 
 /** مزايا اختيارية: مفيش أحد غير الأدمن الأساسي بيشوفها إلا لو اتفعّلت له صراحةً */
-export const canFeature = (user: Partial<User> | null | undefined, f: 'clearStatement' | 'archiveStatement'): boolean => {
+export const canFeature = (user: Partial<User> | null | undefined, f: 'clearStatement' | 'archiveStatement' | 'invoiceDiscount'): boolean => {
   if (!user) return false;
   if (user.username === 'admin') return true;
   return (user as any).features?.[f] === true;

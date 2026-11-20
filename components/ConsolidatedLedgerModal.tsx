@@ -92,7 +92,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
             const invId = invMatch ? invMatch[1] : null;
             const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
             if (isInv && invoice && invoice.items && invoice.items.length > 0) {
-              const totalItems = invoice.items.reduce((s, it) => s + (it.quantity * it.price), 0);
+              const totalItems = invoice.items.reduce((s, it) => s + (it.quantity * it.price), 0) - Math.max(0, Number((invoice as any).discount || 0));
               prior -= totalItems;
             } else {
               prior += h.amount;
@@ -113,7 +113,7 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
         const invoice = invId ? invoices.find(inv => inv.id === invId) : null;
 
         if (isInv && invoice && invoice.items && invoice.items.length > 0) {
-          const totalItems = invoice.items.reduce((s, it) => s + (it.quantity * it.price), 0);
+          const totalItems = invoice.items.reduce((s, it) => s + (it.quantity * it.price), 0) - Math.max(0, Number((invoice as any).discount || 0));
           periodDebit += totalItems;
         } else {
           if (h.amount < 0) {
@@ -316,6 +316,22 @@ export const ConsolidatedLedgerModal: React.FC<ConsolidatedLedgerModalProps> = (
                 credit: 0
               });
             });
+            const dsc = Math.max(0, Number((invoice as any).discount || 0));
+            if (dsc > 0) {
+              list.push({
+                date: invoice.date || h.date,
+                entityName: cust.name,
+                entityCode: cust.code,
+                entityType: 'CUSTOMER',
+                ref: invoice.id,
+                itemName: 'خصم',
+                quantity: '-',
+                price: '-',
+                lineTotal: '-',
+                debit: 0,
+                credit: dsc
+              });
+            }
           } else {
             const deb = h.amount < 0 ? Math.abs(h.amount) : 0;
             const cred = h.amount > 0 ? h.amount : 0;

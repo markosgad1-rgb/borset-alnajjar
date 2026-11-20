@@ -61,7 +61,7 @@ export const UserManagement: React.FC = () => {
     allowedBranch: '' as 'MARG' | 'NOZHA' | '',
     allowedAreas: [] as string[],
     allowSystemPage: false,
-    features: {} as { clearStatement?: boolean; archiveStatement?: boolean }
+    features: {} as { clearStatement?: boolean; archiveStatement?: boolean; invoiceDiscount?: boolean }
   });
 
   const resetForm = () => {
@@ -184,7 +184,7 @@ export const UserManagement: React.FC = () => {
       allowedBranch: (user.allowedBranch === 'MARG' || user.allowedBranch === 'NOZHA') ? user.allowedBranch : '',
       allowedAreas: Array.isArray(user.allowedAreas) ? user.allowedAreas : [],
       allowSystemPage: user.allowSystemPage === true,
-      features: { clearStatement: user.features?.clearStatement === true, archiveStatement: user.features?.archiveStatement === true },
+      features: { clearStatement: user.features?.clearStatement === true, archiveStatement: user.features?.archiveStatement === true, invoiceDiscount: user.features?.invoiceDiscount === true },
       permissions: {
         canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales ?? isAdmin),
         canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales ?? isAdmin),
@@ -574,7 +574,11 @@ export const UserManagement: React.FC = () => {
             </div>
 
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
-              <div className="text-sm font-bold text-gray-800">أزرار اختيارية في كشف حساب العميل (مخفية لو ما اتفعلتش)</div>
+              <div className="text-sm font-bold text-gray-800">أزرار اختيارية (مخفية لو ما اتفعلتش)</div>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!formData.features.invoiceDiscount} onChange={() => setFormData(prev => ({ ...prev, features: { ...prev.features, invoiceDiscount: !prev.features.invoiceDiscount } }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm text-gray-800">خصم على فواتير البيع (جديدة وتعديل)</span>
+              </label>
               <label className="flex items-center gap-3 cursor-pointer">
                 <input type="checkbox" checked={!!formData.features.clearStatement} onChange={() => setFormData(prev => ({ ...prev, features: { ...prev.features, clearStatement: !prev.features.clearStatement } }))} className="w-5 h-5 text-blue-600 rounded" />
                 <span className="text-sm text-gray-800">زرار "تصفير" (بيحذف فواتير العميل لسلة المهملات ويرجّع المخزن ويشيل الدفعات من الخزنة)</span>

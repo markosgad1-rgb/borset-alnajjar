@@ -2303,6 +2303,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try { setDoc(doc(db, 'ledgerTrash', full.id), cleanDoc(full)).catch(() => {}); } catch { /* ignore */ }
   };
 
+  const discountBypassRef = useRef(false);
   const restoreLedgerMovement = async (id: string): Promise<{ success: boolean; message?: string }> => {
     const item = ledgerTrash.find(x => x.id === id);
     if (!item) return { success: false, message: 'الحركة غير موجودة في السلة.' };
@@ -2315,13 +2316,17 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (!cu || cu.isDeleted) return { success: false, message: 'العميل الخاص بالفاتورة غير موجود أو محذوف. استرجع العميل أولاً.' };
         if (invoices.some(i => String(i.id).toLowerCase() === String(inv.id).toLowerCase())) return { success: false, message: 'يوجد فاتورة بنفس الرقم حالياً، لا يمكن استرجاعها.' };
         // نعيد تسجيل الفاتورة بنفس بياناتها: بترجّع حساب العميل والخزنة والمخزن زي ما كانت
-        await quietOps(async () => {
-          await addInvoice({
-            id: inv.id, branchId: inv.branchId, area: inv.area, date: inv.date, time: inv.time,
-            customerCode: inv.customerCode, customerName: inv.customerName, items: inv.items || [], total: inv.total,
-            paidAmount: inv.paidAmount, remainingAmount: inv.remainingAmount, paymentMethod: inv.paymentMethod
+        discountBypassRef.current = true;
+        try {
+          await quietOps(async () => {
+            await addInvoice({
+              id: inv.id, branchId: inv.branchId, area: inv.area, date: inv.date, time: inv.time,
+              customerCode: inv.customerCode, customerName: inv.customerName, items: inv.items || [], total: inv.total,
+              paidAmount: inv.paidAmount, remainingAmount: inv.remainingAmount, paymentMethod: inv.paymentMethod,
+              ...(inv.discount ? { discount: inv.discount, discountPct: inv.discountPct } : {})
+            });
           });
-        });
+        } finally { discountBypassRef.current = false; }
         const keep: any = { createdBy: inv.createdBy, createdByName: inv.createdByName, reviewStatus: inv.reviewStatus, reviewedBy: inv.reviewedBy, reviewedAt: inv.reviewedAt };
         Object.keys(keep).forEach(k => keep[k] === undefined && delete keep[k]);
         if (Object.keys(keep).length) {
@@ -2733,7 +2738,21 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     paidAmount?: number;
     remainingAmount?: number;
     paymentMethod?: PaymentMethod;
+    discount?: number;
+    discountPct?: number;
   }) => {
+    {
+      const disc = Number(invoiceData.discount || 0);
+      if (disc !== 0) {
+        const sub = Math.round(invoiceData.items.reduce((a, it) => a + it.quantity * it.price, 0) * 100) / 100;
+        if (!discountBypassRef.current && !canFeature(currentUser, 'invoiceDiscount')) { alert('ليس لديك صلاحية الخصم على الفواتير.'); return; }
+        if (!(disc > 0) || disc > sub) { alert('قيمة الخصم غير صحيحة.'); return; }
+        invoiceData = { ...invoiceData, discount: Math.round(disc * 100) / 100, total: Math.round((sub - disc) * 100) / 100 };
+      } else {
+        const { discount: _d, discountPct: _p, ...rest } = invoiceData as any;
+        invoiceData = rest;
+      }
+    }
     {
       const sc = getUserScope(currentUser);
       if (sc.restricted) {
@@ -2745,7 +2764,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const { id, total } = invoiceData;
     logOp('create', `إنشاء فاتورة بيع ${id} - العميل ${invoiceData.customerName} - إجمالي ${opMoney(total)}`, [
       `العميل: ${invoiceData.customerName} (${invoiceData.customerCode})`,
-      `الإجمالي: ${opMoney(total)}`,
+      ...((invoiceData.discount || 0) > 0 ? [`إجمالي الأصناف: ${opMoney(total + (invoiceData.discount || 0))}`, `الخصم: ${opMoney(invoiceData.discount || 0)}${invoiceData.discountPct ? ` (${invoiceData.discountPct}%)` : ''}`] : []),
+      `الإجمالي${(invoiceData.discount || 0) > 0 ? ' بعد الخصم' : ''}: ${opMoney(total)}`,
       `المدفوع: ${opMoney(invoiceData.paidAmount || 0)}`,
       `المتبقي (يُضاف على حساب العميل): ${opMoney(invoiceData.remainingAmount ?? (total - (invoiceData.paidAmount || 0)))}`,
       ...(invoiceData.paymentMethod && (invoiceData.paidAmount || 0) > 0 ? [`حساب الدفع: ${opPm(invoiceData.paymentMethod)}`] : []),
@@ -2784,6 +2804,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         total: item.total
       })),
       total: invoiceData.total,
+      ...((invoiceData.discount || 0) > 0 ? { discount: invoiceData.discount, ...(invoiceData.discountPct ? { discountPct: invoiceData.discountPct } : {}) } : {}),
       paidAmount,
       remainingAmount,
       previousBalance: prevBalance,
@@ -2959,6 +2980,19 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       alert('الفاتورة دي مُرحّلة مع كشف قديم للعميل، فمينفعش تتعدّل. لو محتاج تعدلها ألغِ ترحيل كشف العميل الأول.');
       return;
     }
+    {
+      const oldD = Number(oldInvoice.discount || 0);
+      const newD = Number(newInvoiceData.discount || 0);
+      if (Math.abs(oldD - newD) > 0.001 && !canFeature(currentUser, 'invoiceDiscount')) { alert('ليس لديك صلاحية تعديل الخصم على الفواتير.'); return; }
+      if (newD > 0) {
+        const sub = Math.round(newInvoiceData.items.reduce((a, it) => a + it.quantity * it.price, 0) * 100) / 100;
+        if (newD > sub) { alert('قيمة الخصم أكبر من إجمالي الأصناف.'); return; }
+        newInvoiceData = { ...newInvoiceData, discount: Math.round(newD * 100) / 100, total: Math.round((sub - newD) * 100) / 100 };
+      } else {
+        const { discount: _d, discountPct: _p, ...rest } = newInvoiceData as any;
+        newInvoiceData = rest;
+      }
+    }
     const oldPaid = Number(oldInvoice.paidAmount || 0);
     const newPaid = Number(newInvoiceData.paidAmount || 0);
     const oldRemaining = oldInvoice.total - oldPaid;
@@ -2967,6 +3001,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const debtDifference = oldRemaining - newRemaining; 
     logOp('update', `تعديل فاتورة بيع ${oldInvoice.id} - العميل ${oldInvoice.customerName}`, [
       `العميل: ${oldInvoice.customerName} (${oldInvoice.customerCode})`,
+      ...opChange('الخصم', Number(oldInvoice.discount || 0), Number(newInvoiceData.discount || 0), true),
       ...opChange('الإجمالي', oldInvoice.total, newInvoiceData.total, true),
       ...opChange('المدفوع', oldPaid, newPaid, true),
       ...opChange('المتبقي', oldRemaining, newRemaining, true),

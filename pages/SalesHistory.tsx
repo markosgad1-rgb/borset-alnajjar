@@ -25,7 +25,7 @@ import { SalesInvoice, InvoiceItem, PaymentMethod, BranchId, BRANCHES, BRANCH_AR
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useBackHandler } from '../utils/backNavigation';
-import { canDo } from '../utils/permissions';
+import { canDo, canFeature } from '../utils/permissions';
 import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
@@ -71,6 +71,14 @@ export const SalesHistory: React.FC = () => {
   const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
   const [editCustomer, setEditCustomer] = useState({ code: '', name: '' });
   const [editPaidAmount, setEditPaidAmount] = useState<string>('0');
+  const canDiscount = canFeature(currentUser, 'invoiceDiscount');
+  const [editDiscOn, setEditDiscOn] = useState(false);
+  const [editDiscMode, setEditDiscMode] = useState<'AMT' | 'PCT'>('AMT');
+  const [editDiscInput, setEditDiscInput] = useState('');
+  const editSub = editItems.reduce((s, i) => s + i.total, 0);
+  const editDiscRaw = editDiscOn ? (parseNumberFromCommas(editDiscInput) || 0) : 0;
+  const editDisc = Math.min(editSub, Math.max(0, Math.round((editDiscMode === 'PCT' ? editSub * Math.min(editDiscRaw, 100) / 100 : editDiscRaw) * 100) / 100));
+  const editNet = Math.round((editSub - editDisc) * 100) / 100;
   const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>('CASH');
   
   // New Item for Edit Modal
@@ -262,6 +270,11 @@ export const SalesHistory: React.FC = () => {
     setEditItems([...invoice.items]);
     setEditCustomer({ code: invoice.customerCode, name: invoice.customerName });
     setEditPaidAmount(formatWithCommas(invoice.paidAmount || 0));
+    if ((invoice.discount || 0) > 0) {
+      setEditDiscOn(true);
+      if (invoice.discountPct) { setEditDiscMode('PCT'); setEditDiscInput(String(invoice.discountPct)); }
+      else { setEditDiscMode('AMT'); setEditDiscInput(String(invoice.discount)); }
+    } else { setEditDiscOn(false); setEditDiscMode('AMT'); setEditDiscInput(''); }
     setEditPaymentMethod(invoice.paymentMethod || 'CASH');
     setIsEditing(true);
   };
@@ -310,7 +323,7 @@ export const SalesHistory: React.FC = () => {
     const oldInvoice = invoices.find(inv => inv.id === editInvoiceId);
     if (!oldInvoice) return;
 
-    const newTotal = editItems.reduce((sum, i) => sum + i.total, 0);
+    const newTotal = editNet;
     const parsedPaid = parseNumberFromCommas(editPaidAmount);
     const finalPaid = Math.max(0, parsedPaid);
     const finalRemaining = Math.max(0, newTotal - finalPaid);
@@ -323,6 +336,7 @@ export const SalesHistory: React.FC = () => {
       area: editArea,
       items: editItems,
       total: newTotal,
+      ...(editDisc > 0 ? { discount: editDisc, ...(editDiscMode === 'PCT' ? { discountPct: editDiscRaw } : {}) } : { discount: undefined, discountPct: undefined }),
       paidAmount: finalPaid,
       remainingAmount: finalRemaining,
       paymentMethod: finalPaid > 0 ? editPaymentMethod : undefined,
@@ -960,15 +974,33 @@ export const SalesHistory: React.FC = () => {
                  <div className="flex justify-between items-center text-xs font-bold pt-2 border-t border-emerald-200">
                    <span className="text-gray-600">المتبقي على الحساب (آجل):</span>
                    <span className="text-amber-800 text-sm font-mono">
-                     {Math.max(0, editItems.reduce((s, i) => s + i.total, 0) - parseNumberFromCommas(editPaidAmount)).toLocaleString()} ج.م
+                     {Math.max(0, editNet - parseNumberFromCommas(editPaidAmount)).toLocaleString()} ج.م
                    </span>
                  </div>
                </div>
             </div>
 
             <div className="p-4 bg-gray-100 border-t flex justify-between items-center shrink-0">
-               <div className="text-base font-bold text-gray-800">
-                 الإجمالي الجديد: <span className="text-blue-700 font-mono">{editItems.reduce((s, i) => s + i.total, 0).toLocaleString()} ج.م</span>
+               <div className="text-base font-bold text-gray-800 space-y-1">
+                 {(canDiscount || editDiscOn) && (
+                   <div className="flex flex-wrap items-center gap-2 text-xs font-normal">
+                     {!editDiscOn ? (
+                       canDiscount && <button type="button" onClick={() => setEditDiscOn(true)} className="font-bold text-blue-700 hover:underline">+ إضافة خصم</button>
+                     ) : (
+                       <>
+                         <span className="font-bold">خصم:</span>
+                         <div className="flex rounded overflow-hidden border border-gray-300">
+                           <button type="button" disabled={!canDiscount} onClick={() => setEditDiscMode('AMT')} className={`px-2 py-0.5 ${editDiscMode === 'AMT' ? 'bg-blue-600 text-white' : 'bg-white'}`}>مبلغ</button>
+                           <button type="button" disabled={!canDiscount} onClick={() => setEditDiscMode('PCT')} className={`px-2 py-0.5 ${editDiscMode === 'PCT' ? 'bg-blue-600 text-white' : 'bg-white'}`}>%</button>
+                         </div>
+                         <input type="text" inputMode="decimal" disabled={!canDiscount} value={editDiscInput} onChange={e => setEditDiscInput(e.target.value)} className="w-20 border border-gray-300 rounded px-2 py-0.5 text-center font-mono" />
+                         {canDiscount && <button type="button" onClick={() => { setEditDiscOn(false); setEditDiscInput(''); }} className="text-red-600 hover:underline">إلغاء الخصم</button>}
+                       </>
+                     )}
+                   </div>
+                 )}
+                 {editDisc > 0 && <div className="text-xs text-amber-700">أصناف {editSub.toLocaleString()} − خصم {editDisc.toLocaleString()}</div>}
+                 <div>الإجمالي الجديد: <span className="text-blue-700 font-mono">{editNet.toLocaleString()} ج.م</span></div>
                </div>
                <button 
                  onClick={saveChanges}
@@ -1075,6 +1107,12 @@ export const SalesHistory: React.FC = () => {
 
                   return (
                     <div className="bg-gray-900 text-white p-4 rounded-xl w-full sm:w-2/3 space-y-2">
+                      {(selectedInvoice.discount || 0) > 0 && (
+                        <div className="flex justify-between items-center text-sm text-amber-300 border-b border-gray-700 pb-2">
+                          <span>خصم{selectedInvoice.discountPct ? ` (${selectedInvoice.discountPct}%)` : ''}:</span>
+                          <span className="font-mono">- {Number(selectedInvoice.discount).toLocaleString()} ج.م</span>
+                        </div>
+                      )}
                       {/* السطر الأول: إجمالي الفاتورة */}
                       <div className="flex justify-between items-center text-base font-bold border-b border-gray-700 pb-2">
                          <span>إجمالي الفاتورة:</span>
