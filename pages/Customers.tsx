@@ -11,6 +11,7 @@ import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas 
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useDialog } from '../utils/useDialog';
+import { getLinkedPaidTotal } from '../utils/linkedPayments';
 import { useBackHandler } from '../utils/backNavigation';
 import { canDo, isFullAdmin, canFeature } from '../utils/permissions';
 import { logOp, opMoney, opChange } from '../utils/auditLog';
@@ -2014,10 +2015,11 @@ export const Customers: React.FC = () => {
                    <span className="text-base text-amber-400 font-mono">{viewInvoice.total.toLocaleString()} ج.م</span>
                 </div>
                 {(() => {
-                  const paid = viewInvoice.paidAmount || 0;
-                  const remaining = viewInvoice.remainingAmount !== undefined 
+                  const linkedPaid = getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode));
+                  const paid = (viewInvoice.paidAmount || 0) + linkedPaid;
+                  const remaining = Math.max(0, (viewInvoice.remainingAmount !== undefined 
                     ? viewInvoice.remainingAmount 
-                    : (viewInvoice.total - paid);
+                    : (viewInvoice.total - (viewInvoice.paidAmount || 0))) - linkedPaid);
 
                   // حساب قديم / مديونية سابقة: الاعتماد على القيمة المسجلة وقت إصدار الفاتورة
                   let oldDebt = viewInvoice.previousBalance !== undefined 
@@ -2027,7 +2029,7 @@ export const Customers: React.FC = () => {
 
                   // إجمالي الحساب بعد الفاتورة = الحساب القديم + المتبقي من الفاتورة
                   let totalAfterInvoice = viewInvoice.currentBalance !== undefined
-                    ? viewInvoice.currentBalance
+                    ? viewInvoice.currentBalance + linkedPaid
                     : (oldDebt - remaining);
                   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
@@ -2085,7 +2087,8 @@ export const Customers: React.FC = () => {
                       await shareSalesInvoicePdfViaWhatsApp({
                         ...viewInvoice,
                         currentBalance: curBal,
-                        liveCustomerBalance: curBal
+                        liveCustomerBalance: curBal,
+                        linkedPaid: getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode))
                       } as any, companyLogo, selectedCustomer.phone);
                     } finally {
                       setIsSharingPdf(false);
@@ -2109,7 +2112,8 @@ export const Customers: React.FC = () => {
                       await shareSalesInvoiceImageViaWhatsApp({
                         ...viewInvoice,
                         currentBalance: curBal,
-                        liveCustomerBalance: curBal
+                        liveCustomerBalance: curBal,
+                        linkedPaid: getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode))
                       } as any, companyLogo, selectedCustomer.phone);
                     } finally {
                       setIsSharingImage(false);
