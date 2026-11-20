@@ -18,7 +18,7 @@ import {
 import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
 import { logEvent, setAuditUser, runAsSystem, logOp, quietOps, opMoney, opPm, opBranch, opChange, opItemLines, opItemDiff } from '../utils/auditLog';
 import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
-import { canDo, getPermLabel } from '../utils/permissions';
+import { canDo, getPermLabel, canFeature } from '../utils/permissions';
 import { statementBalanceOf, safeToAutoAlign } from '../utils/customerStatement';
 import { getUserScope, inScope, customerInScope, UserScope } from '../utils/userScope';
 
@@ -5485,8 +5485,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gDeleteCustLedger = gate('ledger.deleteMovement', deleteCustomerLedgerMovement);
   const gDeleteSuppLedger = gate('ledger.deleteMovement', deleteSupplierLedgerMovement);
   const gClearLedger = gate('ledger.clear', clearLedger, false);
-  const gArchiveStmt = gate('ledger.clear', archiveCustomerStatement, false);
-  const gUndoArchiveStmt = gate('ledger.clear', undoArchiveCustomerStatement, false);
+  const gArchiveStmt = async (code: string) => canFeature(currentUser, 'archiveStatement') ? archiveCustomerStatement(code) : false;
+  const gUndoArchiveStmt = async (code: string) => canFeature(currentUser, 'archiveStatement') ? undoArchiveCustomerStatement(code) : false;
+  const gClearLedgerX = async (t: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE', code: string) =>
+    t === 'CUSTOMER' ? (canFeature(currentUser, 'clearStatement') ? clearLedger(t, code) : false) : gClearLedger(t, code);
   const gRestoreEntity = gate('trash.restore', restoreEntity, noPerm('trash.restore'));
   const gRestoreLedger = gate('trash.restore', restoreLedgerMovement, noPerm('trash.restore'));
   const gPurgeLedger = gate('trash.purge', purgeLedgerMovement, noPerm('trash.purge'));
@@ -5589,7 +5591,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection: sCollection, addTreasuryTransaction, addTransfer: sTransfer, addCustomerToSupplierTransfer: sC2S, deleteTransfer: gDeleteTransfer, addExpense: sExpense, addOpeningBalance: sOpening, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
-      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedger, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
+      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedgerX, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
       exportBackupData, restoreBackupData: gRestoreBackup,
       currentTreasuryBalance: userScope.restricted ? sumTr(scopedTreasury) : currentTreasuryBalance,
       currentTreasuryBalanceMarg: userScope.restricted && userScope.branch !== 'MARG' ? 0 : currentTreasuryBalanceMarg,

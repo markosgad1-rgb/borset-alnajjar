@@ -103,6 +103,13 @@ export const canDo = (user: Partial<User> | null | undefined, key: string): bool
   return permValue(user.permissions, key);
 };
 
+/** مزايا اختيارية: مفيش أحد غير الأدمن الأساسي بيشوفها إلا لو اتفعّلت له صراحةً */
+export const canFeature = (user: Partial<User> | null | undefined, f: 'clearStatement' | 'archiveStatement'): boolean => {
+  if (!user) return false;
+  if (user.username === 'admin') return true;
+  return (user as any).features?.[f] === true;
+};
+
 export const canViewPage = (user: Partial<User> | null | undefined, page: string): boolean => {
   if (page === 'activity') return isFullAdmin(user) || canDo(user, 'view.activity');
   if (page === 'system') return !!user && (user.username === 'admin' || (isFullAdmin(user) && (user as any).allowSystemPage === true));

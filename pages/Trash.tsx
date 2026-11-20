@@ -41,6 +41,8 @@ export const Trash: React.FC = () => {
     }, 4000);
   };
 
+  const lc = (v: any) => String(v ?? '').toLowerCase();
+
   // 1. Deleted Sales Invoices & Purchases
   const deletedSalesInvoices = useMemo(() => [
     ...invoices.filter(i => i.isDeleted),
@@ -69,17 +71,17 @@ export const Trash: React.FC = () => {
       const q = searchTerm.toLowerCase().trim();
       list = list.filter(item => {
         if (item.kind === 'SALES') {
-          return item.data.id.toLowerCase().includes(q) || item.data.customerName.toLowerCase().includes(q);
+          return lc(item.data.id).includes(q) || lc(item.data.customerName).includes(q);
         } else {
-          return item.data.id.toLowerCase().includes(q) || item.data.supplierName.toLowerCase().includes(q);
+          return lc(item.data.id).includes(q) || lc(item.data.supplierName).includes(q);
         }
       });
     }
 
     // Sort by deletedAt desc or date desc
     list.sort((a, b) => {
-      const timeA = a.data.deletedAt || a.data.date || '';
-      const timeB = b.data.deletedAt || b.data.date || '';
+      const timeA = String(a.data.deletedAt || a.data.date || '');
+      const timeB = String(b.data.deletedAt || b.data.date || '');
       return timeB.localeCompare(timeA);
     });
 
@@ -92,9 +94,9 @@ export const Trash: React.FC = () => {
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase().trim();
       list = list.filter(c => 
-        c.name.toLowerCase().includes(q) || 
-        c.code.toLowerCase().includes(q) || 
-        (c.phone && c.phone.includes(q))
+        lc(c.name).includes(q) || 
+        lc(c.code).includes(q) || 
+        (c.phone && String(c.phone).includes(q))
       );
     }
     list.sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''));
@@ -107,9 +109,9 @@ export const Trash: React.FC = () => {
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase().trim();
       list = list.filter(s => 
-        s.name.toLowerCase().includes(q) || 
-        s.code.toLowerCase().includes(q) || 
-        (s.phone && s.phone.includes(q))
+        lc(s.name).includes(q) || 
+        lc(s.code).includes(q) || 
+        (s.phone && String(s.phone).includes(q))
       );
     }
     list.sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''));
@@ -533,7 +535,7 @@ export const Trash: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {movementsList
-                      .filter(m => !searchTerm.trim() || `${m.entityName} ${m.entityCode} ${m.description}`.toLowerCase().includes(searchTerm.trim().toLowerCase()))
+                      .filter(m => !searchTerm.trim() || lc(`${m.entityName} ${m.entityCode} ${m.description}`).includes(searchTerm.trim().toLowerCase()))
                       .map(m => (
                       <tr key={m.id} className="hover:bg-gray-50/70 transition-colors">
                         <td className="p-3 font-bold">{m.kind === 'CUSTOMER' ? 'عميل' : m.kind === 'SUPPLIER' ? 'مورد' : 'تحويل'}</td>

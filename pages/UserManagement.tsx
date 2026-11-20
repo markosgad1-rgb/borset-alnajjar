@@ -60,7 +60,8 @@ export const UserManagement: React.FC = () => {
     permissions: initialPermissions,
     allowedBranch: '' as 'MARG' | 'NOZHA' | '',
     allowedAreas: [] as string[],
-    allowSystemPage: false
+    allowSystemPage: false,
+    features: {} as { clearStatement?: boolean; archiveStatement?: boolean }
   });
 
   const resetForm = () => {
@@ -72,7 +73,8 @@ export const UserManagement: React.FC = () => {
       permissions: initialPermissions,
       allowedBranch: '',
       allowedAreas: [],
-      allowSystemPage: false
+      allowSystemPage: false,
+      features: {}
     });
     setIsEditing(false);
     setEditingId(null);
@@ -140,7 +142,7 @@ export const UserManagement: React.FC = () => {
         resetForm();
         return;
       }
-      updateUser(editingId, { ...formData, allowSystemPage: finalRole === 'ADMIN' && formData.allowSystemPage, allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch, allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
+      updateUser(editingId, { ...formData, features: formData.features, allowSystemPage: finalRole === 'ADMIN' && formData.allowSystemPage, allowedBranch: finalRole === 'ADMIN' ? '' : formData.allowedBranch, allowedAreas: finalRole === 'ADMIN' || !formData.allowedBranch ? [] : formData.allowedAreas, role: finalRole, permissions: syncLegacyFlags(formData.permissions.perms || {}, formData.permissions) });
       alert(finalRole === 'ADMIN' ? 'تم ترقية/تحديث المستخدم كمدير نظام كامل بنجاح' : 'تم تحديث بيانات المستخدم وتعديل صلاحياته كمستخدم عادي بنجاح');
     } else {
       if (users.some(u => u.username === formData.username)) {
@@ -182,6 +184,7 @@ export const UserManagement: React.FC = () => {
       allowedBranch: (user.allowedBranch === 'MARG' || user.allowedBranch === 'NOZHA') ? user.allowedBranch : '',
       allowedAreas: Array.isArray(user.allowedAreas) ? user.allowedAreas : [],
       allowSystemPage: user.allowSystemPage === true,
+      features: { clearStatement: user.features?.clearStatement === true, archiveStatement: user.features?.archiveStatement === true },
       permissions: {
         canViewSales: Boolean(userPerms.canViewSales ?? userPerms.sales ?? isAdmin),
         canViewInvoicesLog: Boolean(userPerms.canViewInvoicesLog ?? userPerms.sales ?? isAdmin),
@@ -568,6 +571,18 @@ export const UserManagement: React.FC = () => {
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+              <div className="text-sm font-bold text-gray-800">أزرار اختيارية في كشف حساب العميل (مخفية لو ما اتفعلتش)</div>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!formData.features.clearStatement} onChange={() => setFormData(prev => ({ ...prev, features: { ...prev.features, clearStatement: !prev.features.clearStatement } }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm text-gray-800">زرار "تصفير" (بيحذف فواتير العميل لسلة المهملات ويرجّع المخزن ويشيل الدفعات من الخزنة)</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!formData.features.archiveStatement} onChange={() => setFormData(prev => ({ ...prev, features: { ...prev.features, archiveStatement: !prev.features.archiveStatement } }))} className="w-5 h-5 text-blue-600 rounded" />
+                <span className="text-sm text-gray-800">زرار "ترحيل / كشف جديد" و"إلغاء الترحيل" (مفيش تأثير على المخزن ولا الخزنة)</span>
+              </label>
             </div>
 
             {formData.permissions.admin && (

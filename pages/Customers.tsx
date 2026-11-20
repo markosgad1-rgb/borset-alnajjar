@@ -12,7 +12,7 @@ import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareCustomerStatementPdfViaWhatsApp, shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } from '../utils/whatsapp';
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
-import { canDo, isFullAdmin } from '../utils/permissions';
+import { canDo, isFullAdmin, canFeature } from '../utils/permissions';
 import { logOp, opMoney, opChange } from '../utils/auditLog';
 import { formatCustomerMovementDesc, getConsumedPaymentIndices as getConsumedPaymentIndicesUtil, getItemizedRowsForRange as getItemizedRowsUtil } from '../utils/customerStatement';
 
@@ -1300,7 +1300,7 @@ export const Customers: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    {canDo(currentUser, 'ledger.clear') && (
+                    {canFeature(currentUser, 'clearStatement') && (
                       showClearLedgerConfirm ? (
                          <div className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg border border-red-200 animate-fade-in text-xs">
                            <AlertTriangle size={14} className="text-red-500" />
@@ -1329,7 +1329,7 @@ export const Customers: React.FC = () => {
                       )
                     )}
 
-                    {canDo(currentUser, 'ledger.clear') && (
+                    {canFeature(currentUser, 'archiveStatement') && (
                       showArchiveConfirm ? (
                         <div className="flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-lg border border-amber-300 text-xs">
                           <span className="font-bold text-amber-800">ترحيل وبدء كشف جديد من صفر؟ (الرصيد الحالي هيتصفّر، مفيش مخزن ولا خزنة هتتأثر)</span>
