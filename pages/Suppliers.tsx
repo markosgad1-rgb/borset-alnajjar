@@ -9,6 +9,7 @@ import { Purchase, CustomerHistory, ManualSupplierTransaction } from '../types';
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { ConsolidatedLedgerModal } from '../components/ConsolidatedLedgerModal';
 import { shareSupplierStatementPdfViaWhatsApp, sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { getLinkedSupplierPaidTotal, withLinkedSupplierPaid } from '../utils/linkedPayments';
 import { useDialog } from '../utils/useDialog';
 import { useBackHandler } from '../utils/backNavigation';
 import { getSupplierStatementTransactions, getSupplierBalance } from '../utils/supplierStatement';
@@ -499,7 +500,7 @@ export const Suppliers: React.FC = () => {
     if (!selectedSupplier) return;
 
     try {
-      const pId = row.purchaseId || (row.ref && row.ref.startsWith('R') ? row.ref : (row.ref && row.ref !== '-' && row.ref !== 'تسوية' ? row.ref : null));
+      const pId = row.linkedPayment ? null : row.purchaseId || (row.ref && row.ref.startsWith('R') ? row.ref : (row.ref && row.ref !== '-' && row.ref !== 'تسوية' ? row.ref : null));
       if (pId) {
         if (!await askConfirm(`هذا السطر تابع لفاتورة مشتريات #${pId}.\n\nهل تريد حذف فاتورة المشتريات بالكامل وخصم أصنافها من المخزن وعكس أثرها من الحساب والخزينة؟`)) {
           return;
@@ -1239,13 +1240,13 @@ export const Suppliers: React.FC = () => {
                             <td className="p-2 text-center text-gray-500 font-mono border-l border-gray-100">{r.num}</td>
                             <td className="p-2 text-center text-gray-600 whitespace-nowrap font-mono border-l border-gray-100">{r.date}</td>
                             <td className="p-2 text-center font-mono border-l border-gray-100">
-                              {r.purchaseId ? (
+                              {(r.purchaseId || (r as any).linkedPurchaseId) ? (
                                 <button 
-                                  onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId}`)}
+                                  onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId || (r as any).linkedPurchaseId}`)}
                                   className="text-orange-700 hover:text-orange-900 bg-orange-50 hover:bg-orange-100 px-1.5 py-0.5 rounded text-[11px] font-bold inline-flex items-center gap-0.5 border border-orange-200"
                                   title="عرض تفاصيل الفاتورة"
                                 >
-                                  #{r.purchaseId}
+                                  #{r.purchaseId || (r as any).linkedPurchaseId}
                                   <Eye size={11} />
                                 </button>
                               ) : r.ref && r.ref !== '-' ? (
@@ -1321,7 +1322,7 @@ export const Suppliers: React.FC = () => {
                                   e.stopPropagation();
                                   e.preventDefault();
                                   
-                                  const invNo = r.invoiceNo || r.invoiceId || r.purchaseId || (r.ref && r.ref.startsWith('R') ? r.ref : (r.ref && r.ref !== '-' && r.ref !== 'تسوية' ? r.ref : null));
+                                  const invNo = (r as any).linkedPayment ? null : r.invoiceNo || r.invoiceId || r.purchaseId || (r.ref && r.ref.startsWith('R') ? r.ref : (r.ref && r.ref !== '-' && r.ref !== 'تسوية' ? r.ref : null));
                                   if (invNo) {
                                     if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
                                       return;
@@ -1345,6 +1346,7 @@ export const Suppliers: React.FC = () => {
 
                                   try {
                                     await deleteSupplierLedgerMovement(selectedSupplier.code, {
+                                      ...((r as any).linkedPayment ? { id: (r as any).linkedHistoryId, paymentId: (r as any).linkedPaymentId } : {}),
                                       date: r.date,
                                       description: r.description || r.itemName,
                                       credit: r.credit,
@@ -1441,9 +1443,9 @@ export const Suppliers: React.FC = () => {
                                     </span>
                                   )}
                                 </div>
-                                {r.purchaseId && (
+                                {(r.purchaseId || (r as any).linkedPurchaseId) && (
                                   <button 
-                                    onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId}`)}
+                                    onClick={() => handleViewPurchaseDetails(`فاتورة #${r.purchaseId || (r as any).linkedPurchaseId}`)}
                                     className="text-orange-600 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 px-2 py-0.5 rounded text-xs font-bold inline-flex items-center gap-1"
                                     title="عرض تفاصيل الفاتورة"
                                   >
@@ -1483,7 +1485,7 @@ export const Suppliers: React.FC = () => {
                                   e.stopPropagation();
                                   e.preventDefault();
                                   
-                                  const invNo = r.invoiceNo || r.invoiceId || r.purchaseId || (r.ref && r.ref.startsWith('R') ? r.ref : (r.ref && r.ref !== '-' && r.ref !== 'تسوية' ? r.ref : null));
+                                  const invNo = (r as any).linkedPayment ? null : r.invoiceNo || r.invoiceId || r.purchaseId || (r.ref && r.ref.startsWith('R') ? r.ref : (r.ref && r.ref !== '-' && r.ref !== 'تسوية' ? r.ref : null));
                                   if (invNo) {
                                     if (!await askConfirm(`حذف هذا البند سيؤدي لحذف الفاتورة بالكامل رقم (${invNo}) وإعادة البضاعة للمخزن، هل أنت متأكد؟`)) {
                                       return;
@@ -1507,6 +1509,7 @@ export const Suppliers: React.FC = () => {
 
                                   try {
                                     await deleteSupplierLedgerMovement(selectedSupplier.code, {
+                                      ...((r as any).linkedPayment ? { id: (r as any).linkedHistoryId, paymentId: (r as any).linkedPaymentId } : {}),
                                       date: r.date,
                                       description: r.description || r.itemName,
                                       credit: r.credit,
@@ -1787,6 +1790,15 @@ export const Suppliers: React.FC = () => {
                   <span>إجمالي الفاتورة:</span>
                   <span className="text-base font-black font-mono text-orange-700">{viewPurchase.total.toLocaleString()} ج.م</span>
                 </div>
+                {(() => {
+                  const vp = withLinkedSupplierPaid(viewPurchase as any, selectedSupplier) as any;
+                  return Number(vp.paid || 0) > 0 ? (
+                    <div className="flex justify-between items-center text-xs font-bold text-emerald-700 border-t border-orange-200/60 pt-1.5">
+                      <span>دفعة مسددة:</span>
+                      <span className="font-mono">{Number(vp.paid).toLocaleString()} ج.م</span>
+                    </div>
+                  ) : null;
+                })()}
                 {viewPurchase.previousBalance !== undefined && (
                   <>
                     <div className="flex justify-between items-center text-[11px] text-gray-600 border-t border-orange-200/60 pt-1.5">
@@ -1795,7 +1807,7 @@ export const Suppliers: React.FC = () => {
                     </div>
                     <div className="flex justify-between items-center text-xs font-bold text-gray-900 border-t border-orange-200 pt-1.5">
                       <span>الرصيد بعد الفاتورة:</span>
-                      <span className="font-mono font-bold">{viewPurchase.currentBalance?.toLocaleString()} ج.م</span>
+                      <span className="font-mono font-bold">{((viewPurchase.currentBalance ?? 0) + getLinkedSupplierPaidTotal(viewPurchase, selectedSupplier)).toLocaleString()} ج.م</span>
                     </div>
                   </>
                 )}
@@ -1804,13 +1816,13 @@ export const Suppliers: React.FC = () => {
 
             <div className="bg-gray-50 p-3.5 border-t border-gray-200 flex flex-wrap justify-end gap-2">
               <button 
-                onClick={() => printPurchaseInvoice(viewPurchase)} 
+                onClick={() => printPurchaseInvoice(withLinkedSupplierPaid(viewPurchase as any, selectedSupplier) as any)} 
                 className="bg-orange-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-700 flex items-center gap-1.5 shadow-sm"
               >
                 <Printer size={14} /> طباعة الفاتورة
               </button>
               <button 
-                onClick={() => sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo || undefined, selectedSupplier?.phone || undefined)} 
+                onClick={() => sharePurchaseInvoicePdfViaWhatsApp(withLinkedSupplierPaid(viewPurchase as any, selectedSupplier) as any, companyLogo || undefined, selectedSupplier?.phone || undefined)} 
                 className="bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 transition-colors shadow-2xs"
                 title="مشاركة الفاتورة عبر واتساب كملف PDF"
               >

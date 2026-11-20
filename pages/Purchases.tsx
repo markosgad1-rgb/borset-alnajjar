@@ -5,6 +5,7 @@ import { InvoiceItem, Purchase, BranchId, BRANCHES, PaymentMethod } from '../typ
 import { formatWithCommas, parseNumberFromCommas, handleNumericChangeWithCommas } from '../utils/formatters';
 import { useDialog } from '../utils/useDialog';
 import { sharePurchaseInvoicePdfViaWhatsApp } from '../utils/whatsapp';
+import { withLinkedSupplierPaid } from '../utils/linkedPayments';
 import { CartNumberInput } from '../components/CartNumberInput';
 import { canDo } from '../utils/permissions';
 
@@ -1124,7 +1125,7 @@ export const Purchases: React.FC = () => {
                       </button>
 
                       <button 
-                        onClick={() => printPurchaseInvoice(purchase)}
+                        onClick={() => printPurchaseInvoice(withLinkedSupplierPaid(purchase as any, suppliers.find(s => s.code === purchase.supplierCode)) as any)}
                         className="text-gray-600 bg-gray-50 hover:bg-gray-100 p-2 rounded transition-colors"
                         title="طباعة"
                       >
@@ -1136,7 +1137,7 @@ export const Purchases: React.FC = () => {
                           const supp = suppliers.find(s => s.code === purchase.supplierCode);
                           setSharingPdfId(purchase.id);
                           try {
-                            await sharePurchaseInvoicePdfViaWhatsApp(purchase, companyLogo || undefined, supp?.phone);
+                            await sharePurchaseInvoicePdfViaWhatsApp(withLinkedSupplierPaid(purchase as any, supp) as any, companyLogo || undefined, supp?.phone);
                           } finally {
                             setSharingPdfId(null);
                           }
@@ -1272,7 +1273,7 @@ export const Purchases: React.FC = () => {
                <div className="mt-4 flex justify-between items-center">
                  <div className="flex items-center gap-2">
                    <button 
-                      onClick={() => printPurchaseInvoice(viewPurchase)} 
+                      onClick={() => printPurchaseInvoice(withLinkedSupplierPaid(viewPurchase as any, suppliers.find(s => s.code === viewPurchase.supplierCode)) as any)} 
                       className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold transition-colors"
                    >
                       <Printer size={18}/> طباعة
@@ -1286,7 +1287,7 @@ export const Purchases: React.FC = () => {
                            safetyTimer = setTimeout(() => {
                              setSharingPdfId(null);
                            }, 3500);
-                           await sharePurchaseInvoicePdfViaWhatsApp(viewPurchase, companyLogo || undefined, supp?.phone ? supp.phone : undefined);
+                           await sharePurchaseInvoicePdfViaWhatsApp(withLinkedSupplierPaid(viewPurchase as any, supp) as any, companyLogo || undefined, supp?.phone ? supp.phone : undefined);
                          } catch (err: any) {
                            if (
                              err?.name !== 'AbortError' &&
@@ -1309,14 +1310,17 @@ export const Purchases: React.FC = () => {
                     </button>
                  </div>
                  <div className="flex items-center gap-2">
-                   {Boolean(viewPurchase.paid && viewPurchase.paid > 0) && (
-                     <div className="text-xs sm:text-sm font-bold bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg text-emerald-800">
-                       مسدد: {viewPurchase.paid?.toLocaleString()} ج.م
-                       {viewPurchase.remaining !== undefined && (
-                         <span className="mr-2 text-amber-700">| متبقي: {viewPurchase.remaining?.toLocaleString()} ج.م</span>
-                       )}
-                     </div>
-                   )}
+                   {(() => {
+                     const vp: any = withLinkedSupplierPaid(viewPurchase as any, suppliers.find(s => s.code === viewPurchase.supplierCode));
+                     return Boolean(vp.paid && vp.paid > 0) ? (
+                       <div className="text-xs sm:text-sm font-bold bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg text-emerald-800">
+                         مسدد: {Number(vp.paid).toLocaleString()} ج.م
+                         {vp.remaining !== undefined && (
+                           <span className="mr-2 text-amber-700">| متبقي: {Number(vp.remaining).toLocaleString()} ج.م</span>
+                         )}
+                       </div>
+                     ) : null;
+                   })()}
                    <div className="text-xl font-bold bg-gray-100 px-4 py-2 rounded text-brand-800">
                      الإجمالي: {viewPurchase.total.toLocaleString()} ج.م
                    </div>

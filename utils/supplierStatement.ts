@@ -450,7 +450,8 @@ export function getSupplierStatementTransactions(
                           m.description.includes('مرتجع') ||
                           m.description.includes('فرق سعر') ||
                           m.description.includes('مصاريف نقل');
-      const refCol = pId || (isManualAdj ? 'تسوية' : '-');
+      const linkedPurchaseId = String((m as any).linkedPurchaseId || '').trim();
+      const refCol = linkedPurchaseId || pId || (isManualAdj ? 'تسوية' : '-');
 
       const displayName = formatSupplierMovementDesc(m.description);
       const isPay = m.description.includes('دفع') || m.description.includes('سداد') || m.description.includes('صرف');
@@ -470,9 +471,10 @@ export function getSupplierStatementTransactions(
         runningBalance: running,
         status: running < 0 ? 'له (علينا)' : running > 0 ? 'لنا (عليه)' : 'متزن',
         isInvoiceItem: false,
-        purchaseId: pId || undefined,
-        invoiceId: pId || undefined,
-        invoiceNo: pId || undefined,
+        purchaseId: linkedPurchaseId ? undefined : (pId || undefined),
+        invoiceId: linkedPurchaseId ? undefined : (pId || undefined),
+        invoiceNo: linkedPurchaseId ? undefined : (pId || undefined),
+        ...(linkedPurchaseId ? { linkedPayment: true, linkedPurchaseId, linkedPaymentId: (m as any).paymentId, linkedHistoryId: (m as any).id } : {}),
         type: isPay ? 'payment' : 'adjustment',
         description: m.description,
         amount: m.amount,

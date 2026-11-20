@@ -133,6 +133,10 @@ export interface SupplierStatementRow {
   invoiceId?: string;
   invoiceNo?: string;
   paymentId?: string;
+  linkedPayment?: boolean;
+  linkedPurchaseId?: string;
+  linkedPaymentId?: string;
+  linkedHistoryId?: string;
   type?: string;
   isOpeningBalance?: boolean;
   description?: string;
@@ -180,6 +184,7 @@ export interface CustomerHistory {
   invoiceNo?: string;
   purchaseId?: string;
   paymentId?: string;
+  linkedPurchaseId?: string;
   type?: string;
   rawDescription?: string;
   historyIndex?: number;

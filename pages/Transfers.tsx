@@ -31,8 +31,20 @@ export const Transfers: React.FC = () => {
     type: 'IN' as 'IN' | 'OUT',
     date: new Date().toISOString().split('T')[0],
     notes: '',
-    paymentMethod: 'CASH' as PaymentMethod
+    paymentMethod: 'CASH' as PaymentMethod,
+    invoiceId: ''
   });
+
+  // آخر 3 فواتير مشتريات للمورد المختار (للربط الاختياري بدفعة المورد)
+  const supplierRecentPurchases = useMemo(() => {
+    if (entityType !== 'SUPPLIER' || formData.type !== 'OUT' || !formData.code) return [] as any[];
+    const code = formData.code.trim().toLowerCase();
+    return (purchases || [])
+      .filter((p: any) => !p.isDeleted && !p.archivedAt && (p.supplierCode || '').trim().toLowerCase() === code)
+      .sort((a: any, b: any) => `${b.date || ''} ${b.time || ''}`.localeCompare(`${a.date || ''} ${a.time || ''}`))
+      .slice(0, 3);
+  }, [purchases, entityType, formData.type, formData.code]);
+  const selectedPurchaseId = supplierRecentPurchases.some((p: any) => p.id === formData.invoiceId) ? formData.invoiceId : '';
 
   const [entitySearchText, setEntitySearchText] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -310,7 +322,8 @@ export const Transfers: React.FC = () => {
         type: formData.type,
         date: formData.date,
         notes: formData.notes,
-        paymentMethod: formData.paymentMethod
+        paymentMethod: formData.paymentMethod,
+        ...(selectedPurchaseId ? { invoiceId: selectedPurchaseId } : {})
       });
 
       // Update current displayed balance
@@ -325,7 +338,8 @@ export const Transfers: React.FC = () => {
       setFormData(prev => ({
         ...prev,
         amount: '',
-        notes: ''
+        notes: '',
+        invoiceId: ''
       }));
       notify('تم حفظ عملية التحويل وتحديث الخزنة والحساب بنجاح.');
     } catch (err: any) {
@@ -893,6 +907,24 @@ export const Transfers: React.FC = () => {
                   onChange={e => setFormData({...formData, date: e.target.value})}
                 />
               </div>
+
+              {entityType === 'SUPPLIER' && formData.type === 'OUT' && (
+                <div className="md:col-span-2 space-y-2">
+                  <label className="block text-sm font-bold text-gray-700">رقم فاتورة المشتريات (مرجع)</label>
+                  <select
+                    className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+                    value={selectedPurchaseId}
+                    disabled={!formData.code}
+                    onChange={e => setFormData({...formData, invoiceId: e.target.value})}
+                  >
+                    <option value="">{formData.code ? 'بدون فاتورة (دفعة عامة)' : 'اختار المورد الأول'}</option>
+                    {supplierRecentPurchases.map((p: any) => (
+                      <option key={p.id} value={p.id}>#{p.id} — {p.date} — {Number(p.total || 0).toLocaleString()} ج.م</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500">لو اخترت فاتورة، الدفعة بتظهر فيها وبرقمها في كشف المورد. لو سيبتها فاضية بتنزل دفعة عادية.</p>
+                </div>
+              )}
 
               <div className="md:col-span-2 space-y-2">
                 <label className="block text-sm font-bold text-gray-700">ملاحظات (بيان)</label>

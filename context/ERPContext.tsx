@@ -113,6 +113,7 @@ interface ERPContextType {
     idOverride?: string;
     groupId?: string;
     descOverride?: string;
+    invoiceId?: string;
   }) => Promise<void>;
   addCustomerToSupplierTransfer: (data: { customerCode: string; supplierCode: string; amount: number; date: string; notes?: string; paymentMethod: PaymentMethod }) => Promise<{ success: boolean; message?: string }>;
   deleteTransfer: (id: string) => Promise<{ success: boolean; message?: string }>;
@@ -3879,8 +3880,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
-  const addTransfer = async (data: { branchId?: BranchId; entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod; idOverride?: string; groupId?: string; descOverride?: string }) => {
+  const addTransfer = async (data: { branchId?: BranchId; entityType: 'CUSTOMER' | 'SUPPLIER' | 'EMPLOYEE'; entityCode: string; amount: number; type: 'IN' | 'OUT'; date: string; notes?: string; paymentMethod: PaymentMethod; idOverride?: string; groupId?: string; descOverride?: string; invoiceId?: string }) => {
       const { entityType, entityCode, amount, type, date, notes, paymentMethod, groupId, descOverride } = data;
+      const linkedPurchaseId = entityType === 'SUPPLIER' && type === 'OUT' && data.invoiceId ? String(data.invoiceId).trim().replace(/^#/, '') : '';
       const tId = data.idOverride || `TR${Date.now()}`;
       if (!data.groupId) {
         const ent: any = entityType === 'CUSTOMER' ? customers.find(x => x.code === entityCode) : entityType === 'SUPPLIER' ? suppliers.find(x => x.code === entityCode) : employees.find(x => x.code === entityCode);
@@ -3891,6 +3893,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           `الاتجاه: ${type === 'IN' ? 'داخل للخزنة' : 'خارج من الخزنة'}`,
           `المبلغ: ${opMoney(amount)}`,
           `حساب الخزنة: ${opPm(paymentMethod)}`,
+          ...(linkedPurchaseId ? [`مرتبط بفاتورة المشتريات: ${linkedPurchaseId}`] : []),
           ...(entityType === 'CUSTOMER' && ent ? [`رصيد العميل: ${opMoney(ent.balance)} ← ${opMoney((ent.balance || 0) + (type === 'IN' ? amount : -amount))}`] : []),
           `التاريخ: ${date}`,
           ...(notes ? [`ملاحظات: ${notes}`] : [])
@@ -3958,6 +3961,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 date: entryDate, 
                 description: descOverride || supplierHistDesc, 
                 amount: change,
+                ...(linkedPurchaseId ? { linkedPurchaseId } : {}),
                 ...(groupId ? { groupId } : {})
               }];
               await updateSupplier(entityCode, { balance: newBalance, history: newHistory });
@@ -4014,6 +4018,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           entityCode,
           entityName,
           transferType: type,
+          ...(linkedPurchaseId ? { invoiceNumber: linkedPurchaseId } : {}),
           ...(groupId ? { groupId } : {})
       };
       if (descOverride) transaction.description = descOverride;
@@ -4983,6 +4988,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               <div style="flex: 1;"></div>
               <div class="totals-box">
                 <div class="total-row final"><span>الإجمالي:</span><strong>${purchase.total.toLocaleString()}</strong></div>
+                ${((purchase as any).linkedPaid || 0) > 0 ? `<div class="total-row" style="color: #047857;"><span>دفعة مسددة:</span><strong>${Number(purchase.paid || 0).toLocaleString()}</strong></div>` : ''}
                 ${purchase.previousBalance !== undefined ? `
                   <div class="total-row" style="color: #333;"><span>رصيد سابق:</span><span>${purchase.previousBalance.toLocaleString()}</span></div>
                   <div class="total-row main"><span>الرصيد الحالي:</span><span>${purchase.currentBalance?.toLocaleString()}</span></div>
@@ -5681,7 +5687,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
   const sPurchase = dg(a => `pur|${a.id}`, 120000, addPurchase);
   const sCollection = dg(a => `col|${a.customerCode}|${a.amount}|${a.date}|${a.paymentMethod}|${a.invoiceId || ''}|${a.notes || ''}`, 8000, addCollection);
-  const sTransfer = dg(a => `tr|${a.entityType}|${a.entityCode}|${a.type}|${a.amount}|${a.date}|${a.paymentMethod}|${a.notes || ''}|${a.groupId || ''}`, 8000, addTransfer);
+  const sTransfer = dg(a => `tr|${a.entityType}|${a.entityCode}|${a.type}|${a.amount}|${a.date}|${a.paymentMethod}|${a.notes || ''}|${a.groupId || ''}|${a.invoiceId || ''}`, 8000, addTransfer);
   const sC2S = dg(a => `c2s|${a.customerCode}|${a.supplierCode}|${a.amount}|${a.date}|${a.paymentMethod}`, 8000, addCustomerToSupplierTransfer, { success: true });
   const sExpense = dg(a => `exp|${a.name}|${a.amount}|${a.date}|${a.branchId || ''}`, 8000, addExpense);
   const sOpening = dg(a => `open|${a.branchId || ''}|${a.amount}|${a.date}|${a.paymentMethod}`, 8000, gAddOpeningBalance);
