@@ -354,39 +354,11 @@ export const Suppliers: React.FC = () => {
   const totalItemizedCredit = statementResult.totalCredit;
   const totalItemizedDebit = statementResult.totalDebit;
   // دالة calculateSupplierBalance تعمل كـ useMemo وتعتمد على مصفوفة الحركات المفلترة للمورد الحالي فقط
+  // الرصيد الحالي الفعلي = نفس حساب الكشف الكامل (من غير فلتر تواريخ) عشان الرقم يطابق آخر الكشف دايماً
   const calculateSupplierBalance = useMemo((): number => {
     if (!selectedSupplier) return 0;
-
-    const isS005 = (selectedSupplier.code || '').trim().toUpperCase() === 'S005' || 
-                   (selectedSupplier.name && selectedSupplier.name.includes('أحمد تعيلب'));
-
-    // قراءة الرصيد الافتتاحي فقط من openingBalance بدون استخدام balance كبديل لمنع التكرار التلقائي
-    const rawOpening = !isS005 && typeof selectedSupplier.openingBalance === 'number' && !isNaN(selectedSupplier.openingBalance)
-      ? selectedSupplier.openingBalance
-      : 0;
-    const openingBal = Math.abs(rawOpening) > 100000000 ? 0 : (parseFloat(String(rawOpening)) || 0);
-
-    // تصفية الحركات: استبعاد سطر الرصيد الافتتاحي لأن openingBal هو القيمة الابتدائية للـ reduce
-    // واستبعاد أي حركات تالفة تتجاوز 100M
-    const filteredMovements = itemizedRows.filter(r => {
-      if (r.isOpeningBalance) return false;
-      const cred = Math.abs(parseFloat(String(r.credit || 0)) || 0);
-      const deb = Math.abs(parseFloat(String(r.debit || 0)) || 0);
-      if (cred > 100000000 || deb > 100000000) return false;
-      return true;
-    });
-
-    // استخدام reduce لحساب الرصيد التراكمي مع تحويل كافة قيم الدائن والمدين إلى float عبر parseFloat
-    const totalBalance = filteredMovements.reduce((acc: number, row) => {
-      const credit = parseFloat(String(row.credit || 0)) || 0;
-      const debit = parseFloat(String(row.debit || 0)) || 0;
-      // المعادلة المحاسبية المعتمدة: الرصيد = الرصيد الافتتاحي + السدادات (مدين/لنا) - التوريدات (دائن/علينا)
-      return acc + debit - credit;
-    }, openingBal);
-
-    // التأكد التام من إعادة قيمة عددية (number) وليس نصاً
-    return Math.round(Number(totalBalance) * 100) / 100;
-  }, [selectedSupplier, itemizedRows]);
+    return getSupplierBalance(selectedSupplier, purchases);
+  }, [selectedSupplier, purchases]);
 
   const statementFinalBalance = calculateSupplierBalance;
   const selectedSupplierBalance = calculateSupplierBalance;

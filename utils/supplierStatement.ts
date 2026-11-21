@@ -133,6 +133,7 @@ export function getSupplierStatementTransactions(
     description: string;
     amount: number;
     isOpening?: boolean;
+    sortDate?: string;
     historyIndex?: number;
     id?: string;
   };
@@ -207,11 +208,31 @@ export function getSupplierStatementTransactions(
     if (synthetic.length) allMovements.unshift(...synthetic);
   }
 
-  // Make sure opening balance movement is strictly at index 0 (قمة مصفوفة العمليات قبل الفواتير)
+  // تاريخ الترتيب الفعلي: تاريخ الفاتورة نفسها (اللي بيتعرض في السطر) مش تاريخ تسجيل الحركة،
+  // وبنقص أي وقت من التاريخ عشان المقارنة تبقى سليمة
+  const dayOf = (d: any): string => {
+    const t = String(d || '').trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(t) ? t.slice(0, 10) : t;
+  };
+  const purchaseById = new Map<string, Purchase>();
+  (purchases || []).forEach(pu => { if (pu) purchaseById.set(String(pu.id), pu); });
+  allMovements.forEach(m => {
+    let d = dayOf(m.date);
+    if (!m.isOpening) {
+      const desc = m.description || '';
+      const isPurch = (desc.includes('فاتورة مشتريات') || desc.includes('استلام بضاعة')) && !desc.includes('سداد') && !desc.includes('دفعة');
+      const mm = desc.match(/#([A-Za-z0-9-]+)/);
+      const pu = isPurch && mm ? purchaseById.get(mm[1].trim()) : undefined;
+      if (pu && pu.date) d = dayOf(pu.date);
+    }
+    m.sortDate = d;
+  });
+
+  // الرصيد الافتتاحي دايماً أول سطر، وباقي الحركات بالتاريخ الفعلي (ثابت الترتيب لو نفس اليوم)
   allMovements.sort((a, b) => {
     if (a.isOpening && !b.isOpening) return -1;
     if (!a.isOpening && b.isOpening) return 1;
-    return (a.date || '').localeCompare(b.date || '');
+    return (a.sortDate || '').localeCompare(b.sortDate || '');
   });
 
   // 3. Compute prior balance if filtering by startDate
@@ -220,7 +241,7 @@ export function getSupplierStatementTransactions(
 
   if (startDate) {
     for (const m of allMovements) {
-      if (m.date < startDate) {
+      if ((m.sortDate || m.date) < startDate) {
         if (m.isOpening) {
           priorBalance += parseFloat(String(m.amount || 0)) || 0;
         } else {
@@ -287,8 +308,8 @@ export function getSupplierStatementTransactions(
   }
 
   for (const m of allMovements) {
-    if (startDate && m.date < startDate) continue;
-    if (endDate && m.date > endDate) continue;
+    if (startDate && (m.sortDate || m.date) < startDate) continue;
+    if (endDate && (m.sortDate || m.date) > endDate) continue;
 
     if (m.isOpening) {
       // إذا كان سالباً (مديونية علينا للمورد): يدرج المبلغ بالموجب في خانة دائن (علينا / توريدات)، وتبدأ خانة الرصيد بالسالب وتكون الحالة "له (علينا)".
@@ -298,7 +319,9 @@ export function getSupplierStatementTransactions(
       const credit = isDebtToSupplier ? Math.abs(parsedAmount) : 0;
       const debit = !isDebtToSupplier ? Math.abs(parsedAmount) : 0;
 
-      running = parsedAmount; // starts exactly at opening balance
+      // يتضاف على الرصيد الجاري (مش بيصفّره): بيحافظ على الرصيد السابق لو الكشف متفلتر بفترة،
+      // وبيحسب أي رصيد افتتاحي تاني اتسجل كحركة بدل ما يمسح اللي قبله
+      running = Math.round((running + parsedAmount) * 100) / 100;
 
       const row: SupplierStatementRow = {
         id: `supp_op_${supplier.code}`,
