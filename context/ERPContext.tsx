@@ -4630,12 +4630,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       margin: 0; 
       font-size: 38px; 
       font-weight: 900; 
-      line-height: 1.1; 
+      line-height: 1.3; 
       color: #000; 
       letter-spacing: -0.5px;
     }
     .company-info p { 
-      margin: 3px 0 0 0; 
+      margin: 10px 0 0 0; 
       color: #1f2937; 
       font-size: 20px; 
       font-weight: 800; 
@@ -5098,8 +5098,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; margin: 0; padding: 10px; color: #000; font-size: 13px; line-height: 1.25; }
           .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 8px; margin-bottom: 8px; }
           .company-info { text-align: right; }
-          .company-info h1 { margin: 0; font-size: 26px; font-weight: 900; line-height: 1.1; }
-          .company-info p { margin: 2px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
+          .company-info h1 { margin: 0; font-size: 26px; font-weight: 900; line-height: 1.3; }
+          .company-info p { margin: 8px 0 0 0; font-size: 15px; font-weight: 800; color: #1f2937; }
           .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
           .logo-box img { max-height: 70px; max-width: 200px; object-fit: contain; }
           .statement-title { text-align: left; }
@@ -5276,8 +5276,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; direction: rtl; margin: 0; padding: 10px; color: #000; font-size: 12px; line-height: 1.25; }
           .header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-bottom: 2.5px solid #000; padding-bottom: 8px; margin-bottom: 8px; }
           .company-info { text-align: right; }
-          .company-info h1 { margin: 0; font-size: 24px; font-weight: 900; line-height: 1.1; }
-          .company-info p { margin: 2px 0 0 0; font-size: 14px; font-weight: 800; color: #1f2937; }
+          .company-info h1 { margin: 0; font-size: 24px; font-weight: 900; line-height: 1.3; }
+          .company-info p { margin: 8px 0 0 0; font-size: 14px; font-weight: 800; color: #1f2937; }
           .logo-box { display: flex; justify-content: center; align-items: center; text-align: center; }
           .logo-box img { max-height: 65px; max-width: 180px; object-fit: contain; }
           .statement-title { text-align: left; }

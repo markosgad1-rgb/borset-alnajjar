@@ -45,11 +45,11 @@ export function getInvoicePrintStyle(): string {
       margin: 0; 
       font-size: 26px; 
       font-weight: 900; 
-      line-height: 1.1; 
+      line-height: 1.3; 
       color: #000;
     }
     .company-info p { 
-      margin: 3px 0 0 0; 
+      margin: 10px 0 0 0; 
       font-size: 15px; 
       font-weight: 800; 
       color: #1f2937; 
