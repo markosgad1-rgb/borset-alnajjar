@@ -13,7 +13,7 @@ import { calculateSupplierBalance } from '../utils/supplierStatement';
 import { CustomerToSupplierTransfer } from '../components/CustomerToSupplierTransfer';
 
 export const Transfers: React.FC = () => {
-  const { customers, suppliers, employees, treasury, rawPurchases: purchases, addTransfer, deleteTransfer, customerBalanceOf, userScope } = useERP();
+  const { customers, suppliers, employees, treasury, rawPurchases: purchases, addTransfer, deleteTransfer, markTransfersReviewed, customerBalanceOf, userScope } = useERP();
   // رصيد المورد بيتحسب من كشف حسابه (نفس المصدر في صفحة الموردين)، مش من الرقم المخزّن
   const balanceOf = (e: any): number => (entityType === 'SUPPLIER' ? calculateSupplierBalance(e as Supplier, purchases) : entityType === 'CUSTOMER' ? customerBalanceOf(e) : e.balance);
   const __me = useERP().currentUser;
@@ -240,8 +240,29 @@ export const Transfers: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showC2S, setShowC2S] = useState(false);
 
+  // مراجعة واعتماد التحويلات (نفس نظام فواتير البيع والمشتريات)
+  const canReviewTransfers = canDo(__me, 'transfer.review');
+  const [reviewFilter, setReviewFilter] = useState<'ALL' | 'PENDING' | 'REVIEWED'>(() => {
+    try {
+      const v = sessionStorage.getItem('erp_transfer_review_filter');
+      if (v) sessionStorage.removeItem('erp_transfer_review_filter');
+      return v === 'PENDING' ? 'PENDING' : 'ALL';
+    } catch { return 'ALL'; }
+  });
+  const [reviewingIds, setReviewingIds] = useState<string[]>([]);
+  useEffect(() => {
+    const h = () => { try { sessionStorage.removeItem('erp_transfer_review_filter'); } catch { /* ignore */ } setReviewFilter('PENDING'); };
+    window.addEventListener('erp-transfer-review-filter', h);
+    return () => window.removeEventListener('erp-transfer-review-filter', h);
+  }, []);
+  const handleReviewTransfers = async (ids: string[]) => {
+    if (!ids.length) return;
+    setReviewingIds(prev => [...prev, ...ids]);
+    try { await markTransfersReviewed(ids); } finally { setReviewingIds(prev => prev.filter(x => !ids.includes(x))); }
+  };
+
   // Filter and sort transfers strictly descending: newest first
-  const recentTransfers = useMemo(() => {
+  const allTransfers = useMemo(() => {
     return treasury
       .filter(t => 
         t.source === 'TRANSFER' || 
@@ -261,6 +282,14 @@ export const Transfers: React.FC = () => {
         return (b.date || '').localeCompare(a.date || '');
       });
   }, [treasury]);
+
+  const pendingTransferIds = useMemo(() => allTransfers.filter(t => t.reviewStatus === 'PENDING_REVIEW'), [allTransfers]);
+  const pendingTransferTotal = useMemo(() => new Set(pendingTransferIds.map(t => t.groupId || t.id)).size, [pendingTransferIds]);
+  const recentTransfers = useMemo(() => allTransfers.filter(t => {
+    if (reviewFilter === 'PENDING') return t.reviewStatus === 'PENDING_REVIEW';
+    if (reviewFilter === 'REVIEWED') return t.reviewStatus !== 'PENDING_REVIEW';
+    return true;
+  }), [allTransfers, reviewFilter]);
 
   const handleDeleteTransfer = async (t: any) => {
     const isIncoming = t.transferType === 'IN' || t.credit > 0;
@@ -968,9 +997,30 @@ export const Transfers: React.FC = () => {
           </span>
         </div>
         
+        <div className="p-3 bg-rose-50/60 border-y border-rose-200/70 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-rose-900 ml-1">مراجعة التحويلات:</span>
+          {([['ALL', 'الكل'], ['PENDING', `لم تُراجع (${pendingTransferTotal})`], ['REVIEWED', 'تمت مراجعتها']] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setReviewFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${reviewFilter === k ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
+          {reviewFilter === 'PENDING' && <span className="text-[11px] text-rose-700">تظهر كلها بدون حد</span>}
+          {canReviewTransfers && reviewFilter === 'PENDING' && recentTransfers.length > 0 && (
+            <button
+              type="button"
+              disabled={reviewingIds.length > 0}
+              onClick={() => handleReviewTransfers(recentTransfers.map(t => t.id))}
+              className="mr-auto bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+            >
+              <Check size={14} /> اعتماد كل المعروض ({new Set(recentTransfers.map(t => t.groupId || t.id)).size})
+            </button>
+          )}
+        </div>
+
         {recentTransfers.length === 0 ? (
           <div className="p-8 text-center text-gray-400">
-            <p>لا توجد عمليات تحويل مسجلة بعد</p>
+            <p>{reviewFilter === 'PENDING' ? 'لا توجد تحويلات بانتظار المراجعة' : 'لا توجد عمليات تحويل مسجلة بعد'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -983,16 +1033,16 @@ export const Transfers: React.FC = () => {
                   <th className="p-3">الحساب / الخزنة</th>
                   <th className="p-3">الطرف / البيان</th>
                   <th className="p-3 text-center">قيمة التحويل</th>
-                  <th className="p-3 w-16 text-center">إجراءات</th>
+                  <th className="p-3 w-40 text-center">إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {recentTransfers.slice(0, 30).map((t, idx) => {
+                {(reviewFilter === 'PENDING' ? recentTransfers : recentTransfers.slice(0, 30)).map((t, idx) => {
                   const isIncoming = t.transferType === 'IN' || t.credit > 0 || (t.type === 'INCOME' && (!t.debit || t.debit === 0));
                   const amount = t.amount || (t.credit > 0 ? t.credit : t.debit);
 
                   return (
-                    <tr key={t.id} className="hover:bg-purple-50/40 transition-colors">
+                    <tr key={t.id} className={`hover:bg-purple-50/40 transition-colors ${t.reviewStatus === 'PENDING_REVIEW' ? 'bg-rose-50/60' : ''}`}>
                       <td className="p-3 text-center text-gray-400 font-mono text-xs">{idx + 1}</td>
                       <td className="p-3 text-gray-600 whitespace-nowrap">
                         <div className="font-mono font-bold text-xs">{t.date?.split(' ')[0] || t.date}</div>
@@ -1034,6 +1084,12 @@ export const Transfers: React.FC = () => {
                             </span>
                           )}
                           <span className="text-xs text-gray-600">{t.description}</span>
+                          {t.reviewStatus === 'PENDING_REVIEW' && (
+                            <span className="mr-1 inline-block px-1.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold" title="بانتظار المراجعة">جديد - لم يُراجع</span>
+                          )}
+                          {t.reviewStatus === 'REVIEWED' && t.reviewedBy && (
+                            <span className="block text-[10px] font-normal text-emerald-700">راجعه: {t.reviewedBy}</span>
+                          )}
                         </div>
                       </td>
                       <td className="p-3 text-center font-mono font-bold text-sm whitespace-nowrap">
@@ -1042,6 +1098,17 @@ export const Transfers: React.FC = () => {
                         </span>
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
+                        {canReviewTransfers && t.reviewStatus === 'PENDING_REVIEW' && (
+                          <button
+                            type="button"
+                            disabled={reviewingIds.includes(t.id)}
+                            onClick={(e) => { e.stopPropagation(); handleReviewTransfers([t.id]); }}
+                            className="ml-1 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1 align-middle"
+                            title="تمت المراجعة - اعتماد التحويل"
+                          >
+                            <Check size={14} /> تمت المراجعة
+                          </button>
+                        )}
                         {canDo(__me, 'transfer.delete') && (<button
                           type="button"
                           onClick={(e) => {

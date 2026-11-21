@@ -286,6 +286,10 @@ export interface TreasuryTransaction {
   entityName?: string;
   transferType?: 'IN' | 'OUT';
   groupId?: string;
+  // مراجعة التحويلات: التحويل الجديد PENDING_REVIEW لحين اعتماده. القديم بدون الحقل يُعتبر مراجَع.
+  reviewStatus?: 'PENDING_REVIEW' | 'REVIEWED';
+  reviewedBy?: string;
+  reviewedAt?: string;
 }
 
 export interface UserPermissions {

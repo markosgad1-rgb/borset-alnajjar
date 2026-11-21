@@ -19,7 +19,7 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
-  const { currentUser, logout, isOnline, permissionError, purchases, invoices } = useERP();
+  const { currentUser, logout, isOnline, permissionError, purchases, invoices, treasury } = useERP();
   const netUp = useNetworkStatus();
   const pendingWrites = usePendingWrites();
   const persistenceOk = usePersistenceOk();
@@ -52,6 +52,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
   const canReviewInvoices = canDo(currentUser, 'invoice.review');
   const canReviewPurchases = canDo(currentUser, 'purchase.review');
   const pendingPurchaseReviewCount = canReviewPurchases ? purchases.filter(p => !p.isDeleted && p.reviewStatus === 'PENDING_REVIEW').length : 0;
+  const canReviewTransfers = canDo(currentUser, 'transfer.review');
+  // التحويل المزدوج (عميل ← مورد) بيتعدّ مرة واحدة
+  const pendingTransferReviewCount = canReviewTransfers
+    ? new Set(treasury.filter(t => t.source === 'TRANSFER' && t.reviewStatus === 'PENDING_REVIEW').map(t => t.groupId || t.id)).size
+    : 0;
   const pendingReviewCount = canReviewInvoices ? invoices.filter(i => !i.isDeleted && i.reviewStatus === 'PENDING_REVIEW').length : 0;
 
   // Back Button integration for mobile sidebar menu & backup modal
@@ -226,6 +231,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
                   {pendingReviewCount}
                 </span>
               )}
+              {item.id === 'transfers' && pendingTransferReviewCount > 0 && (
+                <span className="mr-auto bg-rose-500 text-white text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs" title="تحويلات جديدة لم تُراجع">
+                  {pendingTransferReviewCount}
+                </span>
+              )}
               {item.id === 'purchases' && pendingPurchaseReviewCount > 0 && (
                 <span className="mr-auto bg-rose-500 text-white text-[10px] lg:text-xs px-1.5 py-0.5 lg:px-2 rounded-full font-black animate-pulse shadow-xs" title="فواتير مشتريات جديدة لم تُراجع">
                   {pendingPurchaseReviewCount}
@@ -340,6 +350,33 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
             >
               <FileText size={16} />
               <span>مراجعة الفواتير الآن</span>
+            </button>
+          </div>
+        )}
+
+        {/* Transfers awaiting review banner */}
+        {pendingTransferReviewCount > 0 && activePage === 'transfers' && (
+          <div className="mb-4 bg-rose-500/10 border-2 border-rose-500/40 rounded-xl p-3 md:p-4 text-rose-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs animate-fade-in print:hidden">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-rose-500 text-white rounded-xl shadow-xs shrink-0">
+                <FileText size={22} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm md:text-base text-rose-900 flex items-center gap-2">
+                  <span>تنبيه: تحويلات جديدة بانتظار المراجعة</span>
+                  <span className="bg-rose-200 text-rose-950 text-xs px-2 py-0.5 rounded-full font-black">{pendingTransferReviewCount}</span>
+                </h4>
+                <p className="text-xs md:text-sm text-rose-800">
+                  يوجد ({pendingTransferReviewCount}) تحويلات تم تسجيلها ولم تتم مراجعتها واعتمادها بعد.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { try { sessionStorage.setItem('erp_transfer_review_filter', 'PENDING'); } catch { /* ignore */ } window.dispatchEvent(new Event('erp-transfer-review-filter')); }}
+              className="shrink-0 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-bold shadow-xs transition-colors flex items-center gap-1.5"
+            >
+              <FileText size={16} />
+              <span>مراجعة التحويلات الآن</span>
             </button>
           </div>
         )}

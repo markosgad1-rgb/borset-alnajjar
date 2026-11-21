@@ -92,6 +92,7 @@ interface ERPContextType {
   updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; 
   markInvoicesReviewed: (ids: string[]) => Promise<void>;
   markPurchasesReviewed: (ids: string[]) => Promise<void>;
+  markTransfersReviewed: (ids: string[]) => Promise<void>;
   deleteInvoice: (id: string) => Promise<void>;
   clearAllInvoices: () => Promise<boolean>; 
   addCollection: (data: {
@@ -3270,6 +3271,23 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // اعتماد تحويلات بعد مراجعتها (التحويل المزدوج عميل ← مورد بيتعتمد بالجزئين مع بعض)
+  const markTransfersReviewed = async (ids: string[]) => {
+    const reviewedBy = String(currentUser?.fullName || currentUser?.username || '');
+    const reviewedAt = new Date().toISOString();
+    const base = new Set(ids);
+    const groups = new Set(treasury.filter(t => base.has(t.id) && t.groupId).map(t => t.groupId));
+    const all = treasury.filter(t => base.has(t.id) || (t.groupId && groups.has(t.groupId))).map(t => t.id);
+    const set = new Set(all);
+    logOp('update', `اعتماد ومراجعة ${all.length} حركة تحويل`, treasury.filter(t => set.has(t.id)).slice(0, 15).map(t => `${t.date} - ${t.description} - ${opMoney(t.amount || t.debit || t.credit)}`), all.join(','));
+    setTreasury(prev => prev.map(t => set.has(t.id) ? { ...t, reviewStatus: 'REVIEWED' as const, reviewedBy, reviewedAt } : t));
+    for (const id of all) {
+      try {
+        await updateDoc(doc(db, 'treasury', id), { reviewStatus: 'REVIEWED', reviewedBy, reviewedAt });
+      } catch (e) { console.error('transfer review mark failed', id, e); }
+    }
+  };
+
   const deleteInvoice = async (id: string) => {
     const cleanId = String(id || '').replace(/^#/, '').trim();
     if (!cleanId) return;
@@ -4029,7 +4047,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           entityName,
           transferType: type,
           ...(linkedPurchaseId ? { invoiceNumber: linkedPurchaseId } : {}),
-          ...(groupId ? { groupId } : {})
+          ...(groupId ? { groupId } : {}),
+          // التحويل الجديد بانتظار المراجعة إلا لو اللي سجّله عنده صلاحية المراجعة
+          reviewStatus: canDo(currentUser, 'transfer.review') ? 'REVIEWED' : 'PENDING_REVIEW'
       };
       if (descOverride) transaction.description = descOverride;
       
@@ -5625,6 +5645,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gDeleteInvoice = gate('invoice.delete', deleteInvoice);
   const gMarkReviewed = gate('invoice.review', markInvoicesReviewed);
   const gMarkPurchasesReviewed = gate('purchase.review', markPurchasesReviewed);
+  const gMarkTransfersReviewed = gate('transfer.review', markTransfersReviewed);
   const gClearAllInvoices = gate('invoice.clearAll', clearAllInvoices, false);
   const gDeleteTransfer = gate('transfer.delete', deleteTransfer, noPerm('transfer.delete'));
   const gAddCustomer = gate('customer.add', addCustomer);
@@ -5787,7 +5808,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
       transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: sCash,
       addPurchase: sPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice: sInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
-      markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection: sCollection, addTreasuryTransaction, addTransfer: sTransfer, addCustomerToSupplierTransfer: sC2S, deleteTransfer: gDeleteTransfer, addExpense: sExpense, addOpeningBalance: sOpening, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
+      markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, markTransfersReviewed: gMarkTransfersReviewed, clearAllInvoices: gClearAllInvoices, addCollection: sCollection, addTreasuryTransaction, addTransfer: sTransfer, addCustomerToSupplierTransfer: sC2S, deleteTransfer: gDeleteTransfer, addExpense: sExpense, addOpeningBalance: sOpening, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
       seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedgerX, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, archiveSupplierStatement: gArchiveSup, undoArchiveSupplierStatement: gUndoArchiveSup, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,

@@ -70,6 +70,7 @@ export const ACTION_GROUPS: ActionGroup[] = [
   { title: 'كشوف الحساب والخزنة والتحويلات', items: [
     ac('ledger.deleteMovement', 'حذف حركة من كشف حساب (عميل / مورد)', open),
     ac('ledger.clear', 'تصفير كشف حساب كامل', p => !!p.canDeleteLedgers),
+    ac('transfer.review', 'مراجعة واعتماد التحويلات الجديدة (والتنبيه بها)', () => false),
     ac('transfer.delete', 'حذف تحويل', open),
     ac('treasury.manage', 'تحويل نقدية بين الإدارات / رصيد افتتاحي', p => !!p.canManageTreasury),
     ac('treasury.clear', 'تصفير الخزنة', p => !!p.canDeleteLedgers),
