@@ -405,7 +405,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
         </div>
       </main>
 
-      <VoiceAssistant />
+      <VoiceAssistant onNavigate={onNavigate} />
 
       {/* Backup & Restore Modal */}
       <BackupModal 

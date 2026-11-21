@@ -3,7 +3,7 @@ import { Mic, X, Send, Volume2, VolumeX, Loader2 } from 'lucide-react';
 import { useERP } from '../context/ERPContext';
 import { canFeature, canViewPage } from '../utils/permissions';
 import {
-  detectIntent, parseInvoiceText, parseBalanceText, pickFromOptions, parseSingleNumber, numberToArabicSpeech, tokensOf, spanScore
+  detectIntent, normalizeAr, parseInvoiceText, parseBalanceText, pickFromOptions, parseSingleNumber, numberToArabicSpeech, tokensOf, spanScore
 } from '../utils/arabicVoice';
 
 type DraftItem = { options: { name: string; code: string }[]; code?: string; name?: string; quantity?: number; price?: number };
@@ -23,13 +23,30 @@ const SR: any = typeof window !== 'undefined' ? ((window as any).SpeechRecogniti
 const money = (n: number) => `${Math.round(n).toLocaleString('en-US')} ج.م`;
 const say = (n: number) => numberToArabicSpeech(n);
 
-export const VoiceAssistant: React.FC = () => {
-  const { currentUser, customers, suppliers, products, purchases, rawInvoices, addInvoice, customerBalanceOf, calculateSupplierBalance, userScope } = useERP() as any;
+const PAGES: { id: string; label: string; keys: string[] }[] = [
+  { id: 'sales-history', label: 'سجل الفواتير', keys: ['سجل'] },
+  { id: 'sales', label: 'فواتير البيع', keys: ['فواتير', 'فاتوره', 'مبيعات', 'بيع'] },
+  { id: 'purchases', label: 'المشتريات', keys: ['مشتريات', 'شراء'] },
+  { id: 'warehouse', label: 'المخزن', keys: ['مخزن', 'مخزون', 'اصناف'] },
+  { id: 'customers', label: 'العملاء', keys: ['عملا', 'عميل', 'عملاء'] },
+  { id: 'suppliers', label: 'الموردين', keys: ['مورد', 'موردين', 'تجار'] },
+  { id: 'employees', label: 'الموظفين', keys: ['موظف', 'موظفين'] },
+  { id: 'collections', label: 'التحصيل', keys: ['تحصيل', 'تحصيلات'] },
+  { id: 'transfers', label: 'التحويلات', keys: ['تحويلات', 'تحويل'] },
+  { id: 'expenses', label: 'المصروفات', keys: ['مصروفات', 'مصاريف'] },
+  { id: 'treasury', label: 'الخزنة', keys: ['خزنه', 'خزينه'] },
+  { id: 'reports', label: 'التقارير', keys: ['تقارير', 'تقرير'] },
+  { id: 'dashboard', label: 'الرئيسية', keys: ['رئيسيه', 'داشبورد', 'الرئيسيه'] },
+];
+const OPEN_VERBS = ['افتح', 'افتحلي', 'افتحي', 'روح', 'وديني', 'ودني', 'خدني', 'وريني', 'اعرض', 'اعرضلي', 'شغل', 'ادخل', 'ادخلي', 'روحلي', 'افتحلى'];
+
+export const VoiceAssistant: React.FC<{ onNavigate?: (page: any) => void }> = ({ onNavigate }) => {
+  const { currentUser, customers, suppliers, products, purchases, rawInvoices, invoices, addInvoice, customerBalanceOf, calculateSupplierBalance, userScope } = useERP() as any;
   const [open, setOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
   const [heard, setHeard] = useState('');
-  const [reply, setReply] = useState('اضغط على المايك وقول مثلاً: "رصيد عماد رزق" أو "اعمل فاتورة لمرقص ابيض كبير 100 بسعر 120".');
+  const [reply, setReply] = useState('اضغط على المايك وقول مثلاً: "رصيد عماد رزق" أو "اعمل فاتورة لمرقص ابيض كبير 100 بسعر 120" أو "افتح صفحة العملاء" أو "آخر فاتورة".');
   const [speakOn, setSpeakOn] = useState(true);
   const [typed, setTyped] = useState('');
   const [draftView, setDraftView] = useState<Draft | null>(null);
@@ -62,10 +79,14 @@ export const VoiceAssistant: React.FC = () => {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       const voices = window.speechSynthesis.getVoices();
-      const v = voices.find(x => x.lang === 'ar-EG') || voices.find(x => x.lang?.toLowerCase().startsWith('ar'));
+      const ar = voices.filter(x => x.lang?.toLowerCase().startsWith('ar'));
+      const maleRe = /hamed|naayf|majed|maged|shakir|tarik|salem|حامد|نايف|ماجد|شاكر|male/i;
+      const male = ar.find(x => maleRe.test(x.name));
+      const v = male || ar.find(x => x.lang === 'ar-EG') || ar[0];
       if (v) u.voice = v;
       u.lang = v?.lang || 'ar-EG';
       u.rate = 0.95;
+      u.pitch = male ? 0.9 : 0.5; // لو مفيش صوت راجل جاهز: نغلّظ الصوت
       u.onend = () => resolve();
       u.onerror = () => resolve();
       window.speechSynthesis.speak(u);
@@ -255,12 +276,59 @@ export const VoiceAssistant: React.FC = () => {
     return advance();
   };
 
+  const detectNav = (text: string) => {
+    const t = normalizeAr(text).split(' ').map(w => w.replace(/^ال/, ''));
+    if (!OPEN_VERBS.some(v => t.includes(normalizeAr(v)))) return null;
+    const rest = t.filter(w => !OPEN_VERBS.map(normalizeAr).includes(w));
+    // "سجل الفواتير" يتقدّم على "فواتير البيع"
+    if (rest.includes('سجل')) return PAGES[0];
+    return PAGES.find(pg => pg.id !== 'sales-history' && pg.keys.some(k => rest.includes(k.replace(/^ال/, '')))) || null;
+  };
+
+  const goPage = async (pg: { id: string; label: string }) => {
+    if (!canViewPage(currentUser, pg.id as any)) { await speak(`مش مسموحلك تفتح ${pg.label}.`); return; }
+    draft.current = null; pending.current = null; setDraftView(null); setChoices([]);
+    await speak(`تمام، فتحت ${pg.label}.`);
+    onNavigate?.(pg.id);
+    setOpen(false);
+  };
+
+  const isLastInvoice = (text: string) => {
+    const t = normalizeAr(text).split(' ');
+    return t.includes('اخر') && (t.includes('فاتوره') || t.includes('فاتورة')) && !t.includes('اعمل') && !t.includes('اعملي');
+  };
+
+  const lastInvoice = async (text: string) => {
+    if (!canViewPage(currentUser, 'sales') && !canViewPage(currentUser, 'sales-history')) { await speak('مش مسموحلك تشوف الفواتير.'); return; }
+    const r = parseBalanceText(text, canCust ? custList : [], []);
+    const cust = r.customers[0];
+    let list = ((invoices || []) as any[]).filter(i => !i.isDeleted && (!cust || i.customerCode === cust.code));
+    if (!list.length) { setBalanceCard(null); await speak(cust ? `مفيش فواتير لـ ${cust.name}.` : 'مفيش فواتير.'); return; }
+    const key = (i: any) => `${i.date || ''} ${i.time || ''}`;
+    const num = (i: any) => parseInt(String(i.id).replace(/\D/g, ''), 10) || 0;
+    list = [...list].sort((a, b) => key(b).localeCompare(key(a)) || num(b) - num(a));
+    const inv = list[0];
+    const total = Number(inv.total) || 0; const paid = Number(inv.paidAmount) || 0; const rem = Number(inv.remainingAmount) || Math.max(0, total - paid);
+    setBalanceCard({ title: `آخر فاتورة ${inv.id} — ${inv.customerName || ''} — ${inv.date || ''}`, text: `${money(total)}${rem > 0 ? ` (باقي ${money(rem)})` : ''}`, neg: rem > 0 });
+    await speak(`آخر فاتورة ${cust ? `لـ ${cust.name}` : ''} رقم ${inv.id}${cust ? '' : ` للعميل ${inv.customerName || ''}`}، بتاريخ ${inv.date || ''}، إجماليها ${say(total)} جنيه${paid > 0 ? `، المدفوع ${say(paid)}` : ''}${rem > 0 ? `، والباقي ${say(rem)}` : ''}. تحب أفتح سجل الفواتير؟`);
+    pending.current = { kind: 'openlog' } as any;
+    setChoices(['افتح سجل الفواتير']);
+  };
+
   // ---------- المعالجة الرئيسية ----------
   const processOne = async (text: string): Promise<boolean> => {
     const p = pending.current;
     const d = draft.current;
     const intent = detectIntent(text);
     if (p && d && intent === 'NO' && p.kind !== 'balance') { await cancelDraft(); return true; }
+    if ((p as any)?.kind === 'openlog') {
+      pending.current = null; setChoices([]);
+      if (intent === 'YES' || /سجل|افتح/.test(normalizeAr(text))) { await goPage(PAGES[0]); return true; }
+      if (intent === 'NO') { await speak('تمام.'); return true; }
+    }
+    const nav = detectNav(text);
+    if (nav) { await goPage(nav); return true; }
+    if (isLastInvoice(text)) { setBalanceCard(null); draft.current = null; if (pending.current?.kind !== undefined) pending.current = null; await lastInvoice(text); return true; }
 
     if (p?.kind === 'confirm' && d) {
       const yn = yesNo(text);
@@ -307,7 +375,7 @@ export const VoiceAssistant: React.FC = () => {
 
     if (intent === 'INVOICE') { setBalanceCard(null); await startInvoice(text); return true; }
     if (intent === 'BALANCE') { setBalanceCard(null); await startBalance(text); return true; }
-    if (intent === 'HELP') { await speak('أقدر أعمل فاتورة بيع، أو أقولك رصيد أي عميل أو مورد. قول مثلاً: رصيد مرقص، أو: اعمل فاتورة لمرقص ابيض كبير 100 بسعر 120.'); return true; }
+    if (intent === 'HELP') { await speak('أقدر أعمل فاتورة بيع، أقولك رصيد أي عميل أو مورد، أدوّر على آخر فاتورة، أو أفتحلك أي صفحة. قول مثلاً: رصيد مرقص، آخر فاتورة لعماد، افتح صفحة العملاء.'); return true; }
     // جملة فيها اسم بس؟ نعتبرها استعلام رصيد
     const r = parseBalanceText(text, canCust ? custList : [], canSupp ? suppList : []);
     if (r.customers.length || r.suppliers.length) { await startBalance(text); return true; }
@@ -323,7 +391,16 @@ export const VoiceAssistant: React.FC = () => {
     finally { setBusy(false); }
   };
 
-  useEffect(() => { if (!open) { stopListening(); try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } } }, [open, stopListening]);
+  const resetAll = useCallback(() => {
+    stopListening();
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    draft.current = null; pending.current = null; saving.current = false;
+    setDraftView(null); setChoices([]); setBalanceCard(null); setHeard(''); setTyped(''); setBusy(false);
+    setReply('اضغط على المايك وقول مثلاً: "رصيد عماد رزق" أو "اعمل فاتورة لمرقص ابيض كبير 100 بسعر 120".');
+  }, [stopListening]);
+
+  useEffect(() => { if (!open) resetAll(); }, [open, resetAll]);
+  useEffect(() => { try { window.speechSynthesis?.getVoices(); } catch { /* ignore */ } }, []);
   useEffect(() => () => { try { recRef.current?.abort?.(); window.speechSynthesis?.cancel(); } catch { /* ignore */ } }, []);
 
   if (!allowed) return null;
@@ -345,6 +422,7 @@ export const VoiceAssistant: React.FC = () => {
         <div dir="rtl" className="fixed z-40 left-2 right-2 sm:right-auto sm:w-[420px] sm:left-4 bottom-36 md:bottom-24 bg-white border border-gray-200 rounded-2xl shadow-2xl flex flex-col max-h-[70vh] overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 bg-brand-600 text-white">
             <div className="font-bold">المساعد الصوتي</div>
+            <button type="button" onClick={resetAll} className="px-2 py-1 rounded text-sm font-bold bg-brand-700 hover:bg-brand-800" title="طلب جديد">طلب جديد</button>
             <button type="button" onClick={() => setSpeakOn(v => !v)} className="p-1 rounded hover:bg-brand-700" title={speakOn ? 'كتم الصوت' : 'تشغيل الصوت'}>
               {speakOn ? <Volume2 size={18} /> : <VolumeX size={18} />}
             </button>
