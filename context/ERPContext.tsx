@@ -4907,8 +4907,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   <span style="direction: ltr;">${totalAfterInvoice.toLocaleString()} ج.م</span>
                 </div>
               ${currentLiveBal !== undefined ? `<div class="total-row" style="background: #f1f5f9; color: #1f2937; font-size: 14px; border-top: 2px solid #000;">
-                <span>رصيد العميل الحالي في كشف الحساب:</span>
-                <span dir="ltr">${Number(currentLiveBal).toLocaleString()} ج.م ${Number(currentLiveBal) < 0 ? '(مدين)' : Number(currentLiveBal) > 0 ? '(له رصيد)' : '(خالص)'}</span>
+                <span>الرصيد الحالي:</span>
+                <span dir="ltr">${Number(currentLiveBal).toLocaleString()} ج.م</span>
               </div>` : ''}
               </div>
             </div>
