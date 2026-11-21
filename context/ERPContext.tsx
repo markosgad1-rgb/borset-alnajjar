@@ -17,7 +17,7 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import { setDoc, getDoc, updateDoc, deleteDoc } from '../utils/firestoreOffline';
-import { getDocFromServer as fsGetDocFromServer } from 'firebase/firestore';
+import { getDocFromServer as fsGetDocFromServer, documentId as fsDocumentId } from 'firebase/firestore';
 import { logEvent, setAuditUser, runAsSystem, logOp, quietOps, opMoney, opPm, opBranch, opChange, opItemLines, opItemDiff } from '../utils/auditLog';
 import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
 import { canDo, getPermLabel, canFeature } from '../utils/permissions';
@@ -843,8 +843,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             if (!isOnline) { healedRef.current.delete(pId); return; }
             (async () => {
               try {
+                // حماية نهائية من السيرفر نفسه (مش من الكاش): بالرقم، وبالبيان، وبأي حركة رقمها بيبدأ بـ T_PUR_<الفاتورة>_
                 const chk = await getDocs(query(collection(db, 'treasury'), where('invoiceNumber', 'in', [pId, `#${pId}`])));
                 if (!chk.empty) return;
+                const chkDesc = await getDocs(query(collection(db, 'treasury'), where('description', '==', newTx.description)));
+                if (!chkDesc.empty) return;
+                const chkId = await getDocs(query(collection(db, 'treasury'), where(fsDocumentId(), '>=', `T_PUR_${pId}_`), where(fsDocumentId(), '<', `T_PUR_${pId}_\uf8ff`)));
+                if (!chkId.empty) return;
                 setTreasury(prev => prev.some(t => t.id === tId) ? prev : [newTx, ...prev]);
                 const who = p?.createdByName ? healUser(p) : ((await creatorFromAudit(String(p.id))) || healUser(p));
                 runAsSystem(() => setDoc(doc(db, 'treasury', tId), cleanDoc(newTx)).catch(() => {}), who);
@@ -1676,6 +1681,24 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
         await setDoc(doc(db, 'purchases', cleanId), cleanDoc(newPurchase));
         
+        // دفعة المورد والحركة المالية تتكتب مع الفاتورة على طول (قبل تحديث المخزن) عشان الرصيد ما يظهرش غلط على أي جهاز لحد ما الكتابة تخلص
+        if (cleanSupplierCode) {
+          const supplierRef = doc(db, 'suppliers', supplier?.code || cleanSupplierCode);
+          const supplierSnap = await getDoc(supplierRef);
+          if (supplierSnap.exists()) {
+            const s = supplierSnap.data() as Supplier;
+            const currentDocHistory = Array.isArray(s.history) ? s.history : [];
+            const docCleanHistory = currentDocHistory.filter(h => !h.description?.includes(`#${cleanId}`));
+            const docUpdatedHistory = [...docCleanHistory, ...newHistoryEntries];
+            const docAccurateBal = calculateSupplierBalance({ ...s, history: docUpdatedHistory }, updatedPurchasesList);
+            await updateDoc(supplierRef, cleanDoc({ balance: docAccurateBal, history: docUpdatedHistory }));
+          }
+        }
+
+        if (treasuryTransaction) {
+          await setDoc(doc(db, 'treasury', tId), cleanDoc(treasuryTransaction));
+        }
+
         for (const item of purchaseData.items) {
           const productRef = doc(db, 'products', item.itemCode);
           const productSnap = await getDoc(productRef);
@@ -1708,22 +1731,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
         }
 
-        if (cleanSupplierCode) {
-          const supplierRef = doc(db, 'suppliers', supplier?.code || cleanSupplierCode);
-          const supplierSnap = await getDoc(supplierRef);
-          if (supplierSnap.exists()) {
-            const s = supplierSnap.data() as Supplier;
-            const currentDocHistory = Array.isArray(s.history) ? s.history : [];
-            const docCleanHistory = currentDocHistory.filter(h => !h.description?.includes(`#${cleanId}`));
-            const docUpdatedHistory = [...docCleanHistory, ...newHistoryEntries];
-            const docAccurateBal = calculateSupplierBalance({ ...s, history: docUpdatedHistory }, updatedPurchasesList);
-            await updateDoc(supplierRef, cleanDoc({ balance: docAccurateBal, history: docUpdatedHistory }));
-          }
-        }
-
-        if (treasuryTransaction) {
-          await setDoc(doc(db, 'treasury', tId), cleanDoc(treasuryTransaction));
-        }
       } catch (e) { handleFirebaseError(e); }
     }
   };
