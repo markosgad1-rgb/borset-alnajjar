@@ -47,6 +47,11 @@ export const Transfers: React.FC = () => {
   const selectedPurchaseId = supplierRecentPurchases.some((p: any) => p.id === formData.invoiceId) ? formData.invoiceId : '';
 
   const [entitySearchText, setEntitySearchText] = useState('');
+  const [trSearch, setTrSearch] = useState('');
+  const [trFrom, setTrFrom] = useState('');
+  const [trTo, setTrTo] = useState('');
+  const [trPm, setTrPm] = useState('');
+
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [currentBalance, setCurrentBalance] = useState<number | null>(null);
@@ -290,6 +295,23 @@ export const Transfers: React.FC = () => {
     if (reviewFilter === 'REVIEWED') return t.reviewStatus !== 'PENDING_REVIEW';
     return true;
   }), [allTransfers, reviewFilter]);
+
+  const trActive = !!(trSearch.trim() || trFrom || trTo || trPm);
+  const trFiltered = useMemo(() => {
+    if (!trActive) return recentTransfers;
+    const q = trSearch.trim().toLowerCase().replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/,/g, '');
+    const pmLabel: any = { CASH: 'خزنة كاش', BANK_AHLY: 'البنك الأهلي', BANK_MISR: 'بنك مصر', VF_CASH_AYMAN: 'فودافون أيمن', VF_CASH_KYRILLOS: 'فودافون كيرلس' };
+    return recentTransfers.filter((t: any) => {
+      const d = String(t.date || '').slice(0, 10);
+      if (trFrom && d < trFrom) return false;
+      if (trTo && d > trTo) return false;
+      if (trPm && t.paymentMethod !== trPm) return false;
+      if (!q) return true;
+      const hay = [t.description, t.date, t.amount, t.credit, t.debit, t.paymentMethod, pmLabel[t.paymentMethod], t.entityName, t.customerName, t.supplierName, t.invoiceNumber].filter(v => v !== undefined && v !== null).join(' ').toLowerCase().replace(/,/g, '');
+      return q.split(/\s+/).every(w => hay.includes(w));
+    });
+  }, [recentTransfers, trActive, trSearch, trFrom, trTo, trPm]);
+
 
   const handleDeleteTransfer = async (t: any) => {
     const isIncoming = t.transferType === 'IN' || t.credit > 0;
@@ -996,6 +1018,28 @@ export const Transfers: React.FC = () => {
             محدثة تلقائياً والأحدث دائماً في الأعلى
           </span>
         </div>
+
+        <div className="p-3 bg-white border-b border-gray-100 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input type="text" value={trSearch} onChange={e => setTrSearch(e.target.value)}
+              placeholder="ابحث بالاسم / البيان / المبلغ / التاريخ / الخزنة..."
+              className="w-full pr-9 pl-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand-400 outline-none" />
+          </div>
+          <input type="date" value={trFrom} onChange={e => setTrFrom(e.target.value)} className="px-2 py-2 border border-gray-200 rounded-lg text-xs" title="من تاريخ" />
+          <input type="date" value={trTo} onChange={e => setTrTo(e.target.value)} className="px-2 py-2 border border-gray-200 rounded-lg text-xs" title="إلى تاريخ" />
+          <select value={trPm} onChange={e => setTrPm(e.target.value)} className="px-2 py-2 border border-gray-200 rounded-lg text-xs bg-white">
+            <option value="">كل الخزن</option>
+            <option value="CASH">خزنة كاش</option>
+            <option value="BANK_AHLY">البنك الأهلي</option>
+            <option value="BANK_MISR">بنك مصر</option>
+            <option value="VF_CASH_AYMAN">فودافون أيمن</option>
+            <option value="VF_CASH_KYRILLOS">فودافون كيرلس</option>
+          </select>
+          {(trSearch || trFrom || trTo || trPm) && (
+            <button type="button" onClick={() => { setTrSearch(''); setTrFrom(''); setTrTo(''); setTrPm(''); }} className="px-3 py-2 rounded-lg text-xs font-bold bg-gray-100 hover:bg-gray-200 text-gray-700">مسح الفلتر</button>
+          )}
+        </div>
         
         <div className="p-3 bg-rose-50/60 border-y border-rose-200/70 flex flex-wrap items-center gap-2">
           <span className="text-xs font-bold text-rose-900 ml-1">مراجعة التحويلات:</span>
@@ -1010,17 +1054,18 @@ export const Transfers: React.FC = () => {
             <button
               type="button"
               disabled={reviewingIds.length > 0}
-              onClick={() => handleReviewTransfers(recentTransfers.map(t => t.id))}
+              onClick={() => handleReviewTransfers(trFiltered.map((t: any) => t.id))}
               className="mr-auto bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
             >
-              <Check size={14} /> اعتماد كل المعروض ({new Set(recentTransfers.map(t => t.groupId || t.id)).size})
+              <Check size={14} /> اعتماد كل المعروض ({new Set(trFiltered.map((t: any) => t.groupId || t.id)).size})
             </button>
           )}
         </div>
 
-        {recentTransfers.length === 0 ? (
+        {trActive && <div className="px-4 py-2 text-xs text-purple-800 bg-purple-50/60 border-b border-purple-100 font-bold">نتائج البحث: {trFiltered.length} من {recentTransfers.length}</div>}
+        {trFiltered.length === 0 ? (
           <div className="p-8 text-center text-gray-400">
-            <p>{reviewFilter === 'PENDING' ? 'لا توجد تحويلات بانتظار المراجعة' : 'لا توجد عمليات تحويل مسجلة بعد'}</p>
+            <p>{trActive ? 'لا توجد نتائج مطابقة للبحث' : reviewFilter === 'PENDING' ? 'لا توجد تحويلات بانتظار المراجعة' : 'لا توجد عمليات تحويل مسجلة بعد'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -1037,7 +1082,7 @@ export const Transfers: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {(reviewFilter === 'PENDING' ? recentTransfers : recentTransfers.slice(0, 30)).map((t, idx) => {
+                {(reviewFilter === 'PENDING' || trActive ? trFiltered : recentTransfers.slice(0, 30)).map((t, idx) => {
                   const isIncoming = t.transferType === 'IN' || t.credit > 0 || (t.type === 'INCOME' && (!t.debit || t.debit === 0));
                   const amount = t.amount || (t.credit > 0 ? t.credit : t.debit);
 
