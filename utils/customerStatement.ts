@@ -366,3 +366,35 @@ export const safeToAutoAlign = (cust: any, invoices: SalesInvoice[], stmt: numbe
   if (stored === 0 && stmt !== 0) return false;
   return true;
 };
+
+
+/**
+ * المديونية السابقة والإجمالي بعد الفاتورة، محسوبين من كشف الحساب نفسه (مش من رقم متخزّن وقت الإنشاء):
+ *   prev  = رصيد العميل في الكشف قبل أول سطر في الفاتورة
+ *   after = prev - إجمالي الفاتورة + (دفعتها + أي تحصيل مربوط بيها)
+ * عشان رقم الفاتورة يفضل مطابق للكشف حتى لو اتعدّلت أو اتحذفت حركات قبلها.
+ * بيرجّع null لو الفاتورة مش موجودة في الكشف.
+ */
+export const getInvoiceStatementBalances = (cust: any, invoices: SalesInvoice[], invoice: any): { prev: number; after: number } | null => {
+  try {
+    if (!cust || !invoice || !invoice.id) return null;
+    const rows = getItemizedRowsForRange(cust, invoices || []);
+    const id = String(invoice.id);
+    const mine = rows.filter((r: any) =>
+      String(r.invoiceId || '') === id &&
+      (r.isInvoiceItem || r.type === 'discount' || (r.type === 'payment' && String(r.id || '').startsWith('inv_pay_')) || r.linkedPayment === true)
+    );
+    if (!mine.length || !mine.some((r: any) => r.isInvoiceItem)) return null;
+    const first: any = mine[0];
+    const round = (n: number) => { const v = Math.round(n * 100) / 100; return Object.is(v, -0) ? 0 : v; };
+    const prev = round(Number(first.runningBalance) + Number(first.debit || 0) - Number(first.credit || 0));
+    const after = round(prev + mine.reduce((a: number, r: any) => a + Number(r.credit || 0) - Number(r.debit || 0), 0));
+    return { prev, after };
+  } catch { return null; }
+};
+
+/** حقول جاهزة تتضاف على نسخة الفاتورة قبل الطباعة/المشاركة */
+export const statementBalanceFields = (cust: any, invoices: SalesInvoice[], invoice: any): { statementPrev?: number; statementAfter?: number } => {
+  const b = getInvoiceStatementBalances(cust, invoices, invoice);
+  return b ? { statementPrev: b.prev, statementAfter: b.after } : {};
+};

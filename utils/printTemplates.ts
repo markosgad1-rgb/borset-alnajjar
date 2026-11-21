@@ -287,6 +287,12 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
   let totalAfterInvoice = invoice.currentBalance !== undefined 
     ? invoice.currentBalance 
     : (oldDebt - remainingAmount);
+  // لو الأرقام اتحسبت من كشف الحساب نفسه نستخدمها (تطابق الكشف دايماً)
+  if ((invoice as any).statementPrev !== undefined && (invoice as any).statementAfter !== undefined) {
+    oldDebt = Number((invoice as any).statementPrev);
+    totalAfterInvoice = Number((invoice as any).statementAfter);
+    if (Object.is(oldDebt, -0) || Math.abs(oldDebt) < 0.0001) oldDebt = 0;
+  }
   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
   return `
@@ -367,6 +373,10 @@ export function getSalesInvoiceHtml(invoice: SalesInvoice, companyLogo?: string)
                 <span>الإجمالي:</span>
                 <span dir="ltr">${totalAfterInvoice.toLocaleString()} ج.م</span>
               </div>
+              ${(invoice as any).liveCustomerBalance !== undefined ? `<div class="total-row" style="background: #f1f5f9; color: #1f2937; font-size: 14px; border-top: 2px solid #000;">
+                <span>رصيد العميل الحالي في كشف الحساب:</span>
+                <span dir="ltr">${Number((invoice as any).liveCustomerBalance).toLocaleString()} ج.م ${Number((invoice as any).liveCustomerBalance) < 0 ? '(مدين)' : Number((invoice as any).liveCustomerBalance) > 0 ? '(له رصيد)' : '(خالص)'}</span>
+              </div>` : ''}
             </div>
           </div>
         </div>

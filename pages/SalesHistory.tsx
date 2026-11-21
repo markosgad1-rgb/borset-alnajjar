@@ -27,6 +27,7 @@ import { shareSalesInvoicePdfViaWhatsApp, shareSalesInvoiceImageViaWhatsApp } fr
 import { useBackHandler } from '../utils/backNavigation';
 import { canDo, canFeature } from '../utils/permissions';
 import { getLinkedPaidTotal } from '../utils/linkedPayments';
+import { getInvoiceStatementBalances, statementBalanceFields } from '../utils/customerStatement';
 import { useDialog } from '../utils/useDialog';
 
 export const SalesHistory: React.FC = () => {
@@ -128,7 +129,8 @@ export const SalesHistory: React.FC = () => {
         ...inv,
         currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
         liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
-        linkedPaid: getLinkedPaidTotal(inv, cust)
+        linkedPaid: getLinkedPaidTotal(inv, cust),
+        ...statementBalanceFields(cust, invoices, inv)
       } as any;
       await shareSalesInvoiceImageViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, syncTab);
     } catch (err: any) {
@@ -173,7 +175,8 @@ export const SalesHistory: React.FC = () => {
         ...inv,
         currentBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
         liveCustomerBalance: cust ? customerBalanceOf(cust) : inv.currentBalance,
-        linkedPaid: getLinkedPaidTotal(inv, cust)
+        linkedPaid: getLinkedPaidTotal(inv, cust),
+        ...statementBalanceFields(cust, invoices, inv)
       } as any;
       await shareSalesInvoicePdfViaWhatsApp(invoiceWithLiveBal, companyLogo, cust?.phone, null, syncTab);
     } catch (err: any) {
@@ -1106,6 +1109,9 @@ export const SalesHistory: React.FC = () => {
                   let totalAfterInvoice = selectedInvoice.currentBalance !== undefined
                     ? selectedInvoice.currentBalance + linkedPaid
                     : (oldDebt - remaining);
+                  // الأرقام من كشف الحساب نفسه عشان تطابقه دايماً
+                  const stmtBal = getInvoiceStatementBalances(customers.find(c => c.code === selectedInvoice.customerCode), invoices, selectedInvoice);
+                  if (stmtBal) { oldDebt = stmtBal.prev; totalAfterInvoice = stmtBal.after; }
                   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
                   // مديونية العميل الحالية الآن (تشمل جميع الحركات والتحصيلات اللاحقة)

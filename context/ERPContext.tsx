@@ -21,7 +21,7 @@ import { getDocFromServer as fsGetDocFromServer, documentId as fsDocumentId } fr
 import { logEvent, setAuditUser, runAsSystem, logOp, quietOps, opMoney, opPm, opBranch, opChange, opItemLines, opItemDiff } from '../utils/auditLog';
 import { checkDevice, watchDevice, startHeartbeat } from '../utils/deviceGuard';
 import { canDo, getPermLabel, canFeature } from '../utils/permissions';
-import { statementBalanceOf, safeToAutoAlign } from '../utils/customerStatement';
+import { statementBalanceOf, safeToAutoAlign, getInvoiceStatementBalances } from '../utils/customerStatement';
 import { getUserScope, inScope, customerInScope, UserScope } from '../utils/userScope';
 
 interface ERPContextType {
@@ -4820,6 +4820,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     let totalAfterInvoice = invoice.currentBalance !== undefined
       ? invoice.currentBalance + ((invoice as any).liveCustomerBalance !== undefined ? 0 : linkedPaid)
       : (oldDebt - remainingAmount);
+    // رصيد العميل الحالي (دلوقتي) في كشف الحساب: بيتعرض لوحده تحت إجمالي وقت الإصدار
+    const currentLiveBal: number | undefined = cust ? customerBalanceOf(cust) : (invoice as any).liveCustomerBalance;
+    // الأرقام من كشف الحساب نفسه (تطابق الكشف دايماً حتى لو حركات قبل الفاتورة اتعدّلت)
+    const stmtBal = getInvoiceStatementBalances(cust, invoices, invoice);
+    if (stmtBal) { oldDebt = stmtBal.prev; totalAfterInvoice = stmtBal.after; }
+    if (Object.is(oldDebt, -0) || Math.abs(oldDebt) < 0.0001) oldDebt = 0;
     if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
     const printWindow = window.open('', '_blank', 'width=1000,height=800');
@@ -4900,6 +4906,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   <span>الإجمالي:</span>
                   <span style="direction: ltr;">${totalAfterInvoice.toLocaleString()} ج.م</span>
                 </div>
+              ${currentLiveBal !== undefined ? `<div class="total-row" style="background: #f1f5f9; color: #1f2937; font-size: 14px; border-top: 2px solid #000;">
+                <span>رصيد العميل الحالي في كشف الحساب:</span>
+                <span dir="ltr">${Number(currentLiveBal).toLocaleString()} ج.م ${Number(currentLiveBal) < 0 ? '(مدين)' : Number(currentLiveBal) > 0 ? '(له رصيد)' : '(خالص)'}</span>
+              </div>` : ''}
               </div>
             </div>
           </div>

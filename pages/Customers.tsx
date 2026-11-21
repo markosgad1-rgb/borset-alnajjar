@@ -15,7 +15,7 @@ import { getLinkedPaidTotal } from '../utils/linkedPayments';
 import { useBackHandler } from '../utils/backNavigation';
 import { canDo, isFullAdmin, canFeature } from '../utils/permissions';
 import { logOp, opMoney, opChange } from '../utils/auditLog';
-import { formatCustomerMovementDesc, getConsumedPaymentIndices as getConsumedPaymentIndicesUtil, getItemizedRowsForRange as getItemizedRowsUtil } from '../utils/customerStatement';
+import { formatCustomerMovementDesc, getConsumedPaymentIndices as getConsumedPaymentIndicesUtil, getItemizedRowsForRange as getItemizedRowsUtil, getInvoiceStatementBalances, statementBalanceFields } from '../utils/customerStatement';
 
 export const Customers: React.FC = () => {
   const { 
@@ -2031,6 +2031,9 @@ export const Customers: React.FC = () => {
                   let totalAfterInvoice = viewInvoice.currentBalance !== undefined
                     ? viewInvoice.currentBalance + linkedPaid
                     : (oldDebt - remaining);
+                  // الأرقام من كشف الحساب نفسه عشان تطابقه دايماً
+                  const stmtBal = getInvoiceStatementBalances(customers.find(c => c.code === viewInvoice.customerCode), invoices, viewInvoice);
+                  if (stmtBal) { oldDebt = stmtBal.prev; totalAfterInvoice = stmtBal.after; }
                   if (Object.is(totalAfterInvoice, -0) || Math.abs(totalAfterInvoice) < 0.0001) totalAfterInvoice = 0;
 
                   // مديونية العميل الحالية الآن (تشمل جميع الحركات والتحصيلات اللاحقة)
@@ -2088,7 +2091,8 @@ export const Customers: React.FC = () => {
                         ...viewInvoice,
                         currentBalance: curBal,
                         liveCustomerBalance: curBal,
-                        linkedPaid: getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode))
+                        linkedPaid: getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode)),
+                        ...statementBalanceFields(customers.find(c => c.code === viewInvoice.customerCode), invoices, viewInvoice)
                       } as any, companyLogo, selectedCustomer.phone);
                     } finally {
                       setIsSharingPdf(false);
@@ -2113,7 +2117,8 @@ export const Customers: React.FC = () => {
                         ...viewInvoice,
                         currentBalance: curBal,
                         liveCustomerBalance: curBal,
-                        linkedPaid: getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode))
+                        linkedPaid: getLinkedPaidTotal(viewInvoice, customers.find(c => c.code === viewInvoice.customerCode)),
+                        ...statementBalanceFields(customers.find(c => c.code === viewInvoice.customerCode), invoices, viewInvoice)
                       } as any, companyLogo, selectedCustomer.phone);
                     } finally {
                       setIsSharingImage(false);
