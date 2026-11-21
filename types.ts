@@ -336,7 +336,7 @@ export interface User {
   /** للمدير الكامل: السماح بصفحة إدارة السيستم (الأدمن الأساسي دايماً مسموح) */
   allowSystemPage?: boolean;
   /** مزايا اختيارية في كشف العميل (الأدمن الأساسي دايماً مسموح له) */
-  features?: { clearStatement?: boolean; archiveStatement?: boolean; invoiceDiscount?: boolean };
+  features?: { clearStatement?: boolean; archiveStatement?: boolean; invoiceDiscount?: boolean; voiceAssistant?: boolean };
 }
 
 export type PageView = 'dashboard' | 'reports' | 'purchases' | 'warehouse' | 'sales' | 'sales-history' | 'customers' | 'suppliers' | 'employees' | 'treasury' | 'collections' | 'transfers' | 'expenses' | 'users' | 'trash' | 'activity' | 'system';

@@ -89,7 +89,6 @@ interface ERPContextType {
     discount?: number;
     discountPct?: number;
   }) => Promise<string | void>;
-  restoreLostInvoice: (spec: { oldId: string; customerCode: string; date: string; time: string; items: { itemName: string; quantity: number; price: number }[]; previousBalance: number; createdByName?: string; createdBy?: string }) => Promise<{ success: boolean; message: string }>;
   updateInvoice: (oldInvoice: SalesInvoice, newInvoiceData: SalesInvoice) => Promise<void>; 
   markInvoicesReviewed: (ids: string[]) => Promise<void>;
   markPurchasesReviewed: (ids: string[]) => Promise<void>;
@@ -5685,52 +5684,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try { return await fn(a, ...rest); }
     catch (e) { if (key) dupRef.current.delete(key); throw e; }
   };
-  // إصلاح فاتورة اتمسحت بسبب تكرار الرقم: بنرجّعها برقم جديد فاضي، ونصلّح رقمها في كشف عميلها فقط.
-  // مفيش أي لمس للأرصدة أو المخزون أو الخزنة (القيد المالي موجود أصلاً في كشف العميل).
-  const restoreLostInvoice = async (spec: { oldId: string; customerCode: string; date: string; time: string; items: { itemName: string; quantity: number; price: number }[]; previousBalance: number; createdByName?: string; createdBy?: string }): Promise<{ success: boolean; message: string }> => {
-    if (currentUser?.username !== 'admin') return { success: false, message: 'العملية دي للمدير الأساسي بس.' };
-    if (!isOnline) return { success: false, message: 'لازم تكون متصل بالإنترنت.' };
-    const cust = customers.find(c => c.code === spec.customerCode);
-    if (!cust) return { success: false, message: `العميل ${spec.customerCode} مش موجود.` };
-    const norm = (v: any) => String(v ?? '').trim().replace(/\s+/g, ' ');
-    const lines: InvoiceItem[] = [];
-    for (const it of spec.items) {
-      const prod = products.find(pr => norm(pr.name) === norm(it.itemName));
-      if (!prod) return { success: false, message: `الصنف "${it.itemName}" مش موجود في المخزن بنفس الاسم.` };
-      lines.push({ itemCode: prod.code, itemName: prod.name, quantity: it.quantity, price: it.price, total: Math.round(it.quantity * it.price * 100) / 100 });
-    }
-    const total = Math.round(lines.reduce((a, l) => a + l.total, 0) * 100) / 100;
-    const tag = `#${spec.oldId}`;
-    const hist = cust.history || [];
-    const idxs = hist.map((h, i) => ({ h, i })).filter(({ h }) => String(h.description || '').includes(tag) && Math.abs(Math.abs(Number(h.amount) || 0) - total) < 0.01);
-    if (idxs.length !== 1) return { success: false, message: `لقيت ${idxs.length} قيد بقيمة ${total.toLocaleString()} على ${tag} في كشف العميل (المفروض قيد واحد). اتوقف من غير تعديل.` };
-    if (invoices.some(i => i.id !== spec.oldId && (i as any).restoredFrom === spec.oldId && i.customerCode === spec.customerCode)) return { success: false, message: 'الفاتورة دي اتصلحت قبل كده.' };
-    const nums = invoices.filter(i => /^N\d+$/.test(String(i.id))).map(i => parseInt(String(i.id).replace(/\D/g, ''), 10));
-    const wanted = `N${String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3, '0')}`;
-    const newId = await resolveUniqueDocId('invoices', wanted, (x) => invoices.some(i => String(i.id) === x));
-    const branchId: BranchId = (cust.branchId as BranchId) || 'MARG';
-    const inv: SalesInvoice = {
-      id: newId, branchId, area: cust.area || '', date: spec.date, time: spec.time,
-      customerCode: cust.code, customerName: cust.name, items: lines, total,
-      paidAmount: 0, remainingAmount: total,
-      previousBalance: spec.previousBalance, currentBalance: Math.round((spec.previousBalance - total) * 100) / 100,
-      reviewStatus: 'PENDING_REVIEW',
-      createdBy: spec.createdBy || '', createdByName: spec.createdByName || '',
-      restoredFrom: spec.oldId
-    } as any;
-    const newHist = hist.map((h, i) => i === idxs[0].i ? ({ ...h, description: String(h.description).split(tag).join(`#${newId}`), ...((h as any).invoiceId ? { invoiceId: newId } : {}), ...((h as any).invoiceNo ? { invoiceNo: newId } : {}) }) : h);
-    logOp('update', `إصلاح فاتورة ${spec.oldId} (اتمسحت بتكرار الرقم) — اتسجلت برقم ${newId} للعميل ${cust.name}`, [
-      `العميل: ${cust.name} (${cust.code})`, `الإجمالي: ${opMoney(total)}`, ...opItemLines(lines as any)
-    ], newId);
-    try {
-      await setDoc(doc(db, 'invoices', newId), cleanDoc(inv));
-      await updateDoc(doc(db, 'customers', cust.code), cleanDoc({ history: newHist }));
-    } catch (e) { console.error(e); return { success: false, message: 'فشل الحفظ على السيرفر، ما اتغيّرش حاجة مؤكدة. راجع الفواتير وجرّب تاني.' }; }
-    setInvoices(prev => [inv, ...prev.filter(i => i.id !== newId)]);
-    setCustomers(prev => prev.map(c => c.code === cust.code ? { ...c, history: newHist } : c));
-    return { success: true, message: `اتسجلت الفاتورة برقم ${newId} للعميل ${cust.name} بإجمالي ${total.toLocaleString()} ج.م.` };
-  };
-
   // ضمان إن رقم الفاتورة مايتكررش أبداً (حتى لو الجهاز أوفلاين أو الداتا عنده قديمة):
   //  - لو السيرفر أكد إن الرقم فاضي  → نستخدمه.
   //  - لو الرقم مستخدم (على السيرفر أو عندنا) → ناخد الرقم اللي بعده.
@@ -5816,7 +5769,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       products, customers: scopedCustomers, suppliers, employees, purchases: scopedPurchases, invoices: scopedInvoices, treasury: scopedTreasury, users, currentUser, isOnline, permissionError, companyLogo,
       login, logout, addUser, updateUser, deleteUser, addProduct: gAddProduct, updateProduct: gUpdateProduct, deleteProduct: gDeleteProduct, clearAllProducts: gClearAllProducts, deduplicateProducts: gDeduplicateProducts, deletePurchase: gDeletePurchase, deletePurchaseInvoice: gDeletePurchase,
       transferStockBetweenBranches: gTransferStock, transferCashBetweenBranches: sCash,
-      addPurchase: sPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice: sInvoice, restoreLostInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
+      addPurchase: sPurchase, updatePurchase: gUpdatePurchase, finalizePurchasePrice: gFinalizePrice, addInvoice: sInvoice, updateInvoice: gUpdateInvoice, deleteInvoice: gDeleteInvoice,
       markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, clearAllInvoices: gClearAllInvoices, addCollection: sCollection, addTreasuryTransaction, addTransfer: sTransfer, addCustomerToSupplierTransfer: sC2S, deleteTransfer: gDeleteTransfer, addExpense: sExpense, addOpeningBalance: sOpening, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,

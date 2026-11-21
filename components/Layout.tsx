@@ -5,6 +5,7 @@ import { LayoutDashboard, ShoppingCart, Package, FileText, Users, Wallet, Menu, 
 import { PageView, UserPermissions } from '../types';
 import { useERP } from '../context/ERPContext';
 import { BackupModal } from './BackupModal';
+import { VoiceAssistant } from './VoiceAssistant';
 import { useBackHandler } from '../utils/backNavigation';
 import { useNetworkStatus, usePendingWrites, usePersistenceOk } from '../utils/useNetworkStatus';
 import { onOfflineSave } from '../utils/connectionStatus';
@@ -403,6 +404,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate
           {children}
         </div>
       </main>
+
+      <VoiceAssistant />
 
       {/* Backup & Restore Modal */}
       <BackupModal 
