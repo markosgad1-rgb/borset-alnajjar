@@ -609,7 +609,9 @@ export function getLedgerHtml(options: {
               <td><div class="cell-content">${r.num}</div></td>
               <td dir="ltr"><div class="cell-content" dir="ltr">${r.date}</div></td>
               <td><div class="cell-content">${r.ref ? (r.ref.includes('تسوية') ? 'تسوية' : r.ref) : '-'}</div></td>
-              <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${cleanItemName}</div></td>
+              ${cleanItemName.length > 15
+                ? `<td style="font-weight: 900; white-space: normal; overflow: visible; word-break: break-word;"><div class="cell-content" style="font-weight: 900; white-space: normal; word-break: break-word; font-size: 12px; line-height: 1.3 !important; padding: 3px 3px 6px !important;">${cleanItemName}</div></td>`
+                : `<td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${cleanItemName}</div></td>`}
               <td><div class="cell-content">${typeof r.quantity === 'number' ? r.quantity.toLocaleString() : r.quantity}</div></td>
               <td><div class="cell-content">${typeof r.price === 'number' ? r.price.toLocaleString() : r.price}</div></td>
               <td style="font-weight: 900;"><div class="cell-content" style="font-weight: 900;">${r.lineTotal !== undefined && r.lineTotal !== '-' ? (typeof r.lineTotal === 'number' ? r.lineTotal.toLocaleString() : r.lineTotal) : '-'}</div></td>
