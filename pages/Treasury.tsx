@@ -32,7 +32,9 @@ export const Treasury: React.FC = () => {
     currentUser, 
     addOpeningBalance,
     findDuplicateTreasury,
-    removeTreasuryTransactions
+    removeTreasuryTransactions,
+    closeTreasuryDay,
+    undoTreasuryClose
   } = useERP();
 
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -45,6 +47,45 @@ export const Treasury: React.FC = () => {
   const [dupGroups, setDupGroups] = useState<ReturnType<typeof findDuplicateTreasury> | null>(null);
   const [dupBusy, setDupBusy] = useState(false);
   
+  // إقفال اليوم
+  const PM_LIST: { id: PaymentMethod; label: string }[] = [
+    { id: 'CASH', label: 'خزنة كاش' }, { id: 'BANK_AHLY', label: 'البنك الأهلي' }, { id: 'BANK_MISR', label: 'بنك مصر' },
+    { id: 'VF_CASH_AYMAN', label: 'فودافون أيمن' }, { id: 'VF_CASH_KYRILLOS', label: 'فودافون كيرلس' }
+  ];
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [closeScope, setCloseScope] = useState<'ALL' | 'CASH' | 'OTHERS' | PaymentMethod>('ALL');
+  const [closeBranch, setCloseBranch] = useState<'ALL' | BranchId>('ALL');
+  const [closeOpenBranch, setCloseOpenBranch] = useState<BranchId>('MARG');
+  const [closeOpenings, setCloseOpenings] = useState<Record<string, string>>({});
+  const [closeDate, setCloseDate] = useState(new Date().toISOString().split('T')[0]);
+  const [closeNotes, setCloseNotes] = useState('');
+  const [closeBusy, setCloseBusy] = useState(false);
+  useBackHandler(() => setShowCloseModal(false), showCloseModal, 'treasury-close-modal');
+  const closeAccounts: PaymentMethod[] = closeScope === 'ALL' ? PM_LIST.map(x => x.id)
+    : closeScope === 'CASH' ? ['CASH'] : closeScope === 'OTHERS' ? PM_LIST.filter(x => x.id !== 'CASH').map(x => x.id) : [closeScope as PaymentMethod];
+  const lastClose = useMemo(() => {
+    const rows = treasury.filter((t: any) => t.source === 'DAY_CLOSE' || t.source === 'DAY_OPEN');
+    if (rows.length === 0) return null;
+    const latest = rows.reduce((a: any, b: any) => ((b.timestamp || 0) > (a.timestamp || 0) ? b : a));
+    const g = rows.filter((t: any) => t.groupId === latest.groupId);
+    return { groupId: latest.groupId as string, date: String(latest.date || '').slice(0, 16), count: g.length };
+  }, [treasury]);
+  const handleCloseDay = async () => {
+    if (closeBusy) return;
+    const openings: any = {};
+    closeAccounts.forEach(a => { const v = parseNumberFromCommas(closeOpenings[a] || ''); if (v > 0) openings[a] = v; });
+    setCloseBusy(true);
+    try {
+      const r = await closeTreasuryDay({ scopeBranch: closeBranch, accounts: closeAccounts, openings, openingBranch: closeBranch === 'ALL' ? closeOpenBranch : closeBranch, date: closeDate, notes: closeNotes.trim() || undefined });
+      if (r && r.groupId && (r.closed + r.opened) > 0) {
+        alert(`تم الإقفال: ${r.closed} حساب اتصفّر${r.opened ? `، و${r.opened} رصيد افتتاحي اتسجل` : ''}. السجلات والكشوفات زي ما هي.`);
+        setShowCloseModal(false); setCloseOpenings({}); setCloseNotes('');
+      } else if (r && r.groupId) {
+        alert('كل الحسابات المختارة رصيدها صفر بالفعل ومفيش رصيد افتتاحي مكتوب، فمفيش حاجة اتسجلت.');
+      }
+    } finally { setCloseBusy(false); }
+  };
+
   // Opening Balance Modal State
   const [showOpeningModal, setShowOpeningModal] = useState(false);
   const [openingForm, setOpeningForm] = useState<{
@@ -77,9 +118,12 @@ export const Treasury: React.FC = () => {
 
   const classifyTx = (t: any): string => {
     const d = String(t.description || '');
+    if (t.source === 'DAY_CLOSE') return 'CLOSING';
+    if (t.source === 'DAY_OPEN') return 'OPENING';
     if (t.source === 'COLLECTION' || d.includes('تحصيل')) return 'COLLECTION';
     if (t.source === 'TRANSFER' || d.includes('تحويل')) return 'TRANSFER';
-    if (d.includes('رصيد افتتاحي')) return 'OPENING';
+    if (t.source === 'DAY_CLOSE') return 'CLOSING';
+    if (t.source === 'DAY_OPEN' || d.includes('رصيد افتتاحي')) return 'OPENING';
     if (t.source === 'PURCHASE' || d.includes('للمورد') || d.includes('مشتريات')) return 'SUPPLIER';
     if (d.includes('مصروف')) return 'EXPENSE';
     if (d.includes('فاتورة')) return 'SALE';
@@ -138,6 +182,7 @@ export const Treasury: React.FC = () => {
   const shownTotals = useMemo(() => {
     let inc = 0, out = 0;
     sortedTransactions.forEach((t: any) => {
+      if (t.source === 'DAY_CLOSE' || t.source === 'DAY_OPEN') return; // الإقفال والافتتاحي مش إيراد ولا مصروف
       if (isIncomeTx(t)) inc += Number(t.credit || t.amount || 0);
       else out += Number(t.debit || t.amount || 0);
     });
@@ -276,6 +321,15 @@ export const Treasury: React.FC = () => {
                 <PlusCircle size={16} /> رصيد افتتاحي
               </button>
             </>
+          )}
+
+          {canDo(currentUser, 'treasury.close') && (
+            <button
+              onClick={() => setShowCloseModal(true)}
+              className="flex items-center gap-1.5 bg-amber-500 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-bold hover:bg-amber-600 transition-colors shadow-xs"
+            >
+              <Wallet size={16} /> إقفال اليوم / تصفير الرصيد
+            </button>
           )}
 
           {canDo(currentUser, 'treasury.clear') && (
@@ -496,6 +550,7 @@ export const Treasury: React.FC = () => {
                 <option value="TRANSFER">تحويلات</option>
                 <option value="EXPENSE">مصروفات</option>
                 <option value="OPENING">رصيد افتتاحي</option>
+                <option value="CLOSING">إقفال يوم</option>
               </select>
             </div>
             {(searchText || dateFrom || dateTo || opFilter !== 'ALL') && (
@@ -643,6 +698,89 @@ export const Treasury: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Close Day Modal */}
+      {showCloseModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl overflow-hidden border border-amber-200 max-h-[92vh] flex flex-col">
+            <div className="bg-amber-500 p-4 text-white flex justify-between items-center">
+              <h3 className="font-bold flex items-center gap-2"><Wallet size={18}/> إقفال اليوم وبدء رصيد جديد</h3>
+              <button onClick={() => setShowCloseModal(false)}><X size={18}/></button>
+            </div>
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
+                الإقفال بيسجّل حركة تصفّر رصيد الحساب من غير ما يمسح أي سجل. العملاء والموردين والفواتير والكشوفات والتحصيلات والتحويلات كلها زي ما هي. وتقدر تتراجع عنه.
+              </p>
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">إيه اللي يتصفّر؟</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([['ALL','كل الحسابات'],['CASH','الكاش بس'],['OTHERS','البنوك والفودافون بس']] as const).map(([k,l]) => (
+                    <button key={k} type="button" onClick={() => setCloseScope(k)} className={`p-2 rounded-lg text-xs font-bold border ${closeScope === k ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>{l}</button>
+                  ))}
+                  <select value={['ALL','CASH','OTHERS'].includes(closeScope) ? '' : closeScope} onChange={e => e.target.value && setCloseScope(e.target.value as PaymentMethod)} className="p-2 rounded-lg text-xs font-bold border border-gray-200 bg-white">
+                    <option value="">حساب واحد...</option>
+                    {PM_LIST.map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">الإدارة</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([['ALL','الاتنين'],['MARG','المرج'],['NOZHA','النزهة']] as const).map(([k,l]) => (
+                    <button key={k} type="button" onClick={() => setCloseBranch(k as any)} className={`p-2 rounded-lg text-xs font-bold border ${closeBranch === k ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">الرصيد الحالي ورصيد بداية اليوم (اختياري - سيبه فاضي يبدأ من صفر)</label>
+                <div className="space-y-1.5">
+                  {PM_LIST.filter(x => closeAccounts.includes(x.id)).map(x => {
+                    const cur = treasury.filter((t: any) => (closeBranch === 'ALL' || (t.branchId || 'MARG') === closeBranch) && (t.paymentMethod || 'CASH') === x.id).reduce((a: number, t: any) => a + (Number(t.credit) || 0) - (Number(t.debit) || 0), 0);
+                    return (
+                      <div key={x.id} className="flex items-center gap-2 text-xs">
+                        <span className="w-28 font-bold text-gray-700">{x.label}</span>
+                        <span className="w-24 font-mono text-gray-500" dir="ltr">{Math.round(cur * 100) / 100 === 0 ? '0' : (Math.round(cur * 100) / 100).toLocaleString()}</span>
+                        <span className="text-gray-400">←</span>
+                        <input type="text" dir="ltr" inputMode="decimal" placeholder="0" value={closeOpenings[x.id] || ''}
+                          onFocus={e => e.target.select()}
+                          onChange={e => handleNumericChangeWithCommas(e.target.value, val => setCloseOpenings(o => ({ ...o, [x.id]: val })))}
+                          className="flex-1 min-w-0 border rounded-lg p-1.5 text-center font-mono font-bold outline-none focus:ring-2 focus:ring-amber-400" />
+                      </div>
+                    );
+                  })}
+                </div>
+                {closeBranch === 'ALL' && (
+                  <div className="mt-2 flex items-center gap-2 text-xs">
+                    <span className="text-gray-600">الرصيد الافتتاحي يتسجل على:</span>
+                    {(['MARG','NOZHA'] as BranchId[]).map(b => (
+                      <button key={b} type="button" onClick={() => setCloseOpenBranch(b)} className={`px-2.5 py-1 rounded-md font-bold border ${closeOpenBranch === b ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200'}`}>{b === 'MARG' ? 'المرج' : 'النزهة'}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">التاريخ</label>
+                  <input type="date" value={closeDate} onChange={e => setCloseDate(e.target.value)} className="w-full p-2 border rounded-lg text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">ملاحظة</label>
+                  <input type="text" value={closeNotes} onChange={e => setCloseNotes(e.target.value)} placeholder="اختياري" className="w-full p-2 border rounded-lg text-xs" />
+                </div>
+              </div>
+              <button type="button" disabled={closeBusy} onClick={handleCloseDay} className="w-full bg-amber-500 text-white py-2.5 rounded-lg font-bold hover:bg-amber-600 disabled:opacity-60 text-sm">
+                {closeBusy ? 'جاري الحفظ...' : 'تنفيذ الإقفال'}
+              </button>
+              {lastClose && (
+                <div className="flex items-center justify-between gap-2 text-xs bg-gray-50 border rounded-lg p-2">
+                  <span className="text-gray-600">آخر إقفال: {lastClose.date} ({lastClose.count} حركة)</span>
+                  <button type="button" onClick={async () => { if (!window.confirm('التراجع عن آخر إقفال؟ الأرصدة هترجع زي ما كانت.')) return; const n = await undoTreasuryClose(lastClose.groupId); if (n) alert('تم التراجع عن آخر إقفال.'); }} className="px-2.5 py-1 rounded-md bg-red-50 text-red-700 border border-red-200 font-bold">تراجع</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Opening Balance Modal */}
       {showOpeningModal && (

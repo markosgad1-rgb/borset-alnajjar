@@ -74,6 +74,7 @@ export const ACTION_GROUPS: ActionGroup[] = [
     ac('transfer.delete', 'حذف تحويل', open),
     ac('treasury.manage', 'تحويل نقدية بين الإدارات / رصيد افتتاحي', p => !!p.canManageTreasury),
     ac('treasury.clear', 'تصفير الخزنة', p => !!p.canDeleteLedgers),
+    ac('treasury.close', 'إقفال الخزنة وبدء يوم جديد برصيد افتتاحي (من غير مسح سجلات)', () => false),
   ]},
   { title: 'سلة المهملات والنسخ الاحتياطي', items: [
     ac('trash.restore', 'استرجاع من سلة المهملات', p => !!(p.canDeleteInvoices || p.canDeleteCustomers || p.canDeleteSuppliers)),

@@ -244,6 +244,8 @@ interface ERPContextType {
   clearTreasury: () => Promise<boolean>;
   findDuplicateTreasury: () => { key: string; keep: TreasuryTransaction; extras: TreasuryTransaction[] }[];
   removeTreasuryTransactions: (ids: string[]) => Promise<number>;
+  closeTreasuryDay: (data: { scopeBranch: 'ALL' | BranchId; accounts: PaymentMethod[]; openings: Partial<Record<PaymentMethod, number>>; openingBranch: BranchId; date: string; notes?: string }) => Promise<{ closed: number; opened: number; groupId: string }>;
+  undoTreasuryClose: (groupId: string) => Promise<number>;
   exportBackupData: () => SystemBackup;
   restoreBackupData: (backup: SystemBackup) => Promise<{ success: boolean; message: string }>;
 
@@ -4580,6 +4582,73 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return n;
   };
 
+  // إقفال اليوم: بيسجّل حركة "إقفال" لكل حساب رصيده مش صفر (بالعكس) فالرصيد يبقى صفر، من غير ما يمسح أي سجل.
+  // وبعدها (اختياري) حركة "رصيد افتتاحي" لبداية اليوم. الحركتين معلّمين source DAY_CLOSE / DAY_OPEN عشان مايدخلوش في إجمالي الوارد/الصادر.
+  const closeTreasuryDay = async (data: { scopeBranch: 'ALL' | BranchId; accounts: PaymentMethod[]; openings: Partial<Record<PaymentMethod, number>>; openingBranch: BranchId; date: string; notes?: string }) => {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const now = Date.now();
+    const groupId = `CLOSE_${now}`;
+    const day = data.date || new Date().toISOString().split('T')[0];
+    const timeStr = new Date().toTimeString().split(' ')[0];
+    const fullDate = day.includes(':') ? day : `${day} ${timeStr}`;
+    const branches: BranchId[] = data.scopeBranch === 'ALL' ? ['MARG', 'NOZHA'] : [data.scopeBranch];
+    const docs: TreasuryTransaction[] = [];
+    let seq = 0;
+    for (const b of branches) {
+      for (const pm of data.accounts) {
+        const bal = r2(treasury
+          .filter(t => (t.branchId || 'MARG') === b && (t.paymentMethod || 'CASH') === pm)
+          .reduce((a, t) => a + (Number(t.credit) || 0) - (Number(t.debit) || 0), 0));
+        if (bal === 0) continue;
+        seq++;
+        docs.push({
+          id: `CLS${now}_${b}_${pm}`, branchId: b, date: fullDate,
+          credit: bal < 0 ? -bal : 0, debit: bal > 0 ? bal : 0, balance: 0,
+          paymentMethod: pm, source: 'DAY_CLOSE', groupId, amount: Math.abs(bal),
+          description: `إقفال اليوم - تصفير رصيد ${opPm(pm)}${data.notes ? ` - ${data.notes}` : ''}`,
+          createdAt: new Date(now).toISOString(), timestamp: now + seq
+        } as TreasuryTransaction);
+      }
+    }
+    const closed = docs.length;
+    let opened = 0;
+    for (const pm of data.accounts) {
+      const amt = r2(Number(data.openings?.[pm]) || 0);
+      if (amt <= 0) continue;
+      seq++; opened++;
+      docs.push({
+        id: `OPN${now}_${data.openingBranch}_${pm}`, branchId: data.openingBranch, date: fullDate,
+        credit: amt, debit: 0, balance: 0, paymentMethod: pm, source: 'DAY_OPEN', groupId, amount: amt,
+        description: `رصيد افتتاحي - بداية يوم${data.notes ? ` - ${data.notes}` : ''}`,
+        createdAt: new Date(now).toISOString(), timestamp: now + 1000 + seq
+      } as TreasuryTransaction);
+    }
+    if (docs.length === 0) return { closed: 0, opened: 0, groupId };
+    logOp('create', `إقفال الخزنة وبدء يوم جديد (${closed} إقفال، ${opened} رصيد افتتاحي)`, docs.map(d =>
+      `${d.source === 'DAY_CLOSE' ? 'إقفال' : 'افتتاحي'} - ${opBranch(d.branchId || 'MARG')} - ${opPm(d.paymentMethod)} - ${opMoney(d.amount || 0)}`));
+    if (isOnline) {
+      for (const d of docs) {
+        try { await setDoc(doc(db, 'treasury', d.id), cleanDoc(d)); } catch (e) { handleFirebaseError(e); }
+      }
+    } else {
+      setTreasury(prev => [...prev, ...docs]);
+    }
+    return { closed, opened, groupId };
+  };
+
+  const undoTreasuryClose = async (groupId: string): Promise<number> => {
+    const rows = treasury.filter(t => t.groupId === groupId && (t.source === 'DAY_CLOSE' || t.source === 'DAY_OPEN'));
+    if (rows.length === 0) return 0;
+    logOp('delete', `التراجع عن إقفال الخزنة (${rows.length} حركة)`, rows.map(t => `${t.description} - ${opMoney(t.amount || 0)}`));
+    let n = 0;
+    for (const t of rows) {
+      try { if (isOnline) await deleteDoc(doc(db, 'treasury', t.id)); n++; } catch (e) { handleFirebaseError(e); }
+    }
+    const ids = new Set(rows.map(t => t.id));
+    setTreasury(prev => prev.filter(t => !ids.has(t.id)));
+    return n;
+  };
+
   const seedDatabase = async () => {
     // Disabled to protect real cloud database from being polluted with test/mock items
     console.warn("Seeding mock data is permanently disabled to protect real cloud Firestore data.");
@@ -5637,6 +5706,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const gTransferCash = gate('treasury.manage', transferCashBetweenBranches, false);
   const gAddOpeningBalance = gate('treasury.manage', addOpeningBalance);
   const gClearTreasury = gate('treasury.clear', clearTreasury, false);
+  const gCloseTreasuryDay = gate('treasury.close', closeTreasuryDay, { closed: 0, opened: 0, groupId: '' });
+  const gUndoTreasuryClose = gate('treasury.close', undoTreasuryClose, 0);
   const gRemoveTreasuryTx = gate('treasury.clear', removeTreasuryTransactions, false);
   const gUpdatePurchase = gate('purchase.edit', updatePurchase);
   const gFinalizePrice = gate('purchase.edit', finalizePurchasePrice, false);
@@ -5811,7 +5882,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       markInvoicesReviewed: gMarkReviewed, markPurchasesReviewed: gMarkPurchasesReviewed, markTransfersReviewed: gMarkTransfersReviewed, clearAllInvoices: gClearAllInvoices, addCollection: sCollection, addTreasuryTransaction, addTransfer: sTransfer, addCustomerToSupplierTransfer: sC2S, deleteTransfer: gDeleteTransfer, addExpense: sExpense, addOpeningBalance: sOpening, addCustomer: gAddCustomer, updateCustomer: gUpdateCustomer, deleteCustomer: gDeleteCustomer, addSupplier: gAddSupplier, updateSupplier: gUpdateSupplier, deleteSupplier: gDeleteSupplier, addEmployee: gAddEmployee, updateEmployee: gUpdateEmployee, deleteEmployee: gDeleteEmployee,
       deleteCustomerLedgerMovement: gDeleteCustLedger, deleteSupplierLedgerMovement: gDeleteSuppLedger,
       restoreEntity: gRestoreEntity, permanentDeleteEntity: gPurgeEntity, ledgerTrash, restoreLedgerMovement: gRestoreLedger, purgeLedgerMovement: gPurgeLedger,
-      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedgerX, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, archiveSupplierStatement: gArchiveSup, undoArchiveSupplierStatement: gUndoArchiveSup, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, updateSystemLogo,
+      seedDatabase, getSupplierStatementTransactions, calculateSupplierBalance, getSupplierBalance, printInvoice, printPurchaseInvoice, printLedger, printConsolidatedLedger, exportLedgerToExcel, exportAllCustomersToExcel, exportAllSuppliersToExcel, clearLedger: gClearLedgerX, archiveCustomerStatement: gArchiveStmt, undoArchiveCustomerStatement: gUndoArchiveStmt, archiveSupplierStatement: gArchiveSup, undoArchiveSupplierStatement: gUndoArchiveSup, cleanCorruptedSupplierOpeningBalance, clearTreasury: gClearTreasury, findDuplicateTreasury, removeTreasuryTransactions: gRemoveTreasuryTx, closeTreasuryDay: gCloseTreasuryDay, undoTreasuryClose: gUndoTreasuryClose, updateSystemLogo,
       exportBackupData, restoreBackupData: gRestoreBackup,
       currentTreasuryBalance: userScope.restricted ? sumTr(scopedTreasury) : currentTreasuryBalance,
       currentTreasuryBalanceMarg: userScope.restricted && userScope.branch !== 'MARG' ? 0 : currentTreasuryBalanceMarg,
