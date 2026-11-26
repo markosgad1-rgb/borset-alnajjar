@@ -792,7 +792,7 @@ export const Customers: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col gap-2.5 h-[calc(100dvh-60px)] md:h-[calc(100vh-85px)] min-h-0">
+    <div className="flex flex-col gap-2.5 h-[calc(100dvh-60px)] md:h-[calc(100vh-40px)] min-h-0">
       
       {/* Sleek Compact Action Toolbar (Hidden on mobile when viewing customer details) */}
       <div className={`bg-white px-3 py-2 rounded-xl shadow-xs border border-brand-100 flex-wrap justify-between items-center gap-2 ${

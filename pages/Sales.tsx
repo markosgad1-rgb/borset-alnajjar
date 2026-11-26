@@ -1030,12 +1030,12 @@ export const Sales: React.FC = () => {
         </div>
 
         {/* 3. Cart Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-brand-100 flex flex-col min-h-[260px] max-h-[480px]">
+        <div className="bg-white rounded-xl shadow-sm border border-brand-100 flex flex-col shrink-0 min-h-[260px] max-h-[600px]">
           <div className="p-3 bg-brand-50 border-b border-brand-100 font-bold text-brand-800 flex justify-between items-center text-sm">
             <span className="flex items-center gap-2"><ShoppingCart size={18}/> الأصناف</span>
             <span className="bg-white px-2 py-0.5 rounded-full text-xs border">{cartItems.length}</span>
           </div>
-          <div className="overflow-x-auto overflow-y-auto max-h-[420px] flex-1">
+          <div className="overflow-x-auto overflow-y-auto max-h-[540px] flex-1">
             <table className="w-full text-right text-sm">
               <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-sm">
                 <tr>
