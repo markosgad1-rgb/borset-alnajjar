@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { 
   UserPlus, FileText, Edit, Truck, Download, Phone, Trash2, 
@@ -86,6 +86,17 @@ export const Suppliers: React.FC = () => {
 
   // View Mode for Ledger: 'ITEMS' (default, itemized breakdown) or 'INVOICES' (summary)
   const [viewMode, setViewMode] = useState<'ITEMS' | 'INVOICES'>('ITEMS');
+  // الكشف يفتح على آخر الحركات؛ بيتكرر بس عند تغيير الحساب / شكل العرض / فلتر التاريخ (مش عند حذف حركة أو تعديلها)
+  const stmtScrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollStmt = (toEnd: boolean) => {
+    const el = stmtScrollRef.current;
+    if (el) el.scrollTo({ top: toEnd ? el.scrollHeight : 0 });
+  };
+  useEffect(() => {
+    const t1 = setTimeout(() => scrollStmt(true), 60);
+    const t2 = setTimeout(() => scrollStmt(true), 350);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [selectedSupplierCode, viewMode, filterStartDate, filterEndDate]);
 
   // Mobile Back Button handlers for modals & sub-views
   useBackHandler(() => setIsSupplierModalOpen(false), isSupplierModalOpen, 'suppliers-add-edit-modal');
@@ -1169,8 +1180,13 @@ export const Suppliers: React.FC = () => {
                 </div>
               </div>
 
+              <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-100 bg-white">
+                <button type="button" onClick={() => scrollStmt(false)} className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-gray-100 text-gray-700 hover:bg-gray-200">⬆ أول الكشف</button>
+                <button type="button" onClick={() => scrollStmt(true)} className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-gray-100 text-gray-700 hover:bg-gray-200">⬇ آخر حركة</button>
+              </div>
+
               {/* Statement Table Area - Scrollable with Pinned Header & Footer */}
-              <div className="flex-1 min-h-0 overflow-auto">
+              <div ref={stmtScrollRef} className="flex-1 min-h-0 overflow-auto">
                 {viewMode === 'ITEMS' ? (
                   /* ITEM-BY-ITEM DETAILED STATEMENT TABLE (EXACTLY AS IN PURCHASE INVOICE) */
                   <table className="w-full text-xs text-right border-collapse">
